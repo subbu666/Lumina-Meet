@@ -30,17 +30,19 @@ function Landing() {
 
   return (
     <>
-      <main className="relative min-h-screen px-6 py-10 sm:py-16">
+      <main className="relative min-h-screen px-4 sm:px-6 py-10 sm:py-16">
+        {/* NAV */}
         <nav className="mx-auto flex max-w-6xl items-center justify-between">
           <Link to="/" className="flex items-center gap-2">
             <div className="h-8 w-8 rounded-lg bg-gradient-neon glow-primary" />
             <span className="text-lg font-semibold tracking-tight">Nebula</span>
           </Link>
+
           <div className="flex items-center gap-2">
-            {/* About Creator button */}
+            {/* About Creator — hidden on mobile, shown sm+ */}
             <motion.button
               onClick={() => setCreatorOpen(true)}
-              className="relative inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium"
+              className="hidden sm:inline-flex relative items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium"
               style={{
                 background: "rgba(99,102,241,0.08)",
                 border: "1px solid rgba(99,102,241,0.25)",
@@ -57,7 +59,6 @@ function Landing() {
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.4, duration: 0.4 }}
             >
-              {/* Animated neon dot */}
               <motion.span className="relative flex h-1.5 w-1.5 shrink-0">
                 <motion.span
                   className="absolute inline-flex h-full w-full rounded-full"
@@ -75,15 +76,18 @@ function Landing() {
             </motion.button>
 
             <Link to="/login">
-              <NeonButton variant="ghost">Log in</NeonButton>
+              <NeonButton variant="ghost" className="px-3 py-1.5 text-sm">
+                Log in
+              </NeonButton>
             </Link>
             <Link to="/signup">
-              <NeonButton>Get started</NeonButton>
+              <NeonButton className="px-3 py-1.5 text-sm">Get started</NeonButton>
             </Link>
           </div>
         </nav>
 
-        <section className="mx-auto mt-24 max-w-4xl text-center">
+        {/* HERO */}
+        <section className="mx-auto mt-20 sm:mt-24 max-w-4xl text-center">
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -93,23 +97,26 @@ function Landing() {
             <span className="h-1.5 w-1.5 rounded-full bg-[var(--neon-secondary)] animate-pulse" />
             Real-time meetings, reimagined
           </motion.div>
+
           <motion.h1
             initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7, delay: 0.1 }}
-            className="mt-6 text-5xl sm:text-7xl font-semibold tracking-tight leading-[1.05]"
+            className="mt-6 text-4xl sm:text-7xl font-semibold tracking-tight leading-[1.05]"
           >
             Meetings that feel <span className="text-gradient">cinematic</span>.
           </motion.h1>
+
           <motion.p
             initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7, delay: 0.2 }}
-            className="mx-auto mt-5 max-w-xl text-base sm:text-lg text-muted-foreground"
+            className="mx-auto mt-5 max-w-xl text-sm sm:text-lg text-muted-foreground px-2"
           >
             Spin up secure rooms in seconds. Schedule with elegance. Invite with one click. Built
             for teams that care about craft.
           </motion.p>
+
           <motion.div
             initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
@@ -129,7 +136,8 @@ function Landing() {
           </motion.div>
         </section>
 
-        <section className="mx-auto mt-24 grid max-w-5xl grid-cols-1 gap-4 sm:grid-cols-3">
+        {/* FEATURES */}
+        <section className="mx-auto mt-20 sm:mt-24 grid max-w-5xl grid-cols-1 gap-4 sm:grid-cols-3">
           {[
             {
               icon: Zap,
@@ -164,7 +172,7 @@ function Landing() {
           ))}
         </section>
 
-        {/* Footer credit */}
+        {/* FOOTER CREDIT — visible on all screen sizes including mobile */}
         <motion.div
           className="mx-auto mt-20 flex max-w-6xl items-center justify-center"
           initial={{ opacity: 0 }}
@@ -183,13 +191,7 @@ function Landing() {
               ✦
             </motion.span>
             by{" "}
-            <span
-              className="font-medium transition-all group-hover:text-transparent"
-              style={{
-                backgroundClip: "text",
-                WebkitBackgroundClip: "text",
-              }}
-            >
+            <span className="font-medium transition-all group-hover:text-transparent">
               <span className="group-hover:bg-gradient-to-r group-hover:from-indigo-400 group-hover:via-cyan-400 group-hover:to-purple-400 group-hover:bg-clip-text group-hover:text-transparent">
                 Saladi Subrahmanyam
               </span>
@@ -198,7 +200,7 @@ function Landing() {
         </motion.div>
       </main>
 
-      {/* Creator modal */}
+      {/* CREATOR MODAL */}
       <CreatorModal open={creatorOpen} onClose={() => setCreatorOpen(false)} />
     </>
   );
