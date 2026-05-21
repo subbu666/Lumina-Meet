@@ -1,6 +1,7 @@
 import { type ReactNode } from "react";
 import { motion } from "framer-motion";
 import { Link } from "@tanstack/react-router";
+import { LuminaLogo } from "@/components/ui-custom/LuminaLogo";
 
 export function AuthShell({
   title,
@@ -9,14 +10,19 @@ export function AuthShell({
   footer,
 }: {
   title: string;
-  subtitle?: string;
+  subtitle?: ReactNode;
   children: ReactNode;
   footer?: ReactNode;
 }) {
   return (
     <main className="relative min-h-screen flex items-center justify-center px-4 py-10">
       <Link to="/" className="absolute top-6 left-6 flex items-center gap-2">
-        <div className="h-7 w-7 rounded-lg bg-gradient-neon glow-primary" />
+        <motion.div
+          whileHover={{ scale: 1.08, rotate: -4 }}
+          transition={{ type: "spring", stiffness: 300, damping: 18 }}
+        >
+          <LuminaLogo size={32} />
+        </motion.div>
         <span className="font-semibold tracking-tight">Lumina Meet</span>
       </Link>
       <motion.div

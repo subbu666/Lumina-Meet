@@ -11,10 +11,12 @@ import { APIError, asyncHandler } from "../middlewares/errorHandler.js";
  * - Schedule meeting
  * - Join meeting
  * - Send invites
+ * - Generate meeting + invite in one shot (used by dashboard "Send invites")
  * - Get meeting history
  */
 
-// Validation rules
+// ─── Validation rules ────────────────────────────────────────────────────────
+
 export const generateMeetingValidation = [
   body("title")
     .optional()
@@ -81,6 +83,26 @@ export const inviteValidation = [
     }),
 ];
 
+/** Validation for the combined generate-and-invite endpoint */
+export const generateAndInviteValidation = [
+  body("emails")
+    .isArray({ min: 1, max: 50 })
+    .withMessage("Provide 1-50 email addresses")
+    .custom((emails) => {
+      const emailRegex = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/;
+      const invalid = emails.filter((e) => !emailRegex.test(e));
+      if (invalid.length > 0) {
+        throw new Error(`Invalid email(s): ${invalid.join(", ")}`);
+      }
+      return true;
+    }),
+  body("title")
+    .optional()
+    .trim()
+    .isLength({ max: 200 })
+    .withMessage("Title cannot exceed 200 characters"),
+];
+
 export const joinMeetingValidation = [
   param("meetingId").trim().notEmpty().withMessage("Meeting ID is required"),
   body("password").optional().isString(),
@@ -101,16 +123,34 @@ export const historyValidation = [
     .withMessage("Invalid status"),
 ];
 
-/**
- * ==========================================
- * MEETING GENERATION
- * ==========================================
- */
+// ─── Shared helper: generate a unique meeting ID ──────────────────────────────
+
+async function createUniqueMeetingId() {
+  let meetingId;
+  let attempts = 0;
+  const maxAttempts = 10;
+
+  while (attempts < maxAttempts) {
+    meetingId = generateMeetingId();
+    const existing = await Meeting.findOne({ meetingId });
+    if (!existing) return meetingId;
+    attempts++;
+  }
+
+  throw new APIError(
+    500,
+    "Failed to generate unique meeting ID. Please try again.",
+    "MEETING_ID_COLLISION",
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. GENERATE INSTANT MEETING
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Generate Instant Meeting
- * Creates an instant meeting that can be joined immediately
  * POST /api/meeting/generate
+ * Creates an instant meeting that can be joined immediately.
  */
 export const generateInstantMeeting = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
@@ -129,34 +169,10 @@ export const generateInstantMeeting = asyncHandler(async (req, res) => {
   const { title = "Instant Meeting", settings = {} } = req.body;
   const userId = req.userId;
 
-  // Generate unique meeting ID
-  let meetingId;
-  let exists = true;
-  let attempts = 0;
-  const maxAttempts = 10;
-
-  while (exists && attempts < maxAttempts) {
-    meetingId = generateMeetingId();
-    const existing = await Meeting.findOne({ meetingId });
-    if (!existing) {
-      exists = false;
-    }
-    attempts++;
-  }
-
-  if (exists) {
-    throw new APIError(
-      500,
-      "Failed to generate unique meeting ID. Please try again.",
-      "MEETING_ID_COLLISION",
-    );
-  }
-
-  // Build meeting link
+  const meetingId = await createUniqueMeetingId();
   const clientUrl = process.env.CLIENT_URL;
   const meetingLink = `${clientUrl}/meeting/${meetingId}`;
 
-  // Create meeting
   const meeting = await Meeting.create({
     host: userId,
     meetingId,
@@ -180,7 +196,6 @@ export const generateInstantMeeting = asyncHandler(async (req, res) => {
     },
   });
 
-  // Populate host info
   const populatedMeeting = await Meeting.findById(meeting._id).populate(
     "host",
     "username email firstName lastName",
@@ -196,15 +211,124 @@ export const generateInstantMeeting = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * ==========================================
- * SCHEDULE MEETING
- * ==========================================
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. GENERATE MEETING + INVITE  (new — fixes the dashboard 404)
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Schedule Meeting
- * Creates a meeting for a future time
+ * POST /api/meeting/generate-and-invite
+ *
+ * Creates a fresh instant meeting and immediately sends email invitations to
+ * all provided addresses.  The authenticated user becomes the host.
+ *
+ * This endpoint exists because the dashboard "Send invites" dialog has no
+ * prior meeting context — it must create one on the fly.
+ *
+ * Body:  { emails: string[], title?: string }
+ * Returns: { link, meetingId, sent, failed }
+ */
+export const generateAndInvite = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      message: "Validation failed",
+      details: errors.array().reduce((acc, err) => {
+        if (!acc[err.path]) acc[err.path] = [];
+        acc[err.path].push(err.msg);
+        return acc;
+      }, {}),
+    });
+  }
+
+  const { emails, title = "Instant Meeting" } = req.body;
+  const userId = req.userId;
+
+  // 1. Create the meeting
+  const meetingId = await createUniqueMeetingId();
+  const clientUrl = process.env.CLIENT_URL;
+  const meetingLink = `${clientUrl}/meeting/${meetingId}`;
+
+  const participants = emails.map((email) => ({
+    email: email.toLowerCase(),
+    status: "invited",
+    isHost: false,
+  }));
+
+  const meeting = await Meeting.create({
+    host: userId,
+    meetingId,
+    title,
+    type: "instant",
+    status: "active",
+    meetingLink,
+    startedAt: new Date(),
+    participants,
+    invitedEmails: emails.map((e) => e.toLowerCase()),
+    settings: {
+      hostVideo: true,
+      participantVideo: true,
+      hostAudio: true,
+      participantAudio: true,
+      waitingRoom: false,
+      allowJoinBeforeHost: true,
+      muteParticipantsOnEntry: false,
+      allowRecording: true,
+      autoRecord: false,
+      allowScreenSharing: true,
+      enableChat: true,
+    },
+  });
+
+  // 2. Resolve host's display name for the email template
+  const User = (await import("../models/User.js")).default;
+  const host = await User.findById(userId);
+  const inviterName = host ? host.fullName || host.username : "Someone";
+
+  // 3. Send invitation emails (non-blocking — don't hold up the response)
+  const emailPromises = emails.map((email) =>
+    sendMeetingInvitationEmail(
+      email,
+      {
+        meetingId,
+        title,
+        description: null,
+        meetingLink,
+        scheduledFor: null, // instant meeting — no scheduled time
+        password: null,
+        isPasswordProtected: false,
+      },
+      inviterName,
+    ),
+  );
+
+  const emailResults = await Promise.allSettled(emailPromises);
+  const sent = emailResults.filter(
+    (r) => r.status === "fulfilled" && r.value?.success,
+  ).length;
+  const failed = emails.length - sent;
+
+  console.log(
+    `📧 generate-and-invite: ${sent}/${emails.length} emails sent for meeting ${meetingId}`,
+  );
+
+  res.status(201).json({
+    success: true,
+    message: `Meeting created and ${sent} invitation${sent !== 1 ? "s" : ""} sent`,
+    data: {
+      meetingId,
+      link: meetingLink,
+      sent,
+      failed,
+    },
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. SCHEDULE MEETING
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
  * POST /api/meeting/schedule
  */
 export const scheduleMeeting = asyncHandler(async (req, res) => {
@@ -233,7 +357,6 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
 
   const userId = req.userId;
 
-  // Validate scheduled time is in the future
   const scheduledDate = new Date(scheduledFor);
   const now = new Date();
 
@@ -245,7 +368,6 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
     );
   }
 
-  // Maximum scheduling window (1 year)
   const oneYearFromNow = new Date();
   oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
   if (scheduledDate > oneYearFromNow) {
@@ -256,42 +378,17 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
     );
   }
 
-  // Generate unique meeting ID
-  let meetingId;
-  let exists = true;
-  let attempts = 0;
-  const maxAttempts = 10;
-
-  while (exists && attempts < maxAttempts) {
-    meetingId = generateMeetingId();
-    const existing = await Meeting.findOne({ meetingId });
-    if (!existing) {
-      exists = false;
-    }
-    attempts++;
-  }
-
-  if (exists) {
-    throw new APIError(
-      500,
-      "Failed to generate unique meeting ID",
-      "MEETING_ID_COLLISION",
-    );
-  }
-
-  // Build meeting link
+  const meetingId = await createUniqueMeetingId();
   const clientUrl = process.env.CLIENT_URL;
   const meetingLink = `${clientUrl}/meeting/${meetingId}`;
 
-  // Prepare participants from email list
   const participants = emails.map((email) => ({
     email: email.toLowerCase(),
     status: "invited",
     isHost: false,
   }));
 
-  // Create meeting
-  const meetingData = {
+  const meeting = await Meeting.create({
     host: userId,
     meetingId,
     title,
@@ -318,15 +415,11 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
       allowScreenSharing: settings.allowScreenSharing ?? true,
       enableChat: settings.enableChat ?? true,
     },
-  };
+  });
 
-  const meeting = await Meeting.create(meetingData);
-
-  // Send invitation emails to participants
   if (emails.length > 0) {
-    const host = await (
-      await import("../models/User.js")
-    ).default.findById(userId);
+    const User = (await import("../models/User.js")).default;
+    const host = await User.findById(userId);
     const inviterName = host ? host.fullName || host.username : "Someone";
 
     const emailPromises = emails.map((email) =>
@@ -345,7 +438,6 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
       ),
     );
 
-    // Send emails in background (don't block response)
     Promise.allSettled(emailPromises).then((results) => {
       const sent = results.filter(
         (r) => r.status === "fulfilled" && r.value.success,
@@ -354,7 +446,6 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
     });
   }
 
-  // Populate host info
   const populatedMeeting = await Meeting.findById(meeting._id).populate(
     "host",
     "username email firstName lastName",
@@ -371,15 +462,11 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * ==========================================
- * JOIN MEETING
- * ==========================================
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. JOIN MEETING
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Join Meeting
- * Validates meeting and returns join info
  * POST /api/meeting/join/:meetingId
  */
 export const joinMeeting = asyncHandler(async (req, res) => {
@@ -400,7 +487,6 @@ export const joinMeeting = asyncHandler(async (req, res) => {
   const { password } = req.body;
   const userId = req.userId;
 
-  // Find meeting
   const meeting = await Meeting.findOne({ meetingId }).populate(
     "host",
     "username email firstName lastName",
@@ -414,7 +500,6 @@ export const joinMeeting = asyncHandler(async (req, res) => {
     );
   }
 
-  // Check if meeting is cancelled
   if (meeting.status === "cancelled") {
     throw new APIError(
       410,
@@ -423,19 +508,16 @@ export const joinMeeting = asyncHandler(async (req, res) => {
     );
   }
 
-  // Check if meeting is completed
   if (meeting.status === "completed") {
     throw new APIError(410, "This meeting has already ended.", "MEETING_ENDED");
   }
 
-  // Check scheduled time for scheduled meetings
   if (meeting.type === "scheduled" && meeting.status === "pending") {
     if (!meeting.canJoin()) {
       const now = new Date();
       const joinWindow = new Date(meeting.scheduledFor);
       joinWindow.setMinutes(joinWindow.getMinutes() - 15);
-
-      const timeUntilStart = Math.ceil((joinWindow - now) / 60000); // minutes
+      const timeUntilStart = Math.ceil((joinWindow - now) / 60000);
 
       throw new APIError(
         403,
@@ -448,12 +530,9 @@ export const joinMeeting = asyncHandler(async (req, res) => {
         },
       );
     }
-
-    // Auto-start the meeting when first person joins
     await meeting.start();
   }
 
-  // Verify password if protected
   if (meeting.isPasswordProtected) {
     if (!password) {
       throw new APIError(
@@ -462,10 +541,8 @@ export const joinMeeting = asyncHandler(async (req, res) => {
         "PASSWORD_REQUIRED",
       );
     }
-
     const bcrypt = await import("bcryptjs");
     const isValid = await bcrypt.compare(password, meeting.password);
-
     if (!isValid) {
       throw new APIError(
         403,
@@ -475,7 +552,6 @@ export const joinMeeting = asyncHandler(async (req, res) => {
     }
   }
 
-  // Check max participants
   if (meeting.participantCount >= meeting.maxParticipants) {
     throw new APIError(
       403,
@@ -484,11 +560,9 @@ export const joinMeeting = asyncHandler(async (req, res) => {
     );
   }
 
-  // Add user as participant if authenticated
   if (userId) {
-    const user = await (
-      await import("../models/User.js")
-    ).default.findById(userId);
+    const User = (await import("../models/User.js")).default;
+    const user = await User.findById(userId);
     if (user) {
       await meeting.addParticipant(user.email, user.fullName || user.username);
     }
@@ -506,15 +580,11 @@ export const joinMeeting = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * ==========================================
- * INVITE PARTICIPANTS
- * ==========================================
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. INVITE PARTICIPANTS (to an existing meeting — host only)
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Send Meeting Invitations
- * Sends email invites to participants
  * POST /api/meeting/invite
  */
 export const inviteParticipants = asyncHandler(async (req, res) => {
@@ -531,10 +601,9 @@ export const inviteParticipants = asyncHandler(async (req, res) => {
     });
   }
 
-  const { meetingId, emails, message: customMessage } = req.body;
+  const { meetingId, emails } = req.body;
   const userId = req.userId;
 
-  // Find meeting
   const meeting = await Meeting.findOne({ meetingId }).populate(
     "host",
     "username email firstName lastName",
@@ -544,7 +613,6 @@ export const inviteParticipants = asyncHandler(async (req, res) => {
     throw new APIError(404, "Meeting not found", "MEETING_NOT_FOUND");
   }
 
-  // Verify user is host
   if (!meeting.isHost(userId)) {
     throw new APIError(
       403,
@@ -553,7 +621,6 @@ export const inviteParticipants = asyncHandler(async (req, res) => {
     );
   }
 
-  // Filter out already invited emails
   const newEmails = emails.filter(
     (email) => !meeting.invitedEmails.includes(email.toLowerCase()),
   );
@@ -562,24 +629,18 @@ export const inviteParticipants = asyncHandler(async (req, res) => {
     return res.status(400).json({
       success: false,
       message: "All provided emails have already been invited.",
-      data: {
-        alreadyInvited: emails,
-      },
+      data: { alreadyInvited: emails },
     });
   }
 
-  // Add new participants to meeting
-  const host = await (
-    await import("../models/User.js")
-  ).default.findById(userId);
+  const User = (await import("../models/User.js")).default;
+  const host = await User.findById(userId);
   const inviterName = host ? host.fullName || host.username : "Someone";
 
-  // Add to meeting
   for (const email of newEmails) {
     await meeting.addParticipant(email);
   }
 
-  // Send invitation emails
   const emailResults = await Promise.allSettled(
     newEmails.map((email) =>
       sendMeetingInvitationEmail(
@@ -615,16 +676,11 @@ export const inviteParticipants = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * ==========================================
- * MEETING MANAGEMENT
- * ==========================================
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. MEETING MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Get Meeting Details
- * GET /api/meeting/:meetingId
- */
+/** GET /api/meeting/:meetingId */
 export const getMeeting = asyncHandler(async (req, res) => {
   const { meetingId } = req.params;
   const userId = req.userId;
@@ -638,7 +694,6 @@ export const getMeeting = asyncHandler(async (req, res) => {
     throw new APIError(404, "Meeting not found", "MEETING_NOT_FOUND");
   }
 
-  // Return full data if host, public data otherwise
   const isHost = userId && meeting.isHost(userId);
 
   res.status(200).json({
@@ -650,10 +705,7 @@ export const getMeeting = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Update Meeting
- * PATCH /api/meeting/:meetingId
- */
+/** PATCH /api/meeting/:meetingId */
 export const updateMeeting = asyncHandler(async (req, res) => {
   const { meetingId } = req.params;
   const userId = req.userId;
@@ -673,7 +725,6 @@ export const updateMeeting = asyncHandler(async (req, res) => {
     );
   }
 
-  // Prevent updating completed/cancelled meetings
   if (meeting.status === "completed" || meeting.status === "cancelled") {
     throw new APIError(
       400,
@@ -682,7 +733,6 @@ export const updateMeeting = asyncHandler(async (req, res) => {
     );
   }
 
-  // Allowed updates
   const allowedUpdates = [
     "title",
     "description",
@@ -698,7 +748,6 @@ export const updateMeeting = asyncHandler(async (req, res) => {
     }
   });
 
-  // Update scheduled time if meeting hasn't started
   if (updates.scheduledFor && meeting.status === "pending") {
     const newDate = new Date(updates.scheduledFor);
     if (newDate > new Date()) {
@@ -721,16 +770,11 @@ export const updateMeeting = asyncHandler(async (req, res) => {
   res.status(200).json({
     success: true,
     message: "Meeting updated successfully",
-    data: {
-      meeting: updatedMeeting.toHostObject(),
-    },
+    data: { meeting: updatedMeeting.toHostObject() },
   });
 });
 
-/**
- * Cancel Meeting
- * DELETE /api/meeting/:meetingId
- */
+/** DELETE /api/meeting/:meetingId */
 export const cancelMeeting = asyncHandler(async (req, res) => {
   const { meetingId } = req.params;
   const userId = req.userId;
@@ -771,24 +815,15 @@ export const cancelMeeting = asyncHandler(async (req, res) => {
   res.status(200).json({
     success: true,
     message: "Meeting cancelled successfully",
-    data: {
-      meetingId,
-      status: "cancelled",
-    },
+    data: { meetingId, status: "cancelled" },
   });
 });
 
-/**
- * ==========================================
- * MEETING HISTORY
- * ==========================================
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. MEETING HISTORY
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Get Meeting History
- * Returns paginated meeting history for the authenticated user
- * GET /api/meeting/history
- */
+/** GET /api/meeting/history */
 export const getMeetingHistory = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -808,26 +843,19 @@ export const getMeetingHistory = asyncHandler(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 10, 100);
   const status = req.query.status;
 
-  // Build query - find meetings where user is host OR participant
-  const query = {
-    $or: [{ host: userId }],
-  };
+  const query = { $or: [{ host: userId }] };
 
-  // For participant searches, we need the user's email
-  const user = await (
-    await import("../models/User.js")
-  ).default.findById(userId);
+  const User = (await import("../models/User.js")).default;
+  const user = await User.findById(userId);
   if (user) {
     query.$or.push({ "participants.email": user.email.toLowerCase() });
     query.$or.push({ invitedEmails: user.email.toLowerCase() });
   }
 
-  // Filter by status if provided
   if (status) {
     query.status = status;
   }
 
-  // Execute query with pagination
   const [meetings, totalCount] = await Promise.all([
     Meeting.find(query)
       .populate("host", "username email firstName lastName")
@@ -858,26 +886,19 @@ export const getMeetingHistory = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Get Upcoming Meetings
- * Returns meetings scheduled for the future
- * GET /api/meeting/upcoming
- */
+/** GET /api/meeting/upcoming */
 export const getUpcomingMeetings = asyncHandler(async (req, res) => {
   const userId = req.userId;
   const page = parseInt(req.query.page) || 1;
   const limit = Math.min(parseInt(req.query.limit) || 10, 50);
-
-  const now = new Date();
 
   const query = {
     $or: [{ host: userId }],
     status: { $in: ["pending", "active"] },
   };
 
-  const user = await (
-    await import("../models/User.js")
-  ).default.findById(userId);
+  const User = (await import("../models/User.js")).default;
+  const user = await User.findById(userId);
   if (user) {
     query.$or.push({ "participants.email": user.email.toLowerCase() });
     query.$or.push({ invitedEmails: user.email.toLowerCase() });
@@ -913,11 +934,7 @@ export const getUpcomingMeetings = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * End Meeting (Host only)
- * Marks meeting as completed
- * POST /api/meeting/:meetingId/end
- */
+/** POST /api/meeting/:meetingId/end */
 export const endMeeting = asyncHandler(async (req, res) => {
   const { meetingId } = req.params;
   const userId = req.userId;
@@ -945,13 +962,14 @@ export const endMeeting = asyncHandler(async (req, res) => {
       meetingId,
       status: "completed",
       completedAt: meeting.completedAt,
-      duration: Math.ceil((meeting.completedAt - meeting.startedAt) / 60000), // minutes
+      duration: Math.ceil((meeting.completedAt - meeting.startedAt) / 60000),
     },
   });
 });
 
 export default {
   generateInstantMeeting,
+  generateAndInvite,
   scheduleMeeting,
   joinMeeting,
   inviteParticipants,

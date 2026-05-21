@@ -49,7 +49,7 @@ function Dashboard() {
     setGenLink(null);
     try {
       const res = await meetingService.generate();
-      setGenLink(res.link); // now correctly mapped from joinUrl
+      setGenLink(res.link);
     } catch (err) {
       setGenOpen(false);
       toast.error(extractError(err).message);
@@ -68,10 +68,8 @@ function Dashboard() {
     }
   };
 
-  // Guard: don't render until user is confirmed valid
   if (!user || !user.username) return null;
 
-  // Safe display values
   const displayName = user.username ?? "User";
   const avatarLetter = displayName[0]?.toUpperCase() ?? "U";
 
@@ -209,6 +207,7 @@ function Dashboard() {
         </DialogContent>
       </Dialog>
 
+      {/* InviteDialog: generates a fresh meeting then sends invites */}
       <InviteDialog open={inviteOpen} onClose={() => setInviteOpen(false)} />
     </main>
   );
@@ -260,22 +259,51 @@ function ActionCard({
   );
 }
 
+/**
+ * InviteDialog
+ *
+ * Instead of posting to /api/meeting/invite with a hardcoded "m_general" ID
+ * (which doesn't exist and causes a 404), we call the new `generateAndInvite`
+ * endpoint that:
+ *   1. Creates a fresh instant meeting on the backend
+ *   2. Emails all the provided addresses
+ *   3. Returns the meeting link so the host can share it
+ *
+ * The generated meeting link is shown after a successful send so the host
+ * knows which room their guests are invited to.
+ */
 function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [emails, setEmails] = useState("");
   const [loading, setLoading] = useState(false);
+  const [resultLink, setResultLink] = useState<string | null>(null);
+
+  const handleClose = () => {
+    setEmails("");
+    setResultLink(null);
+    onClose();
+  };
 
   const send = async () => {
     const list = emails
       .split(/[,\s]+/)
       .map((s) => s.trim())
       .filter(Boolean);
-    if (!list.length) return toast.error("Add at least one email");
+
+    if (!list.length) {
+      toast.error("Add at least one email");
+      return;
+    }
+
     setLoading(true);
     try {
-      await meetingService.invite({ meetingId: "m_general", emails: list });
-      toast.success(`Invites sent to ${list.length}`);
+      const res = await meetingService.generateAndInvite({ emails: list });
+      setResultLink(res.link);
+      toast.success(
+        `Invites sent to ${res.sent} recipient${res.sent !== 1 ? "s" : ""}${
+          res.failed > 0 ? ` (${res.failed} failed)` : ""
+        }`,
+      );
       setEmails("");
-      onClose();
     } catch (err) {
       toast.error(extractError(err).message);
     } finally {
@@ -284,21 +312,48 @@ function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void })
   };
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+    <Dialog open={open} onOpenChange={(v) => !v && handleClose()}>
       <DialogContent className="glass-strong border-white/10">
         <DialogHeader>
           <DialogTitle>Send invites</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4">
+
+        <p className="text-xs text-muted-foreground -mt-1">
+          A new meeting room will be created and your guests will receive an email invitation.
+        </p>
+
+        <div className="space-y-4 mt-2">
           <FloatingInput
             label="Emails (comma or space separated)"
             value={emails}
             onChange={(e) => setEmails(e.target.value)}
             placeholder=" "
           />
+
           <NeonButton fullWidth loading={loading} onClick={send}>
             <Send className="h-4 w-4" /> Send
           </NeonButton>
+
+          {/* Show the generated link after a successful invite */}
+          {resultLink && (
+            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                Meeting link (share this)
+              </p>
+              <p className="text-xs break-all text-[var(--neon-secondary)] font-mono">
+                {resultLink}
+              </p>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(resultLink).catch(() => {});
+                  toast.success("Link copied!");
+                }}
+                className="text-xs underline text-muted-foreground hover:text-white transition"
+              >
+                Copy link
+              </button>
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>
