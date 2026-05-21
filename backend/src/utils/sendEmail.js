@@ -266,16 +266,18 @@ const copyOtpButton = (code, accentColor, accentBorder) => {
   // We avoid innerHTML mutation during execCommand to prevent focus loss.
   const handler = [
     `var el=this;`,
-    `var inp=document.createElement('input');`,
+    `var d=el.ownerDocument;`, // ← get the RIGHT document
+    `var b=d.body||d.documentElement;`, // ← fallback to <html> if no <body>
+    `var inp=d.createElement('input');`, // ← create in the right document
     `inp.value='${safeCode}';`,
     `inp.setAttribute('readonly','');`,
     `inp.style.cssText='position:fixed;top:0;left:0;width:2px;height:2px;opacity:0;border:0;padding:0;';`,
-    `document.body.appendChild(inp);`,
+    `b.appendChild(inp);`, // ← append to the right body
     `inp.focus();inp.select();`,
     `inp.setSelectionRange(0,9999);`,
     `var ok=false;`,
-    `try{ok=document.execCommand('copy');}catch(e){}`,
-    `document.body.removeChild(inp);`,
+    `try{ok=d.execCommand('copy');}catch(e){}`, // ← execCommand on the right document
+    `b.removeChild(inp);`, // ← remove from the right body
     `var oh=el.innerHTML,oc=el.style.color,ob=el.style.borderColor,obg=el.style.background;`,
     `if(ok){`,
     `el.innerHTML='&#10003;&nbsp;&nbsp;OTP Copied to Clipboard!';`,
