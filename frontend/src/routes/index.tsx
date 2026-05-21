@@ -1,10 +1,87 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { ArrowRight, Video, Shield, Zap, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAuthStore } from "@/store/authStore";
 import { NeonButton } from "@/components/ui-custom/NeonButton";
 import { CreatorModal } from "@/components/modals/CreatorModal";
+
+// ── Lumina Meet Logo ──────────────────────────────────────────────
+function LuminaLogo({ size = 36 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 36 36"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <defs>
+        {/* Main gradient: indigo → cyan */}
+        <linearGradient id="lg-main" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#6366f1" />
+          <stop offset="100%" stopColor="#22d3ee" />
+        </linearGradient>
+        {/* Inner glow gradient */}
+        <radialGradient id="rg-glow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#22d3ee" stopOpacity="0.35" />
+          <stop offset="100%" stopColor="#6366f1" stopOpacity="0" />
+        </radialGradient>
+        {/* Lens shine */}
+        <linearGradient id="lg-shine" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="white" stopOpacity="0.3" />
+          <stop offset="100%" stopColor="white" stopOpacity="0" />
+        </linearGradient>
+        <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+          <feGaussianBlur stdDeviation="2.5" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+
+      {/* Outer rounded square background */}
+      <rect x="1" y="1" width="34" height="34" rx="10" fill="url(#lg-main)" opacity="0.15" />
+      <rect x="1" y="1" width="34" height="34" rx="10" stroke="url(#lg-main)" strokeWidth="1.5" />
+
+      {/* Radial glow inside */}
+      <rect x="1" y="1" width="34" height="34" rx="10" fill="url(#rg-glow)" />
+
+      {/* Video camera body */}
+      <rect
+        x="5"
+        y="11"
+        width="18"
+        height="14"
+        rx="3"
+        fill="url(#lg-main)"
+        filter="url(#glow)"
+        opacity="0.9"
+      />
+
+      {/* Camera lens circle */}
+      <circle cx="14" cy="18" r="4.5" fill="#0B0F19" />
+      <circle cx="14" cy="18" r="3" fill="url(#lg-main)" opacity="0.7" />
+      <circle cx="14" cy="18" r="1.5" fill="#22d3ee" filter="url(#glow)" />
+      {/* Lens shine dot */}
+      <circle cx="15.2" cy="16.8" r="0.7" fill="white" opacity="0.6" />
+
+      {/* Camera play/record triangle on right side */}
+      <path
+        d="M25 14.5 L31 18 L25 21.5 Z"
+        fill="url(#lg-main)"
+        filter="url(#glow)"
+        opacity="0.95"
+      />
+
+      {/* Top-right shine overlay on body */}
+      <rect x="5" y="11" width="18" height="6" rx="3" fill="url(#lg-shine)" />
+    </svg>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
 
 export const Route = createFileRoute("/")({
   component: Landing,
@@ -33,13 +110,18 @@ function Landing() {
       <main className="relative min-h-screen px-4 sm:px-6 py-10 sm:py-16">
         {/* NAV */}
         <nav className="mx-auto flex max-w-6xl items-center justify-between">
-          <Link to="/" className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-lg bg-gradient-neon glow-primary" />
+          <Link to="/" className="flex items-center gap-2.5">
+            <motion.div
+              whileHover={{ scale: 1.08, rotate: -4 }}
+              transition={{ type: "spring", stiffness: 300, damping: 18 }}
+            >
+              <LuminaLogo size={36} />
+            </motion.div>
             <span className="text-lg font-semibold tracking-tight">Lumina Meet</span>
           </Link>
 
           <div className="flex items-center gap-2">
-            {/* About Creator — hidden on mobile, shown sm+ */}
+            {/* About Creator — hidden on mobile */}
             <motion.button
               onClick={() => setCreatorOpen(true)}
               className="hidden sm:inline-flex relative items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium"
@@ -172,7 +254,7 @@ function Landing() {
           ))}
         </section>
 
-        {/* FOOTER CREDIT — visible on all screen sizes including mobile */}
+        {/* FOOTER CREDIT */}
         <motion.div
           className="mx-auto mt-20 flex max-w-6xl items-center justify-center"
           initial={{ opacity: 0 }}
@@ -200,7 +282,6 @@ function Landing() {
         </motion.div>
       </main>
 
-      {/* CREATOR MODAL */}
       <CreatorModal open={creatorOpen} onClose={() => setCreatorOpen(false)} />
     </>
   );
