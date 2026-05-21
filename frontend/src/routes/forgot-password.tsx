@@ -13,7 +13,7 @@ import { extractError } from "@/api/apiClient";
 
 export const Route = createFileRoute("/forgot-password")({
   component: ForgotPasswordPage,
-  head: () => ({ meta: [{ title: "Reset password — Nebula" }] }),
+  head: () => ({ meta: [{ title: "Reset password — Lumina Meet" }] }),
 });
 
 function ForgotPasswordPage() {

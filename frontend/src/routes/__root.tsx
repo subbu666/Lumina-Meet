@@ -44,7 +44,10 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
         <h1 className="text-xl font-semibold">Something went wrong</h1>
         <p className="mt-2 text-sm text-muted-foreground">{error.message}</p>
         <button
-          onClick={() => { router.invalidate(); reset(); }}
+          onClick={() => {
+            router.invalidate();
+            reset();
+          }}
           className="mt-6 rounded-xl bg-gradient-neon px-5 py-2.5 text-sm font-medium text-white"
         >
           Try again
@@ -59,10 +62,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Nebula — Real-time meetings, beautifully fast" },
-      { name: "description", content: "Premium video meetings with end-to-end encryption, scheduling, and cinematic UX." },
+      { title: "Lumina Meet — Real-time meetings, beautifully fast" },
+      {
+        name: "description",
+        content: "Premium video meetings with end-to-end encryption, scheduling, and cinematic UX.",
+      },
       { name: "theme-color", content: "#0B0F19" },
-      { property: "og:title", content: "Nebula — Real-time meetings" },
+      { property: "og:title", content: "Lumina Meet — Real-time meetings" },
       { property: "og:description", content: "Premium video meetings with cinematic UX." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
@@ -78,7 +84,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 function RootShell({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark">
-      <head><HeadContent /></head>
+      <head>
+        <HeadContent />
+      </head>
       <body>
         {children}
         <Scripts />
@@ -90,7 +98,9 @@ function RootShell({ children }: { children: React.ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const hydrate = useAuthStore((s) => s.hydrate);
-  useEffect(() => { hydrate(); }, [hydrate]);
+  useEffect(() => {
+    hydrate();
+  }, [hydrate]);
 
   return (
     <QueryClientProvider client={queryClient}>

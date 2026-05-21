@@ -1,5 +1,5 @@
 /**
- * meeting.$id.tsx — Nebula Phase 2 (UPDATED)
+ * meeting.$id.tsx — Lumina Meet Phase 2 (UPDATED)
  *
  * Fixes & enhancements:
  *  1. Chat: sender name always visible above each message bubble
@@ -63,7 +63,7 @@ const search = z.object({ scheduledFor: z.number().optional() }).partial();
 export const Route = createFileRoute("/meeting/$id")({
   component: MeetingRoom,
   validateSearch: search.parse,
-  head: () => ({ meta: [{ title: "Meeting — Nebula" }] }),
+  head: () => ({ meta: [{ title: "Meeting — Lumina Meet" }] }),
 });
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_BASE_URL;
@@ -229,8 +229,8 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
       leaveRoom();
       onLeave();
     };
-    window.addEventListener("nebula:host-removed", handler);
-    return () => window.removeEventListener("nebula:host-removed", handler);
+    window.addEventListener("Lumina Meet:host-removed", handler);
+    return () => window.removeEventListener("Lumina Meet:host-removed", handler);
   }, [leaveRoom, onLeave]);
 
   const handleLeave = useCallback(() => {
@@ -301,7 +301,7 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
         <div className="flex items-center gap-3 min-w-0">
           <div className="h-7 w-7 shrink-0 rounded-lg bg-gradient-neon animate-pulse-glow" />
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">Nebula Room</p>
+            <p className="truncate text-sm font-semibold">Lumina Meet Room</p>
             <p className="truncate text-[11px] text-muted-foreground font-mono">{id}</p>
           </div>
         </div>

@@ -1,4 +1,4 @@
-# Nebula — Premium Real-Time Meeting Platform
+# Lumina Meet — Premium Real-Time Meeting Platform
 
 A production-grade, dark-themed SaaS frontend for video meetings built with TanStack Start, React 19, Tailwind v4, Framer Motion, Zustand, and Axios. The video layer uses **real WebRTC** peer connections coordinated through a Socket.IO signaling server, with voice activity detection, screen sharing, and host controls.
 
@@ -190,7 +190,7 @@ socket.emit("host-action", { action: "mute", targetSocketId: "..." });
 camOffAll(); // iterates peers[], sends host-action "cam-off" to each
 
 // Remove a participant
-removePeer(socketId); // sends "remove" → target dispatches nebula:host-removed → leaveRoom()
+removePeer(socketId); // sends "remove" → target dispatches Lumina Meet:host-removed → leaveRoom()
 ```
 
 ### Graceful Cleanup

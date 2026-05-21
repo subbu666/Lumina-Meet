@@ -503,11 +503,11 @@ Rooms are created on first join and deleted automatically when the last particip
 
 The host can send three actions to any participant:
 
-| Action    | Effect on target                                                              |
-| --------- | ----------------------------------------------------------------------------- |
-| `mute`    | Disables the target's microphone track and emits `media-state { mic: false }` |
-| `cam-off` | Disables the target's camera track and emits `media-state { cam: false }`     |
-| `remove`  | Fires `nebula:host-removed` on the target's window, triggering clean leave    |
+| Action    | Effect on target                                                                |
+| --------- | ------------------------------------------------------------------------------- |
+| `mute`    | Disables the target's microphone track and emits `media-state { mic: false }`   |
+| `cam-off` | Disables the target's camera track and emits `media-state { cam: false }`       |
+| `remove`  | Fires `Lumina Meet:host-removed` on the target's window, triggering clean leave |
 
 ### ICE Configuration
 

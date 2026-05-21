@@ -10,7 +10,7 @@ export const Route = createFileRoute("/")({
   component: Landing,
   head: () => ({
     meta: [
-      { title: "Nebula — Real-time meetings" },
+      { title: "Lumina Meet — Real-time meetings" },
       {
         name: "description",
         content: "Premium video meeting platform with cinematic UX.",
@@ -35,7 +35,7 @@ function Landing() {
         <nav className="mx-auto flex max-w-6xl items-center justify-between">
           <Link to="/" className="flex items-center gap-2">
             <div className="h-8 w-8 rounded-lg bg-gradient-neon glow-primary" />
-            <span className="text-lg font-semibold tracking-tight">Nebula</span>
+            <span className="text-lg font-semibold tracking-tight">Lumina Meet</span>
           </Link>
 
           <div className="flex items-center gap-2">

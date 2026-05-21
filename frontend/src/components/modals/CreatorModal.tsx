@@ -1,10 +1,4 @@
-import {
-  motion,
-  AnimatePresence,
-  useMotionValue,
-  useSpring,
-  useTransform,
-} from "framer-motion";
+import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from "framer-motion";
 import { Linkedin, Globe, X, Sparkles, Code2, Cpu, Zap, Shield } from "lucide-react";
 import { useRef, useEffect, useState, useCallback } from "react";
 
@@ -21,11 +15,7 @@ function NeonParticle({ index }: { index: number }) {
   const duration = 3.5 + Math.random() * 4;
   const delay = Math.random() * 3;
   // Alternate between indigo, cyan, and purple
-  const colors = [
-    "rgba(99,102,241,",
-    "rgba(34,211,238,",
-    "rgba(167,139,250,",
-  ];
+  const colors = ["rgba(99,102,241,", "rgba(34,211,238,", "rgba(167,139,250,"];
   const color = colors[index % 3];
 
   return (
@@ -61,15 +51,7 @@ function NeonParticle({ index }: { index: number }) {
 }
 
 /* ─── Orbiting ring dot ─── */
-function OrbitDot({
-  index,
-  total,
-  radius,
-}: {
-  index: number;
-  total: number;
-  radius: number;
-}) {
+function OrbitDot({ index, total, radius }: { index: number; total: number; radius: number }) {
   const angle = (index / total) * 360;
   const size = index % 4 === 0 ? 4 : 2;
   const isBright = index % 4 === 0;
@@ -393,7 +375,6 @@ export function CreatorModal({ open, onClose }: Props) {
 
               {/* ── Main content ── */}
               <div className="relative z-10 flex flex-col items-center px-8 pb-10 pt-10 text-center">
-
                 {/* Avatar + orbit system */}
                 <motion.div
                   className="relative flex items-center justify-center"
@@ -466,8 +447,7 @@ export function CreatorModal({ open, onClose }: Props) {
                       width: 110,
                       height: 110,
                       border: "2px solid rgba(99,102,241,0.5)",
-                      boxShadow:
-                        "0 0 30px rgba(99,102,241,0.25), 0 0 60px rgba(34,211,238,0.1)",
+                      boxShadow: "0 0 30px rgba(99,102,241,0.25), 0 0 60px rgba(34,211,238,0.1)",
                     }}
                   >
                     {/* Shimmer sweep */}
@@ -503,8 +483,7 @@ export function CreatorModal({ open, onClose }: Props) {
                           style={{
                             fontSize: 28,
                             fontWeight: 700,
-                            background:
-                              "linear-gradient(135deg, #6366f1, #22d3ee)",
+                            background: "linear-gradient(135deg, #6366f1, #22d3ee)",
                             WebkitBackgroundClip: "text",
                             WebkitTextFillColor: "transparent",
                           }}
@@ -570,7 +549,7 @@ export function CreatorModal({ open, onClose }: Props) {
                     className="text-[11px] uppercase tracking-[0.3em] font-medium"
                     style={{ color: "rgba(255,255,255,0.32)" }}
                   >
-                    Creator of Nebula
+                    Creator of Lumina Meet
                   </p>
                   <motion.div
                     className="mt-1.5 h-px rounded-full"

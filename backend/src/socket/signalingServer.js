@@ -1,5 +1,5 @@
 /**
- * WebRTC Signaling Server — Nebula Phase 2
+ * WebRTC Signaling Server — Lumina Meet Phase 2
  *
  * Phase 1 (existing):
  *  • join-room / room-peers / user-joined

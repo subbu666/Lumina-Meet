@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/schedule")({
   component: SchedulePage,
-  head: () => ({ meta: [{ title: "Schedule meeting — Nebula" }] }),
+  head: () => ({ meta: [{ title: "Schedule meeting — Lumina Meet" }] }),
 });
 
 function SchedulePage() {
@@ -30,7 +30,8 @@ function SchedulePage() {
     if (!title.trim()) return toast.error("Add a title");
     if (!date) return toast.error("Pick a date");
     const [h, m] = time.split(":").map(Number);
-    const scheduled = new Date(date); scheduled.setHours(h, m, 0, 0);
+    const scheduled = new Date(date);
+    scheduled.setHours(h, m, 0, 0);
     if (scheduled.getTime() < Date.now() - 60_000) return toast.error("Pick a future time");
 
     setLoading(true);
@@ -38,34 +39,55 @@ function SchedulePage() {
       const res = await meetingService.schedule({ title, scheduledFor: scheduled.getTime() });
       setResult({ link: res.link, scheduledFor: res.scheduledFor });
       toast.success("Meeting scheduled");
-    } catch (err) { toast.error(extractError(err).message); }
-    finally { setLoading(false); }
+    } catch (err) {
+      toast.error(extractError(err).message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const copy = async () => {
     if (!result) return;
     await navigator.clipboard.writeText(result.link);
-    setCopied(true); setTimeout(() => setCopied(false), 2000);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
     <main className="relative min-h-screen px-4 py-10 sm:px-8">
       <div className="mx-auto max-w-2xl">
-        <button onClick={() => navigate({ to: "/dashboard" })} className="mb-6 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
+        <button
+          onClick={() => navigate({ to: "/dashboard" })}
+          className="mb-6 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
+        >
           <ArrowLeft className="h-4 w-4" /> Back to dashboard
         </button>
 
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="glass-strong rounded-3xl p-8">
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="glass-strong rounded-3xl p-8"
+        >
           <h1 className="text-2xl font-semibold tracking-tight">Schedule a meeting</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Pick a date and time. We'll generate a link you can share.</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Pick a date and time. We'll generate a link you can share.
+          </p>
 
           <div className="mt-6 space-y-4">
-            <FloatingInput label="Meeting title" value={title} onChange={(e) => setTitle(e.target.value)} />
+            <FloatingInput
+              label="Meeting title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Popover>
                 <PopoverTrigger asChild>
-                  <button className={cn("flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3.5 text-sm hover:bg-white/[0.06] transition")}>
+                  <button
+                    className={cn(
+                      "flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3.5 text-sm hover:bg-white/[0.06] transition",
+                    )}
+                  >
                     <span className="flex items-center gap-2">
                       <CalendarIcon className="h-4 w-4 text-[var(--neon-secondary)]" />
                       {date ? format(date, "PPP") : "Pick a date"}
@@ -73,7 +95,13 @@ function SchedulePage() {
                   </button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0 glass-strong border-white/10" align="start">
-                  <Calendar mode="single" selected={date} onSelect={setDate} initialFocus className={cn("p-3 pointer-events-auto")} />
+                  <Calendar
+                    mode="single"
+                    selected={date}
+                    onSelect={setDate}
+                    initialFocus
+                    className={cn("p-3 pointer-events-auto")}
+                  />
                 </PopoverContent>
               </Popover>
 
@@ -94,18 +122,44 @@ function SchedulePage() {
           </div>
 
           {result && (
-            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-6 rounded-2xl border border-[var(--neon-primary)]/30 bg-[var(--neon-primary)]/5 p-4">
-              <p className="text-xs uppercase tracking-wider text-[var(--neon-secondary)]">Scheduled for</p>
-              <p className="mt-0.5 text-sm font-medium">{new Date(result.scheduledFor).toLocaleString()}</p>
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mt-6 rounded-2xl border border-[var(--neon-primary)]/30 bg-[var(--neon-primary)]/5 p-4"
+            >
+              <p className="text-xs uppercase tracking-wider text-[var(--neon-secondary)]">
+                Scheduled for
+              </p>
+              <p className="mt-0.5 text-sm font-medium">
+                {new Date(result.scheduledFor).toLocaleString()}
+              </p>
               <div className="mt-3 flex items-center gap-2 rounded-xl bg-white/[0.04] p-2.5">
                 <code className="flex-1 truncate text-xs">{result.link}</code>
-                <button onClick={copy} className="rounded-lg bg-white/10 px-2.5 py-1.5 text-xs hover:bg-white/15 transition flex items-center gap-1">
-                  {copied ? <><Check className="h-3 w-3" /> Copied</> : <><Copy className="h-3 w-3" /> Copy</>}
+                <button
+                  onClick={copy}
+                  className="rounded-lg bg-white/10 px-2.5 py-1.5 text-xs hover:bg-white/15 transition flex items-center gap-1"
+                >
+                  {copied ? (
+                    <>
+                      <Check className="h-3 w-3" /> Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3 w-3" /> Copy
+                    </>
+                  )}
                 </button>
               </div>
               <div className="mt-3 flex gap-2">
-                <Link to="/meeting/$id" params={{ id: result.link.split("/").pop()! }} search={{ scheduledFor: result.scheduledFor }} className="flex-1">
-                  <NeonButton variant="outline" fullWidth>Open meeting page</NeonButton>
+                <Link
+                  to="/meeting/$id"
+                  params={{ id: result.link.split("/").pop()! }}
+                  search={{ scheduledFor: result.scheduledFor }}
+                  className="flex-1"
+                >
+                  <NeonButton variant="outline" fullWidth>
+                    Open meeting page
+                  </NeonButton>
                 </Link>
               </div>
             </motion.div>

@@ -2,7 +2,12 @@ import { type ReactNode } from "react";
 import { motion } from "framer-motion";
 import { Link } from "@tanstack/react-router";
 
-export function AuthShell({ title, subtitle, children, footer }: {
+export function AuthShell({
+  title,
+  subtitle,
+  children,
+  footer,
+}: {
   title: string;
   subtitle?: string;
   children: ReactNode;
@@ -12,7 +17,7 @@ export function AuthShell({ title, subtitle, children, footer }: {
     <main className="relative min-h-screen flex items-center justify-center px-4 py-10">
       <Link to="/" className="absolute top-6 left-6 flex items-center gap-2">
         <div className="h-7 w-7 rounded-lg bg-gradient-neon glow-primary" />
-        <span className="font-semibold tracking-tight">Nebula</span>
+        <span className="font-semibold tracking-tight">Lumina Meet</span>
       </Link>
       <motion.div
         initial={{ opacity: 0, y: 16, scale: 0.98 }}

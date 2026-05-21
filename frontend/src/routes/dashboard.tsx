@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 
 export const Route = createFileRoute("/dashboard")({
   component: Dashboard,
-  head: () => ({ meta: [{ title: "Dashboard — Nebula" }] }),
+  head: () => ({ meta: [{ title: "Dashboard — Lumina Meet" }] }),
 });
 
 type HistoryItem = {
@@ -80,7 +80,7 @@ function Dashboard() {
       <header className="mx-auto flex max-w-6xl items-center justify-between">
         <Link to="/" className="flex items-center gap-2">
           <div className="h-8 w-8 rounded-lg bg-gradient-neon glow-primary" />
-          <span className="font-semibold tracking-tight">Nebula</span>
+          <span className="font-semibold tracking-tight">Lumina Meet</span>
         </Link>
         <div className="flex items-center gap-3">
           <div className="hidden sm:flex items-center gap-2 rounded-full glass px-3 py-1.5 text-sm">

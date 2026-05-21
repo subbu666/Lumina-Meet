@@ -1,5 +1,5 @@
 /**
- * useWebRTC — Nebula Phase 2
+ * useWebRTC — Lumina Meet Phase 2
  *
  * Phase 1: getUserMedia → Socket.IO signaling → RTCPeerConnection mesh → VAD
  * Phase 2 additions:
@@ -499,7 +499,7 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
           setLocalHandRaised(false);
         }
         if (action === "remove") {
-          window.dispatchEvent(new CustomEvent("nebula:host-removed"));
+          window.dispatchEvent(new CustomEvent("Lumina Meet:host-removed"));
         }
       });
 

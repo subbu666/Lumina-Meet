@@ -10,7 +10,7 @@ import { extractError } from "@/api/apiClient";
 
 export const Route = createFileRoute("/signup")({
   component: SignupPage,
-  head: () => ({ meta: [{ title: "Sign up — Nebula" }] }),
+  head: () => ({ meta: [{ title: "Sign up — Lumina Meet" }] }),
 });
 
 function SignupPage() {
@@ -36,7 +36,11 @@ function SignupPage() {
     if (!validate()) return;
     setLoading(true);
     try {
-      await authService.signup({ username: form.username, email: form.email, password: form.password });
+      await authService.signup({
+        username: form.username,
+        email: form.email,
+        password: form.password,
+      });
       toast.success("Account created. Verify your email.");
       navigate({ to: "/verify-otp", search: { email: form.email, flow: "signup" } });
     } catch (err) {
@@ -50,16 +54,49 @@ function SignupPage() {
     <AuthShell
       title="Create your account"
       subtitle="Start hosting meetings in seconds."
-      footer={<>Already have an account? <Link to="/login" className="text-[var(--neon-secondary)] hover:underline">Log in</Link></>}
+      footer={
+        <>
+          Already have an account?{" "}
+          <Link to="/login" className="text-[var(--neon-secondary)] hover:underline">
+            Log in
+          </Link>
+        </>
+      }
     >
       <form onSubmit={submit} className="space-y-4">
-        <FloatingInput label="Username" value={form.username} onChange={(e) => set("username", e.target.value)} error={errors.username} />
-        <FloatingInput label="Email" type="email" autoComplete="email" value={form.email} onChange={(e) => set("email", e.target.value)} error={errors.email} />
+        <FloatingInput
+          label="Username"
+          value={form.username}
+          onChange={(e) => set("username", e.target.value)}
+          error={errors.username}
+        />
+        <FloatingInput
+          label="Email"
+          type="email"
+          autoComplete="email"
+          value={form.email}
+          onChange={(e) => set("email", e.target.value)}
+          error={errors.email}
+        />
         <div>
-          <FloatingInput label="Password" type="password" autoComplete="new-password" value={form.password} onChange={(e) => set("password", e.target.value)} error={errors.password} />
+          <FloatingInput
+            label="Password"
+            type="password"
+            autoComplete="new-password"
+            value={form.password}
+            onChange={(e) => set("password", e.target.value)}
+            error={errors.password}
+          />
           <PasswordStrength password={form.password} />
         </div>
-        <FloatingInput label="Confirm password" type="password" autoComplete="new-password" value={form.confirm} onChange={(e) => set("confirm", e.target.value)} error={errors.confirm} />
+        <FloatingInput
+          label="Confirm password"
+          type="password"
+          autoComplete="new-password"
+          value={form.confirm}
+          onChange={(e) => set("confirm", e.target.value)}
+          error={errors.confirm}
+        />
         <NeonButton type="submit" fullWidth loading={loading} className="mt-2">
           {loading ? "Creating account…" : "Create account"}
         </NeonButton>

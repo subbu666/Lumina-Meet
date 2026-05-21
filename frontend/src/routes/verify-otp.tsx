@@ -18,7 +18,7 @@ const searchSchema = z.object({
 export const Route = createFileRoute("/verify-otp")({
   component: VerifyOtpPage,
   validateSearch: searchSchema.parse,
-  head: () => ({ meta: [{ title: "Verify OTP — Nebula" }] }),
+  head: () => ({ meta: [{ title: "Verify OTP — Lumina Meet" }] }),
 });
 
 function VerifyOtpPage() {
