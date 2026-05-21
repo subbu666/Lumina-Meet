@@ -4,14 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      - 'frontend/**'        # only triggers when frontend files change
+      - "frontend/**"
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: frontend   # all commands run inside /frontend
+        working-directory: frontend
 
     steps:
       - uses: actions/checkout@v4
@@ -25,10 +25,13 @@ jobs:
 
       - name: Build
         run: bun run build
+        env:
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          VITE_SOCKET_URL: ${{ secrets.VITE_SOCKET_URL }}
 
       - name: Deploy
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: frontend   # wrangler looks for wrangler.jsonc here
+          workingDirectory: frontend
