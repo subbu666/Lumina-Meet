@@ -270,7 +270,7 @@ function Landing() {
               animate={{ scale: [1, 1.3, 1] }}
               transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
             >
-              ✦
+              🌟
             </motion.span>
             by{" "}
             <span className="font-medium transition-all group-hover:text-transparent">
