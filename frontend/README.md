@@ -94,7 +94,7 @@ src/routes/meeting.$id.tsx  ← UI: video grid, controls, panels
 5. Sends SDP offer → server relays → peer answers
 6. ICE candidates trickle via server until P2P path is found
 7. Media (video/audio) flows directly browser-to-browser
-8. Server is no longer involved in the media stream
+8. Server is no longer involved in the media streams
 ```
 
 ### `useWebRTC` Hook
