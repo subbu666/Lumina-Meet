@@ -1,5 +1,5 @@
 /**
- * VideoMeet — Premium Email Service
+ * Lumina Meet — Premium Email Service
  *
  * Design principles:
  *  • Zero SVG, zero CSS flexbox/grid — only table-based layouts (Gmail/Outlook safe)
@@ -34,8 +34,9 @@ const BREVO_API_URL = "https://api.brevo.com/v3/smtp/email";
 const sendEmail = async (options) => {
   try {
     const apiKey = process.env.BREVO_API_KEY;
-    const fromEmail = process.env.EMAIL_FROM_ADDRESS || "noreply@videomeet.app";
-    const fromName = process.env.EMAIL_FROM_NAME || "VideoMeet";
+    const fromEmail =
+      process.env.EMAIL_FROM_ADDRESS || "noreply@Lumina Meet.app";
+    const fromName = process.env.EMAIL_FROM_NAME || "Lumina Meet";
 
     if (!apiKey) throw new Error("BREVO_API_KEY is not configured");
 
@@ -118,7 +119,7 @@ const shell = (innerHtml, previewText = "") => `<!DOCTYPE html>
   <meta name="x-apple-disable-message-reformatting">
   <meta name="format-detection" content="telephone=no,address=no,email=no,date=no,url=no">
   <!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->
-  <title>VideoMeet</title>
+  <title>Lumina Meet</title>
   <style>
     /* Client resets */
     body,table,td,p,a,li,blockquote{-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;}
@@ -173,7 +174,7 @@ const shell = (innerHtml, previewText = "") => `<!DOCTYPE html>
           <tr>
             <td align="center" style="padding:0 20px;">
               <p style="margin:0;font-size:11px;color:${T.white25};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.8;">
-                &copy; ${T.year} VideoMeet &nbsp;&bull;&nbsp; Secure video meetings for everyone<br>
+                &copy; ${T.year} Lumina Meet &nbsp;&bull;&nbsp; Secure video meetings for everyone<br>
                 <a href="#" style="color:${T.white25};text-decoration:none;">Privacy</a>
                 &nbsp;&nbsp;
                 <a href="#" style="color:${T.white25};text-decoration:none;">Terms</a>
@@ -461,7 +462,7 @@ const detailRow = (emoji, label, value, iconBg, isLast = false) => `
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const sendOTPEmail = async (toEmail, otpCode, username = "there") => {
-  const preview = `Your VideoMeet verification code is ${otpCode} — expires in 5 minutes`;
+  const preview = `Your Lumina Meet verification code is ${otpCode} — expires in 5 minutes`;
 
   const inner = `
     <!-- ══ HEADER ══ -->
@@ -477,7 +478,7 @@ export const sendOTPEmail = async (toEmail, otpCode, username = "there") => {
           </tr>
         </table>
         <p class="title-text" style="margin:0 0 8px 0;font-size:26px;font-weight:800;color:${T.white};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;letter-spacing:-0.5px;">Verify Your Email</p>
-        <p style="margin:0;font-size:14px;color:${T.white60};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Secure your VideoMeet account in one step</p>
+        <p style="margin:0;font-size:14px;color:${T.white60};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Secure your Lumina Meet account in one step</p>
       </td>
     </tr>
 
@@ -488,7 +489,7 @@ export const sendOTPEmail = async (toEmail, otpCode, username = "there") => {
         <!-- Greeting -->
         <p style="margin:0 0 10px 0;font-size:18px;font-weight:800;color:${T.white90};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Hi ${username} 👋</p>
         <p class="body-text" style="margin:0 0 32px 0;font-size:15px;color:${T.white60};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.75;">
-          Welcome to <strong style="color:#a5b4fc;">VideoMeet</strong>! Enter the verification code below to confirm your email address and activate your account.
+          Welcome to <strong style="color:#a5b4fc;">Lumina Meet</strong>! Enter the verification code below to confirm your email address and activate your account.
         </p>
 
         <!-- OTP BOX -->
@@ -518,7 +519,7 @@ export const sendOTPEmail = async (toEmail, otpCode, username = "there") => {
           <tr>
             <td style="background:rgba(239,68,68,0.06);border-left:4px solid rgba(239,68,68,0.55);border-radius:0 12px 12px 0;padding:16px 20px;">
               <p style="margin:0 0 6px 0;font-size:13px;font-weight:700;color:#fca5a5;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">&#128274; Security Notice</p>
-              <p style="margin:0;font-size:13px;color:${T.white60};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.65;">Never share this code with anyone. VideoMeet staff will never ask for it. If you didn't create an account, safely ignore this email.</p>
+              <p style="margin:0;font-size:13px;color:${T.white60};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.65;">Never share this code with anyone. Lumina Meet staff will never ask for it. If you didn't create an account, safely ignore this email.</p>
             </td>
           </tr>
         </table>
@@ -542,7 +543,7 @@ export const sendOTPEmail = async (toEmail, otpCode, username = "there") => {
           </tr>
         </table>
         <p style="margin:0;font-size:12px;color:${T.white25};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.8;">
-          This email was sent to ${toEmail} because you signed up for VideoMeet.<br>
+          This email was sent to ${toEmail} because you signed up for Lumina Meet.<br>
           You can <a href="#" style="color:${T.white40};text-decoration:underline;">unsubscribe</a> at any time.
         </p>
       </td>
@@ -550,9 +551,9 @@ export const sendOTPEmail = async (toEmail, otpCode, username = "there") => {
 
   return sendEmail({
     to: toEmail,
-    subject: `${otpCode} — Your VideoMeet Verification Code`,
+    subject: `${otpCode} — Your Lumina Meet Verification Code`,
     html: shell(inner, preview),
-    text: `Hi ${username},\n\nYour VideoMeet verification code is: ${otpCode}\n\nExpires in 5 minutes. Never share this code with anyone.`,
+    text: `Hi ${username},\n\nYour Lumina Meet verification code is: ${otpCode}\n\nExpires in 5 minutes. Never share this code with anyone.`,
   });
 };
 
@@ -591,7 +592,7 @@ export const sendMeetingInvitationEmail = async (
       })
     : null;
 
-  const preview = `${inviterName} invited you to "${title}" on VideoMeet`;
+  const preview = `${inviterName} invited you to "${title}" on Lumina Meet`;
 
   const inner = `
     <!-- ══ HEADER ══ -->
@@ -600,7 +601,7 @@ export const sendMeetingInvitationEmail = async (
         ${iconCircle("&#127909;", T.green, T.indigo, T.greenGlow)}
         ${badge("&#9679;&nbsp; Meeting Invitation", T.green, "rgba(16,185,129,0.12)", "rgba(16,185,129,0.30)")}
         <p class="title-text" style="margin:0 0 6px 0;font-size:25px;font-weight:800;color:${T.white};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;letter-spacing:-0.4px;">${inviterName} invited you</p>
-        <p style="margin:0;font-size:14px;color:${T.white60};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Join the conversation on VideoMeet</p>
+        <p style="margin:0;font-size:14px;color:${T.white60};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Join the conversation on Lumina Meet</p>
       </td>
     </tr>
 
@@ -723,7 +724,7 @@ export const sendMeetingInvitationEmail = async (
 
   return sendEmail({
     to: toEmail,
-    subject: `Meeting Invitation: ${title} — VideoMeet`,
+    subject: `Meeting Invitation: ${title} — Lumina Meet`,
     html: shell(inner, preview),
     text: `${inviterName} invited you to: ${title}\n\nDate: ${meetingDate}${meetingTime ? `\nTime: ${meetingTime}` : ""}\nMeeting ID: ${meetingId}\n\nJoin: ${meetingLink}${isPasswordProtected ? `\nPassword: ${password}` : ""}`,
   });
@@ -738,7 +739,7 @@ export const sendPasswordResetEmail = async (
   otpCode,
   username = "there",
 ) => {
-  const preview = `Your VideoMeet password reset code is ${otpCode} — expires in 10 minutes`;
+  const preview = `Your Lumina Meet password reset code is ${otpCode} — expires in 10 minutes`;
 
   const inner = `
     <!-- ══ HEADER ══ -->
@@ -764,7 +765,7 @@ export const sendPasswordResetEmail = async (
 
         <p style="margin:0 0 10px 0;font-size:18px;font-weight:800;color:#fef3c7;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Hi ${username},</p>
         <p class="body-text" style="margin:0 0 32px 0;font-size:15px;color:${T.white60};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.75;">
-          We received a request to reset your <strong style="color:${T.amberLight};">VideoMeet</strong> password. Use the code below to verify your identity and set a new password.
+          We received a request to reset your <strong style="color:${T.amberLight};">Lumina Meet</strong> password. Use the code below to verify your identity and set a new password.
         </p>
 
         <!-- OTP BOX -->
@@ -856,7 +857,7 @@ export const sendPasswordResetEmail = async (
 
   return sendEmail({
     to: toEmail,
-    subject: "Password Reset — VideoMeet",
+    subject: "Password Reset — Lumina Meet",
     html: shell(inner, preview),
     text: `Hi ${username},\n\nYour password reset code is: ${otpCode}\n\nExpires in 10 minutes.\n\nIf you didn't request this, please secure your account immediately.`,
   });
@@ -983,7 +984,7 @@ export const sendMeetingReminderEmail = async (
 
   return sendEmail({
     to: toEmail,
-    subject: `Starting in ${minutesBefore} min: ${title} — VideoMeet`,
+    subject: `Starting in ${minutesBefore} min: ${title} — Lumina Meet`,
     html: shell(inner, preview),
     text: `Your meeting "${title}" starts in ${minutesBefore} minutes.\n\nMeeting ID: ${meetingId}\n${meetingTime ? `Time: ${meetingTime}\n` : ""}Join: ${meetingLink}`,
   });

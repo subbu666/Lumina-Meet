@@ -1,4 +1,4 @@
-# VideoMeet API
+# Lumina Meet API
 
 > **Production-grade backend API** for a real-time video meeting SaaS platform. Built with Node.js, Express, MongoDB, Redis, Socket.IO, and WebRTC signaling — designed for scalability, security, and seamless real-time communication.
 
@@ -179,8 +179,8 @@ BREVO_SMTP_HOST=smtp-relay.brevo.com
 BREVO_SMTP_PORT=587
 
 # Email From Address
-EMAIL_FROM_NAME=VideoMeet
-EMAIL_FROM_ADDRESS=noreply@videomeet.app
+EMAIL_FROM_NAME=Lumina Meet
+EMAIL_FROM_ADDRESS=noreply@Lumina Meet.app
 
 # Redis (Optional - falls back to in-memory)
 REDIS_URL=redis://localhost:6379
@@ -318,7 +318,7 @@ Verifies the OTP and creates the user account.
 ```json
 {
   "success": true,
-  "message": "Account created successfully! Welcome to VideoMeet.",
+  "message": "Account created successfully! Welcome to Lumina Meet.",
   "data": {
     "user": {
       "id": "65a1b2c3d4e5f6g7h8i9j0k1",
@@ -444,7 +444,7 @@ All meeting endpoints are prefixed with `/api/meeting`.
 
 ## WebRTC Signaling
 
-VideoMeet uses Socket.IO as a **signaling layer** to coordinate browser-to-browser WebRTC peer connections. The signaling server lives in `src/socket/signallingServer.js` and is initialized alongside the Express app in `server.js`.
+Lumina Meet uses Socket.IO as a **signaling layer** to coordinate browser-to-browser WebRTC peer connections. The signaling server lives in `src/socket/signallingServer.js` and is initialized alongside the Express app in `server.js`.
 
 ### How It Works
 

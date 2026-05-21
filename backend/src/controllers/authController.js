@@ -389,7 +389,7 @@ export const verifyOTP = asyncHandler(async (req, res) => {
 
   res.status(201).json({
     success: true,
-    message: "Account created successfully! Welcome to VideoMeet.",
+    message: "Account created successfully! Welcome to Lumina Meet.",
     data: {
       user: user.toSafeObject(),
       tokens: {

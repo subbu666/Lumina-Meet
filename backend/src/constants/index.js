@@ -1,8 +1,7 @@
 /**
  * Application Constants
- * Centralized constants for the VideoMeet API
+ * Centralized constants for the Lumina Meet API
  */
-
 
 // API Configuration
 export const API_VERSION = "v1";

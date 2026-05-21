@@ -138,7 +138,7 @@ app.use(API_PREFIX, apiRateLimiter);
 app.get("/health", (req, res) => {
   res.status(200).json({
     success: true,
-    message: "VideoMeet API is running",
+    message: "Lumina Meet API is running",
     timestamp: new Date().toISOString(),
     version: "1.0.0",
     environment: process.env.NODE_ENV || "development",
@@ -150,7 +150,7 @@ app.get("/health", (req, res) => {
 app.get("/", (req, res) => {
   res.status(200).json({
     success: true,
-    message: "Welcome to VideoMeet API",
+    message: "Welcome to Lumina Meet API",
     documentation: "/api/docs",
     health: "/health",
     version: "1.0.0",

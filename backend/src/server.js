@@ -23,7 +23,7 @@ const allowedOrigins = (process.env.CLIENT_URL || "")
 
 const startServer = async () => {
   const startTime = Date.now();
-  console.log("🚀 Starting VideoMeet API...\n");
+  console.log("🚀 Starting Lumina Meet API...\n");
 
   // Step 1: MongoDB
   try {
@@ -75,7 +75,7 @@ const startServer = async () => {
   httpServer.listen(PORT, HOST, () => {
     const startupTime = Date.now() - startTime;
     console.log("=".repeat(50));
-    console.log("🎥 VideoMeet API Server  (HTTP + WebSocket)");
+    console.log("🎥 Lumina Meet API Server  (HTTP + WebSocket)");
     console.log("=".repeat(50));
     console.log(`📡 Environment  : ${NODE_ENV}`);
     console.log(`🌐 HTTP URL     : http://${HOST}:${PORT}`);

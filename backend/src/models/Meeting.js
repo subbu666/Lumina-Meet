@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 /**
  * Meeting Model
@@ -8,36 +8,36 @@ const meetingSchema = new mongoose.Schema(
   {
     host: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: [true, 'Meeting host is required'],
+      ref: "User",
+      required: [true, "Meeting host is required"],
       index: true,
     },
     meetingId: {
       type: String,
-      required: [true, 'Meeting ID is required'],
+      required: [true, "Meeting ID is required"],
       unique: true,
       index: true,
-      // Format: vm-XXXX-XXXX-XXXX (vm = videomeet)
-      match: [/^vm-[a-z0-9-]+$/, 'Invalid meeting ID format'],
+      // Format: vm-XXXX-XXXX-XXXX (vm = Lumina Meet)
+      match: [/^vm-[a-z0-9-]+$/, "Invalid meeting ID format"],
     },
     title: {
       type: String,
-      required: [true, 'Meeting title is required'],
+      required: [true, "Meeting title is required"],
       trim: true,
-      maxlength: [200, 'Title cannot exceed 200 characters'],
+      maxlength: [200, "Title cannot exceed 200 characters"],
     },
     description: {
       type: String,
       trim: true,
-      maxlength: [1000, 'Description cannot exceed 1000 characters'],
+      maxlength: [1000, "Description cannot exceed 1000 characters"],
       default: null,
     },
     // Meeting type
     type: {
       type: String,
-      enum: ['instant', 'scheduled'],
+      enum: ["instant", "scheduled"],
       required: true,
-      default: 'instant',
+      default: "instant",
     },
     // Scheduled time (for scheduled meetings)
     scheduledFor: {
@@ -48,14 +48,14 @@ const meetingSchema = new mongoose.Schema(
     duration: {
       type: Number,
       default: 60,
-      min: [5, 'Minimum duration is 5 minutes'],
-      max: [480, 'Maximum duration is 480 minutes (8 hours)'],
+      min: [5, "Minimum duration is 5 minutes"],
+      max: [480, "Maximum duration is 480 minutes (8 hours)"],
     },
     // Meeting status
     status: {
       type: String,
-      enum: ['pending', 'active', 'completed', 'cancelled'],
-      default: 'pending',
+      enum: ["pending", "active", "completed", "cancelled"],
+      default: "pending",
     },
     // Password protection
     password: {
@@ -83,8 +83,8 @@ const meetingSchema = new mongoose.Schema(
         },
         status: {
           type: String,
-          enum: ['invited', 'joined', 'declined', 'left'],
-          default: 'invited',
+          enum: ["invited", "joined", "declined", "left"],
+          default: "invited",
         },
         joinedAt: {
           type: Date,
@@ -192,7 +192,7 @@ const meetingSchema = new mongoose.Schema(
     timestamps: true,
     toJSON: { virtuals: true },
     toObject: { virtuals: true },
-  }
+  },
 );
 
 // Compound indexes for efficient queries
@@ -203,32 +203,32 @@ meetingSchema.index({ createdAt: -1 }); // For recent meetings query
 meetingSchema.index({ type: 1, status: 1 });
 
 // Virtual for participant count
-meetingSchema.virtual('participantCount').get(function () {
-  return this.participants.filter(p => p.status === 'joined').length;
+meetingSchema.virtual("participantCount").get(function () {
+  return this.participants.filter((p) => p.status === "joined").length;
 });
 
 // Virtual for total invites
-meetingSchema.virtual('totalInvites').get(function () {
+meetingSchema.virtual("totalInvites").get(function () {
   return this.invitedEmails.length;
 });
 
 // Virtual for isActive
-meetingSchema.virtual('isActive').get(function () {
-  return this.status === 'active';
+meetingSchema.virtual("isActive").get(function () {
+  return this.status === "active";
 });
 
 // Virtual for isScheduled
-meetingSchema.virtual('isScheduled').get(function () {
-  return this.type === 'scheduled' && this.scheduledFor > new Date();
+meetingSchema.virtual("isScheduled").get(function () {
+  return this.type === "scheduled" && this.scheduledFor > new Date();
 });
 
 // Instance method to check if meeting can be joined
 meetingSchema.methods.canJoin = function () {
   // Instant meetings can be joined anytime
-  if (this.type === 'instant') return true;
+  if (this.type === "instant") return true;
 
   // Scheduled meetings can be joined 15 minutes before scheduled time
-  if (this.type === 'scheduled') {
+  if (this.type === "scheduled") {
     const now = new Date();
     const joinWindow = new Date(this.scheduledFor);
     joinWindow.setMinutes(joinWindow.getMinutes() - 15);
@@ -246,7 +246,7 @@ meetingSchema.methods.isHost = function (userId) {
 // Instance method to check if user is a participant
 meetingSchema.methods.isParticipant = function (email) {
   return this.participants.some(
-    p => p.email.toLowerCase() === email.toLowerCase()
+    (p) => p.email.toLowerCase() === email.toLowerCase(),
   );
 };
 
@@ -257,7 +257,7 @@ meetingSchema.methods.addParticipant = async function (email, name = null) {
     this.participants.push({
       email: email.toLowerCase(),
       name,
-      status: 'invited',
+      status: "invited",
       isHost: false,
     });
     if (!this.invitedEmails.includes(email.toLowerCase())) {
@@ -271,10 +271,10 @@ meetingSchema.methods.addParticipant = async function (email, name = null) {
 // Instance method to mark participant as joined
 meetingSchema.methods.markJoined = async function (email) {
   const participant = this.participants.find(
-    p => p.email.toLowerCase() === email.toLowerCase()
+    (p) => p.email.toLowerCase() === email.toLowerCase(),
   );
   if (participant) {
-    participant.status = 'joined';
+    participant.status = "joined";
     participant.joinedAt = new Date();
     await this.save();
   }
@@ -283,7 +283,7 @@ meetingSchema.methods.markJoined = async function (email) {
 
 // Instance method to start meeting
 meetingSchema.methods.start = async function () {
-  this.status = 'active';
+  this.status = "active";
   this.startedAt = new Date();
   await this.save();
   return this;
@@ -291,12 +291,12 @@ meetingSchema.methods.start = async function () {
 
 // Instance method to complete meeting
 meetingSchema.methods.complete = async function () {
-  this.status = 'completed';
+  this.status = "completed";
   this.completedAt = new Date();
   // Mark all active participants as left
-  this.participants.forEach(p => {
-    if (p.status === 'joined') {
-      p.status = 'left';
+  this.participants.forEach((p) => {
+    if (p.status === "joined") {
+      p.status = "left";
       p.leftAt = new Date();
     }
   });
@@ -339,14 +339,17 @@ meetingSchema.methods.toHostObject = function () {
 
 // Static method to find by meetingId
 meetingSchema.statics.findByMeetingId = function (meetingId) {
-  return this.findOne({ meetingId }).populate('host', 'username email firstName lastName');
+  return this.findOne({ meetingId }).populate(
+    "host",
+    "username email firstName lastName",
+  );
 };
 
 // Static method to find active meetings by host
 meetingSchema.statics.findActiveByHost = function (hostId) {
   return this.find({
     host: hostId,
-    status: { $in: ['pending', 'active'] },
+    status: { $in: ["pending", "active"] },
   }).sort({ createdAt: -1 });
 };
 
@@ -356,7 +359,7 @@ meetingSchema.statics.getHistoryForUser = function (userId, options = {}) {
   const query = {
     $or: [
       { host: userId },
-      { 'participants.email': { $exists: true } }, // Will be refined with actual email
+      { "participants.email": { $exists: true } }, // Will be refined with actual email
     ],
   };
 
@@ -365,12 +368,12 @@ meetingSchema.statics.getHistoryForUser = function (userId, options = {}) {
   }
 
   return this.find(query)
-    .populate('host', 'username email firstName lastName')
+    .populate("host", "username email firstName lastName")
     .sort({ createdAt: -1 })
     .skip((page - 1) * limit)
     .limit(limit);
 };
 
-const Meeting = mongoose.model('Meeting', meetingSchema);
+const Meeting = mongoose.model("Meeting", meetingSchema);
 
 export default Meeting;
