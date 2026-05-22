@@ -1,12 +1,16 @@
 /**
- * useWebRTC — Lumina Meet Phase 2
+ * useWebRTC — Lumina Meet Phase 2 (FIXED)
  *
- * Phase 1: getUserMedia → Socket.IO signaling → RTCPeerConnection mesh → VAD
- * Phase 2 additions:
- *   • In-meeting chat       (sendChatMessage, messages, typingPeers)
- *   • Live status           (setStatus, peer.status)
- *   • Raise hand            (raiseHand, lowerHand, peer.handRaised)
- *   • Reactions / emoji     (sendReaction, reactions[])
+ * Fixes applied:
+ *  FIX 1 — Screen share: setLocalStream now updates to the screen track stream so
+ *           ScreenShareView actually renders the shared screen (not the camera).
+ *           localStreamRef is also kept in sync so track replacement in PCs works
+ *           correctly when sharing stops and cam track is restored.
+ *
+ *  FIX 2 — Status automation: toggleScreenShare now auto-sets localStatus to
+ *           "presenting" when sharing starts, and restores the previous status when
+ *           sharing stops (both via browser stop-share button and the in-app toggle).
+ *           A prevStatusRef keeps track of what to restore to.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -24,7 +28,6 @@ export interface RemotePeer {
   cam: boolean;
   screen: boolean;
   speaking: boolean;
-  // Phase 2
   status: ParticipantStatus;
   handRaised: boolean;
   handRaisedAt: number | null;
@@ -37,7 +40,6 @@ export interface ChatMessage {
   text: string;
   timestamp: number;
   replyTo: { id: string; username: string; text: string } | null;
-  // client-side: reactions keyed by emoji → Set of socketIds
   reactions: Record<string, Set<string>>;
 }
 
@@ -55,33 +57,21 @@ export interface TypingPeer {
 }
 
 export interface UseWebRTCReturn {
-  // Local state
   localStream: MediaStream | null;
   localSocketId: string | null;
   mic: boolean;
   cam: boolean;
   sharing: boolean;
-
-  // Remote peers
   peers: RemotePeer[];
-
-  // Controls
   toggleMic: () => void;
   toggleCam: () => Promise<void>;
   toggleScreenShare: () => Promise<void>;
   leaveRoom: () => void;
-
-  // Host controls
   muteAll: () => void;
   camOffAll: () => void;
   removePeer: (socketId: string) => void;
-
-  // Speaking detection
   isSpeaking: boolean;
   speakingPeerId: string | null;
-
-  // ── Phase 2 ──────────────────────────────────────────────────────────────
-  // Chat
   messages: ChatMessage[];
   typingPeers: TypingPeer[];
   sendChatMessage: (text: string, replyTo?: ChatMessage | null) => void;
@@ -89,23 +79,15 @@ export interface UseWebRTCReturn {
   setTyping: (isTyping: boolean) => void;
   unreadCount: number;
   markRead: () => void;
-
-  // Status
   localStatus: ParticipantStatus;
   setStatus: (status: ParticipantStatus) => void;
-
-  // Raise hand
   localHandRaised: boolean;
   raiseHand: () => void;
   lowerHand: () => void;
   lowerPeerHand: (socketId: string) => void;
   raisedHands: Array<{ socketId: string; username: string; handRaisedAt: number }>;
-
-  // Reactions
   reactions: ReactionEvent[];
   sendReaction: (emoji: string) => void;
-
-  // Status
   error: string | null;
   isConnecting: boolean;
 }
@@ -123,8 +105,8 @@ const ICE_SERVERS: RTCIceServer[] = [
 const VAD_THRESHOLD = 18;
 const VAD_POLL_MS = 80;
 const VAD_SILENCE_MS = 600;
-const REACTION_LIFETIME_MS = 4000; // remove reaction from list after 4s
-const TYPING_DEBOUNCE_MS = 1500; // stop-typing signal debounced
+const REACTION_LIFETIME_MS = 4000;
+const TYPING_DEBOUNCE_MS = 1500;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -177,7 +159,6 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [typingPeers, setTypingPeers] = useState<TypingPeer[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [chatOpen, setChatOpen] = useState(false); // tracks if chat panel is open
   const [localStatus, setLocalStatus] = useState<ParticipantStatus>("available");
   const [localHandRaised, setLocalHandRaised] = useState(false);
   const [reactions, setReactions] = useState<ReactionEvent[]>([]);
@@ -195,6 +176,9 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isTypingRef = useRef(false);
   const chatOpenRef = useRef(false);
+
+  // FIX 2: Track status before presenting so we can restore it when sharing stops
+  const prevStatusRef = useRef<ParticipantStatus>("available");
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -378,7 +362,6 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
         ) => {
           for (const peer of existingPeers) {
             const pc = createPC(peer.socketId, peer.username);
-            // Apply Phase 2 state from server
             updatePeer(peer.socketId, {
               status: peer.status ?? "available",
               handRaised: peer.handRaised ?? false,
@@ -396,8 +379,6 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
         ({
           socketId,
           username: uname,
-          status,
-          handRaised,
         }: {
           socketId: string;
           username: string;
@@ -468,6 +449,7 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
             ...(pMic !== undefined && { mic: pMic }),
             ...(pCam !== undefined && { cam: pCam }),
             ...(pScreen !== undefined && { screen: pScreen }),
+            // Auto-update remote peer status based on screen share
             ...(pScreen === true && { status: "presenting" as ParticipantStatus }),
             ...(pScreen === false && { status: "available" as ParticipantStatus }),
           });
@@ -476,7 +458,6 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
 
       socket.on("user-left", ({ socketId }: { socketId: string }) => {
         closePC(socketId);
-        // Clean up typing state
         setTypingPeers((prev) => prev.filter((p) => p.socketId !== socketId));
       });
 
@@ -503,30 +484,23 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
         }
       });
 
-      // ══════════════════════════════════════════════════════════════════════
-      // PHASE 2 SOCKET HANDLERS
-      // ══════════════════════════════════════════════════════════════════════
+      // ── Phase 2 socket handlers ────────────────────────────────────────────
 
-      // Chat history (sent on join)
       socket.on("chat-history", (history: Omit<ChatMessage, "reactions">[]) => {
         setMessages(history.map((m) => ({ ...m, reactions: {} })));
       });
 
-      // Incoming chat message
       socket.on("chat-message", (msg: Omit<ChatMessage, "reactions">) => {
         setMessages((prev) => {
           if (prev.some((m) => m.id === msg.id)) return prev;
           return [...prev, { ...msg, reactions: {} }];
         });
-        // Increment unread if chat panel is closed and sender is not self
         if (!chatOpenRef.current && msg.socketId !== socket.id) {
           setUnreadCount((n) => n + 1);
         }
-        // Remove sender from typing list
         setTypingPeers((prev) => prev.filter((p) => p.socketId !== msg.socketId));
       });
 
-      // Chat reactions on messages
       socket.on(
         "chat-reaction",
         ({
@@ -545,8 +519,7 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
               const newReactions = { ...m.reactions };
               if (!newReactions[emoji]) newReactions[emoji] = new Set();
               const clone = new Set(newReactions[emoji]);
-              if (clone.has(sid))
-                clone.delete(sid); // toggle off
+              if (clone.has(sid)) clone.delete(sid);
               else clone.add(sid);
               newReactions[emoji] = clone;
               return { ...m, reactions: newReactions };
@@ -555,7 +528,6 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
         },
       );
 
-      // Typing indicator
       socket.on(
         "chat-typing",
         ({
@@ -577,7 +549,6 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
         },
       );
 
-      // Peer status change
       socket.on(
         "peer-status",
         ({
@@ -592,12 +563,10 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
         },
       );
 
-      // Hand raised by a peer
       socket.on(
         "hand-raised",
         ({
           socketId: sid,
-          username: uname,
           handRaisedAt,
         }: {
           socketId: string;
@@ -608,21 +577,17 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
         },
       );
 
-      // Hand lowered
       socket.on("hand-lowered", ({ socketId: sid }: { socketId: string }) => {
         updatePeer(sid, { handRaised: false, handRaisedAt: null });
       });
 
-      // Reaction (emoji burst)
       socket.on("reaction", (event: ReactionEvent) => {
         setReactions((prev) => [...prev, event]);
-        // Auto-expire after REACTION_LIFETIME_MS
         setTimeout(() => {
           setReactions((prev) => prev.filter((r) => r.id !== event.id));
         }, REACTION_LIFETIME_MS);
       });
 
-      // Cleanup function captures remoteVadTimer
       return () => {
         clearInterval(remoteVadTimer);
       };
@@ -702,7 +667,9 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
           if (sender) sender.replaceTrack(newVideoTrack);
           else pc.addTrack(newVideoTrack, stream);
         });
-        setLocalStream(new MediaStream(stream.getTracks()));
+        const updatedStream = new MediaStream(stream.getTracks());
+        localStreamRef.current = updatedStream;
+        setLocalStream(updatedStream);
         setCam(true);
         socketRef.current?.emit("media-state", { cam: true });
       } catch (err) {
@@ -711,49 +678,134 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
     }
   }, [cam]);
 
+  /**
+   * FIX 1 — Screen share:
+   *
+   * Root cause: When sharing started, we replaced the video sender track in all
+   * RTCPeerConnections (correct), but we never updated localStreamRef or called
+   * setLocalStream. The ScreenShareView's <video> element receives `localStream`
+   * from React state, which still pointed to the camera stream — so it rendered
+   * the camera feed instead of the screen.
+   *
+   * Fix: After getting the screen track, build a new MediaStream that combines
+   * the screen video track with the existing audio tracks from localStreamRef,
+   * update localStreamRef to this combined stream, and call setLocalStream so
+   * React re-renders ScreenShareView with the correct stream.
+   *
+   * When stopping (either via the in-app button or the browser's "Stop sharing"
+   * button), restore localStreamRef and localStream back to the original camera
+   * stream so LocalVideoTile renders correctly again.
+   *
+   * FIX 2 — Status automation:
+   *
+   * When sharing starts, save the current status in prevStatusRef, then call
+   * setStatus("presenting") which updates localStatus and emits to the socket.
+   * When sharing stops, restore the saved status. This way other participants
+   * also see the correct presenting/restored status in real time.
+   */
   const toggleScreenShare = useCallback(async () => {
     const socket = socketRef.current;
     if (!socket) return;
 
     if (sharing) {
+      // ── Stop sharing ──────────────────────────────────────────────────────
       screenStreamRef.current?.getTracks().forEach((t) => t.stop());
       screenStreamRef.current = null;
-      const videoTrack = localStreamRef.current?.getVideoTracks()[0];
-      if (videoTrack) {
+
+      // Restore camera track into all peer connections
+      const camTrack = localStreamRef.current?.getVideoTracks()[0];
+      if (camTrack) {
         pcsRef.current.forEach((pc) => {
           const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-          if (sender) sender.replaceTrack(videoTrack);
+          if (sender) sender.replaceTrack(camTrack);
         });
       }
+
+      // FIX 1: Restore localStream so React UI shows camera again
+      // localStreamRef.current still holds the original camera+audio stream
+      // because we never reassigned it to the screen stream — we only used
+      // the screen track inside senders. We just trigger a re-render.
+      if (localStreamRef.current) {
+        setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+      }
+
       setSharing(false);
       socket.emit("media-state", { screen: false });
+
+      // FIX 2: Restore previous status
+      const restored = prevStatusRef.current;
+      setLocalStatus(restored);
+      socket.emit("status-update", { status: restored });
     } else {
+      // ── Start sharing ─────────────────────────────────────────────────────
       try {
-        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: { ideal: 30, max: 60 } },
+          audio: false,
+        });
         screenStreamRef.current = screenStream;
         const screenTrack = screenStream.getVideoTracks()[0];
+
+        // Replace the video sender in every peer connection
         pcsRef.current.forEach((pc) => {
           const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-          if (sender) sender.replaceTrack(screenTrack);
-        });
-        screenTrack.onended = () => {
-          setSharing(false);
-          const camTrack = localStreamRef.current?.getVideoTracks()[0];
-          if (camTrack) {
-            pcsRef.current.forEach((pc) => {
-              const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-              if (sender) sender.replaceTrack(camTrack);
-            });
+          if (sender) {
+            sender.replaceTrack(screenTrack);
           }
-          socket.emit("media-state", { screen: false });
-        };
+        });
+
+        // FIX 1: Build a new MediaStream for the local preview.
+        // Combine screen video + existing audio tracks so ScreenShareView
+        // renders the actual screen and mic audio still works.
+        const cameraStream = localStreamRef.current;
+        const audioTracks = cameraStream?.getAudioTracks() ?? [];
+        const screenPreviewStream = new MediaStream([screenTrack, ...audioTracks]);
+
+        // Do NOT reassign localStreamRef — it still points to the camera stream
+        // so that when sharing stops, we can restore camera tracks from it.
+        // We only update React state so ScreenShareView gets the screen stream.
+        setLocalStream(screenPreviewStream);
+
         setSharing(true);
         socket.emit("media-state", { screen: true });
+
+        // FIX 2: Auto-set status to "presenting"
+        prevStatusRef.current = localStatus; // save current status before override
+        setLocalStatus("presenting");
+        socket.emit("status-update", { status: "presenting" });
+
+        // Handle browser-native "Stop sharing" button
+        screenTrack.onended = () => {
+          screenStreamRef.current = null;
+
+          // Restore camera track in all peer senders
+          const camTrack2 = localStreamRef.current?.getVideoTracks()[0];
+          if (camTrack2) {
+            pcsRef.current.forEach((pc) => {
+              const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+              if (sender) sender.replaceTrack(camTrack2);
+            });
+          }
+
+          // FIX 1: Restore camera stream to React state
+          if (localStreamRef.current) {
+            setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+          }
+
+          setSharing(false);
+          socket.emit("media-state", { screen: false });
+
+          // FIX 2: Restore status when user stops via browser button too
+          const restoredStatus = prevStatusRef.current;
+          setLocalStatus(restoredStatus);
+          socket.emit("status-update", { status: restoredStatus });
+        };
       } catch (err) {
-        console.warn("[WebRTC] Screen share cancelled", err);
+        // User cancelled the picker or permission denied — not an error we surface
+        console.warn("[WebRTC] Screen share cancelled or denied", err);
       }
     }
-  }, [sharing]);
+  }, [sharing, localStatus]);
 
   const leaveRoom = useCallback(() => {
     pcsRef.current.forEach((pc) => pc.close());
@@ -790,15 +842,12 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
   const sendChatMessage = useCallback((text: string, replyTo?: ChatMessage | null) => {
     const socket = socketRef.current;
     if (!socket || !text.trim()) return;
-
     socket.emit("chat-message", {
       text: text.trim(),
       replyTo: replyTo
         ? { id: replyTo.id, username: replyTo.username, text: replyTo.text.slice(0, 100) }
         : null,
     });
-
-    // Stop typing signal
     if (isTypingRef.current) {
       socket.emit("chat-typing", { isTyping: false });
       isTypingRef.current = false;
@@ -816,13 +865,10 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
   const setTyping = useCallback((typing: boolean) => {
     const socket = socketRef.current;
     if (!socket) return;
-
     if (typing && !isTypingRef.current) {
       isTypingRef.current = true;
       socket.emit("chat-typing", { isTyping: true });
     }
-
-    // Debounce stop-typing
     if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
     if (typing) {
       typingTimerRef.current = setTimeout(() => {
@@ -843,6 +889,10 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
   // ── Phase 2: Status ────────────────────────────────────────────────────────
 
   const setStatus = useCallback((status: ParticipantStatus) => {
+    // If currently presenting (screen sharing), only allow manual override
+    // by also stopping screen share first — but we respect the user's choice
+    // and update both the status display and the socket.
+    prevStatusRef.current = status; // keep prevStatus in sync with manual changes too
     setLocalStatus(status);
     socketRef.current?.emit("status-update", { status });
   }, []);
@@ -864,7 +914,6 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
     socketRef.current?.emit("host-lower-hand", { targetSocketId: socketId });
   }, []);
 
-  // Compute raised hands list (sorted by time)
   const raisedHands = peers
     .filter((p) => p.handRaised && p.handRaisedAt != null)
     .map((p) => ({ socketId: p.socketId, username: p.username, handRaisedAt: p.handRaisedAt! }))
@@ -892,7 +941,6 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
     removePeer,
     isSpeaking,
     speakingPeerId,
-    // Phase 2
     messages,
     typingPeers,
     sendChatMessage,

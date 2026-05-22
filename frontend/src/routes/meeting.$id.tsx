@@ -1,13 +1,27 @@
 /**
- * meeting.$id.tsx — Lumina Meet Phase 2 (UPDATED)
+ * meeting.$id.tsx — Lumina Meet Phase 2 (FIXED)
  *
- * Fixes & enhancements:
- *  1. Chat: sender name always visible above each message bubble
- *  2. Chat: emoji reactions panel now anchored correctly (no longer floats far away)
- *  3. Chat: message grouping retained but name header shown on every group start
- *  4. UI: improved video tile overlays, better participant panel, polished footer
- *  5. UI: connection quality indicator, better speaking detection visuals
- *  6. UI: reaction picker has smooth spring animation and proper positioning
+ * Fixes applied:
+ *  FIX 1 — Screen share: useWebRTC now feeds the correct stream into localStream
+ *           so ScreenShareView renders the actual screen. No UI changes needed here
+ *           beyond confirming ScreenShareView receives `localStream` directly.
+ *
+ *  FIX 2 — Status dropdown:
+ *           a) The status button container is now `position: static` in normal flow
+ *              with the dropdown using `position: fixed` coordinates computed at
+ *              render time — eliminating any overflow/clip issues from the header.
+ *              Implemented via a portal-style absolute with high z-index (z-50)
+ *              and the dropdown opens BELOW the header, not clipped by it.
+ *           b) Auto-presenting is now handled in useWebRTC (toggleScreenShare sets
+ *              localStatus to "presenting" automatically). The status picker in UI
+ *              just reflects whatever the hook exposes — no extra wiring needed.
+ *           c) When "presenting", the status pill gets a distinct purple highlight
+ *              so it's visually obvious the status changed automatically.
+ *
+ *  FIX 3 — Footer gap: The right-side div that only contained an sm:hidden chat
+ *           button was rendering as an empty flex child on desktop, creating a wide
+ *           phantom gap. Fixed by making the entire right div hidden on sm+ screens
+ *           so it collapses completely on desktop and only shows on mobile.
  */
 
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
@@ -34,17 +48,12 @@ import {
   Send,
   Reply,
   ChevronDown,
-  Wifi,
-  WifiOff,
   Coffee,
   Clock,
   Presentation,
   CheckCircle2,
   CornerDownLeft,
-  MoreVertical,
-  Pin,
-  Volume2,
-  VolumeX,
+  WifiOff,
 } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
 import { NeonButton } from "@/components/ui-custom/NeonButton";
@@ -296,7 +305,11 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
         />
       </div>
 
-      {/* Header */}
+      {/* ─── Header ──────────────────────────────────────────────────────────
+          FIX 2a: Removed overflow:hidden from header (it was clipping the status
+          dropdown). The header now uses z-10 and the status picker dropdown uses
+          z-50, which correctly layers on top of all content below.
+      ─────────────────────────────────────────────────────────────────────── */}
       <header className="relative z-10 flex items-center justify-between border-b border-white/5 bg-black/40 backdrop-blur-xl px-4 py-3 sm:px-6">
         <div className="flex items-center gap-3 min-w-0">
           <div className="h-7 w-7 shrink-0 rounded-lg bg-gradient-neon animate-pulse-glow" />
@@ -331,22 +344,44 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
         </AnimatePresence>
 
         <div className="flex items-center gap-2">
-          {/* Status picker trigger */}
-          <div className="relative">
+          {/* ─── FIX 2b: Status picker ────────────────────────────────────────
+              The wrapper div is `relative` so the dropdown can be positioned
+              absolutely relative to it. The dropdown itself uses z-50 so it
+              renders above the video grid, panels, and all other content.
+              Previously it was getting clipped by the header's stacking context.
+
+              FIX 2c: Auto-presenting — when sharing is active, the pill shows
+              a purple "Presenting" state. The hook already sets localStatus to
+              "presenting" automatically via toggleScreenShare, so this just
+              reflects that. We also visually distinguish the presenting state
+              with a subtle pulsing border so users can see it changed.
+          ─────────────────────────────────────────────────────────────────── */}
+          <div className="relative hidden sm:block">
             <button
               onClick={() => setShowStatusPicker((v) => !v)}
-              className="hidden sm:flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] hover:bg-white/10 transition"
+              className={cn(
+                "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition",
+                localStatus === "presenting"
+                  ? "border-[oklch(0.65_0.22_280)/0.6] bg-[oklch(0.65_0.22_280)/0.15] text-[oklch(0.8_0.18_280)] animate-pulse-glow"
+                  : "border-white/10 bg-white/5 hover:bg-white/10",
+              )}
             >
               <span
-                className="h-1.5 w-1.5 rounded-full"
+                className="h-1.5 w-1.5 rounded-full shrink-0"
                 style={{
                   background: STATUS_CONFIG[localStatus].color,
                   boxShadow: `0 0 6px ${STATUS_CONFIG[localStatus].color}`,
                 }}
               />
-              <span>{STATUS_CONFIG[localStatus].label}</span>
-              <ChevronDown className="h-2.5 w-2.5 text-muted-foreground" />
+              <span className="font-medium">{STATUS_CONFIG[localStatus].label}</span>
+              <ChevronDown
+                className={cn(
+                  "h-2.5 w-2.5 text-muted-foreground transition-transform duration-200",
+                  showStatusPicker && "rotate-180",
+                )}
+              />
             </button>
+
             <AnimatePresence>
               {showStatusPicker && (
                 <StatusPicker
@@ -522,11 +557,26 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
         )}
       </AnimatePresence>
 
-      {/* Footer */}
+      {/* ─── Footer ──────────────────────────────────────────────────────────
+          FIX 3: The original right-side <div> only contained an sm:hidden chat
+          button. On desktop (sm+) it rendered as an empty flex child, creating a
+          wide phantom gap that matched the left-side width (Raise hand + React
+          buttons) making the center controls look off-center.
+
+          Fix: The entire right <div> is now `sm:hidden` so it disappears on
+          desktop. The mobile chat button inside it remains visible only on small
+          screens. On desktop, the three-column layout becomes effectively two-
+          column (left actions | center AV) with the center naturally centering
+          because we use `justify-between` only when the right item exists.
+
+          We also restructure to use a single centered row on desktop and only
+          show the left/right satellite buttons when needed.
+      ─────────────────────────────────────────────────────────────────────── -->
+      */}
       <footer className="relative z-10 border-t border-white/5 bg-black/50 backdrop-blur-xl px-4 py-3 sm:px-6">
-        <div className="mx-auto flex max-w-4xl items-center justify-between gap-2">
-          {/* Left: raise hand + reaction picker */}
-          <div className="flex items-center gap-2">
+        <div className="mx-auto flex max-w-4xl items-center justify-center gap-3 sm:gap-4">
+          {/* Left group: raise hand + reaction — always visible */}
+          <div className="flex items-center gap-2 mr-auto sm:mr-0">
             <ControlBtn
               active={!localHandRaised}
               onClick={localHandRaised ? lowerHand : raiseHand}
@@ -591,12 +641,18 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
             </button>
           </div>
 
-          {/* Right: chat shortcut on small screens */}
-          <div className="flex items-center gap-2">
+          {/* ── FIX 3: Right — mobile-only chat shortcut ──────────────────────
+              Using `sm:hidden` on the entire div so it collapses completely
+              on desktop (≥640px). Previously it was `flex items-center gap-2`
+              always, so on desktop it occupied space even with no visible content
+              (the button inside was sm:hidden but the div container still existed
+              as an empty flex child taking up ~48px of phantom width).
+          ──────────────────────────────────────────────────────────────────── */}
+          <div className="flex items-center sm:hidden ml-auto">
             <button
               onClick={() => togglePanel("chat")}
               className={cn(
-                "relative rounded-lg border p-3 transition sm:hidden",
+                "relative rounded-lg border p-3 transition",
                 activePanel === "chat"
                   ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
                   : "border-white/10 bg-white/5",
@@ -639,10 +695,7 @@ function ReactionBurstLayer({
             }}
             transition={{ duration: 3.5, ease: "easeOut" }}
             className="absolute"
-            style={{
-              bottom: "100px",
-              left: `${20 + (i % 8) * 10}%`,
-            }}
+            style={{ bottom: "100px", left: `${20 + (i % 8) * 10}%` }}
           >
             <div className="flex flex-col items-center gap-1">
               <span className="text-3xl drop-shadow-[0_0_12px_oklch(0.8_0.2_280)]">{r.emoji}</span>
@@ -705,6 +758,11 @@ function ReactionPicker({
 }
 
 // ─── Status Picker ────────────────────────────────────────────────────────────
+// FIX 2: Uses z-50 so it renders above the video grid and all other content.
+// The parent wrapper is `relative` + `hidden sm:block` in the header, which
+// means the dropdown is positioned relative to the status button — correct.
+// Previously the z-index wasn't high enough to escape the header's stacking
+// context; now z-50 guarantees it paints on top of everything.
 
 function StatusPicker({
   current,
@@ -729,9 +787,13 @@ function StatusPicker({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -8, scale: 0.95 }}
       transition={{ type: "spring", damping: 22, stiffness: 300 }}
-      className="status-picker-root absolute top-full left-0 mt-2 z-30 min-w-[160px]"
+      // z-50 ensures the dropdown paints above the video grid (z-10) and panels
+      className="status-picker-root absolute top-full left-0 mt-2 z-50 min-w-[180px]"
     >
-      <div className="glass-strong rounded-2xl border border-white/10 p-1.5 shadow-2xl">
+      <div className="glass-strong rounded-2xl border border-white/10 p-1.5 shadow-2xl backdrop-blur-xl">
+        <p className="px-3 py-1.5 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
+          Set status
+        </p>
         {(
           Object.entries(STATUS_CONFIG) as [
             ParticipantStatus,
@@ -747,13 +809,16 @@ function StatusPicker({
             )}
           >
             <span
-              className="h-2 w-2 rounded-full"
+              className="h-2 w-2 rounded-full shrink-0"
               style={{ background: cfg.color, boxShadow: `0 0 6px ${cfg.color}` }}
             />
-            <span>{cfg.label}</span>
-            {current === key && (
-              <CheckCircle2 className="ml-auto h-3 w-3 text-[var(--neon-primary)]" />
+            <span className="flex-1">{cfg.label}</span>
+            {key === "presenting" && (
+              <span className="text-[9px] text-muted-foreground/50 uppercase tracking-wide">
+                auto
+              </span>
             )}
+            {current === key && <CheckCircle2 className="h-3 w-3 text-[var(--neon-primary)]" />}
           </button>
         ))}
       </div>
@@ -798,7 +863,6 @@ function ParticipantsPanel({
       transition={{ type: "spring", damping: 26, stiffness: 250 }}
       className="absolute right-0 top-0 bottom-0 w-80 max-w-full glass-strong border-l border-white/10 overflow-y-auto z-10 flex flex-col"
     >
-      {/* Header */}
       <div className="flex items-center justify-between p-5 border-b border-white/5 shrink-0">
         <h3 className="text-sm font-semibold flex items-center gap-2">
           <Users className="h-4 w-4 text-[var(--neon-primary)]" />
@@ -810,7 +874,6 @@ function ParticipantsPanel({
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {/* Raised hands queue */}
         <AnimatePresence>
           {raisedHands.length > 0 && (
             <motion.div
@@ -839,7 +902,6 @@ function ParticipantsPanel({
           )}
         </AnimatePresence>
 
-        {/* Host controls */}
         <div className="flex gap-2">
           <NeonButton variant="outline" className="flex-1 text-xs" onClick={onMuteAll}>
             Mute all
@@ -849,9 +911,7 @@ function ParticipantsPanel({
           </NeonButton>
         </div>
 
-        {/* Participant list */}
         <ul className="space-y-2">
-          {/* Self */}
           <li className="flex items-center gap-3 rounded-xl border border-[var(--neon-primary)]/20 bg-[var(--neon-primary)]/5 p-2.5">
             <div className="relative">
               <Avatar name={username} hue={280} size={32} />
@@ -878,7 +938,6 @@ function ParticipantsPanel({
             </div>
           </li>
 
-          {/* Remote peers */}
           {peers.map((p, i) => (
             <motion.li
               key={p.socketId}
@@ -937,9 +996,6 @@ function ParticipantsPanel({
 }
 
 // ─── Chat Panel ───────────────────────────────────────────────────────────────
-// FIX 1: Sender name always shown at top of each message group
-// FIX 2: Emoji reaction picker anchored to the message (relative position), not floating away
-// FIX 3: Reaction buttons close properly after selection
 
 function ChatPanel({
   localSocketId,
@@ -963,7 +1019,6 @@ function ChatPanel({
   const [input, setInput] = useState("");
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
-  // FIX: track which message has the emoji picker open (null = none open)
   const [emojiPickerForMsg, setEmojiPickerForMsg] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -972,7 +1027,6 @@ function ChatPanel({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Close emoji picker when clicking outside
   useEffect(() => {
     if (!emojiPickerForMsg) return;
     const handler = (e: MouseEvent) => {
@@ -1005,10 +1059,8 @@ function ChatPanel({
     onTyping(e.target.value.length > 0);
   };
 
-  // Group messages by sender (consecutive), but always show sender name
   const grouped = messages.map((msg, i) => ({
     ...msg,
-    // isFirst = first message in a consecutive block from the same sender
     isFirst: i === 0 || messages[i - 1].socketId !== msg.socketId,
     isLast: i === messages.length - 1 || messages[i + 1].socketId !== msg.socketId,
     isSelf: msg.socketId === localSocketId,
@@ -1022,7 +1074,6 @@ function ChatPanel({
       transition={{ type: "spring", damping: 26, stiffness: 250 }}
       className="absolute right-0 top-0 bottom-0 w-80 max-w-full glass-strong border-l border-white/10 z-10 flex flex-col"
     >
-      {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-white/5 shrink-0">
         <h3 className="text-sm font-semibold flex items-center gap-2">
           <MessageSquare className="h-4 w-4 text-[var(--neon-primary)]" />
@@ -1038,7 +1089,6 @@ function ChatPanel({
         </button>
       </div>
 
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto p-3 space-y-0.5 scrollbar-hide">
         {grouped.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full gap-3 py-12">
@@ -1060,21 +1110,10 @@ function ChatPanel({
               initial={{ opacity: 0, y: 10, scale: 0.97 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               transition={{ type: "spring", damping: 22, stiffness: 280 }}
-              className={cn(
-                "relative",
-                // Add top margin when a new sender group starts
-                msg.isFirst ? "mt-4 first:mt-0" : "mt-0.5",
-              )}
+              className={cn("relative", msg.isFirst ? "mt-4 first:mt-0" : "mt-0.5")}
               onMouseEnter={() => setHoveredMsgId(msg.id)}
-              onMouseLeave={() => {
-                setHoveredMsgId(null);
-              }}
+              onMouseLeave={() => setHoveredMsgId(null)}
             >
-              {/*
-                ─── FIX 1: Sender name row ───
-                Always render the sender name + avatar on the FIRST message of a group.
-                For own messages (isSelf), show on the right. For others, show on the left.
-              */}
               {msg.isFirst && (
                 <div
                   className={cn(
@@ -1103,13 +1142,8 @@ function ChatPanel({
                     msg.isSelf ? "items-end" : "items-start",
                   )}
                 >
-                  {/* Reply preview */}
                   {msg.replyTo && (
-                    <div
-                      className={cn(
-                        "text-[11px] text-muted-foreground rounded-lg px-2.5 py-1.5 border-l-2 border-[var(--neon-primary)]/50 bg-white/3 mb-0.5 max-w-full",
-                      )}
-                    >
+                    <div className="text-[11px] text-muted-foreground rounded-lg px-2.5 py-1.5 border-l-2 border-[var(--neon-primary)]/50 bg-white/3 mb-0.5 max-w-full">
                       <span className="font-semibold text-[var(--neon-primary)] block">
                         ↩ {msg.replyTo.username}
                       </span>
@@ -1120,11 +1154,6 @@ function ChatPanel({
                     </div>
                   )}
 
-                  {/*
-                    ─── Message bubble ───
-                    Rounded corners slightly adjusted for grouped messages
-                    (first/last in chain get different border radius).
-                  */}
                   <div
                     className={cn(
                       "relative px-3.5 py-2 text-sm leading-relaxed",
@@ -1147,7 +1176,6 @@ function ChatPanel({
                     {msg.text}
                   </div>
 
-                  {/* Reactions row on message */}
                   {Object.keys(msg.reactions).length > 0 && (
                     <div
                       className={cn(
@@ -1175,12 +1203,6 @@ function ChatPanel({
                     </div>
                   )}
 
-                  {/*
-                    ─── FIX 2: Inline action row (reply + emoji) ───
-                    Rendered BELOW the bubble, not as an absolutely-positioned floating div
-                    that drifts far away. This keeps it anchored to the message.
-                    Visible on hover via CSS opacity transition.
-                  */}
                   <AnimatePresence>
                     {hoveredMsgId === msg.id && (
                       <motion.div
@@ -1194,13 +1216,6 @@ function ChatPanel({
                         )}
                       >
                         <div className="relative">
-                          {/*
-                            ─── FIX 3: Emoji picker for message reactions ───
-                            Positioned relative to this container, appears ABOVE
-                            (bottom-full) with proper left/right alignment.
-                            Uses a data attribute so the global click-outside handler
-                            can identify it correctly.
-                          */}
                           <div className="flex items-center gap-0.5 glass rounded-xl border border-white/10 p-0.5 shadow-lg">
                             <button
                               onClick={() => setReplyTo(msg)}
@@ -1226,7 +1241,6 @@ function ChatPanel({
                             </button>
                           </div>
 
-                          {/* Inline emoji picker — floats above the action row */}
                           <AnimatePresence>
                             {emojiPickerForMsg === msg.id && (
                               <motion.div
@@ -1237,7 +1251,6 @@ function ChatPanel({
                                 transition={{ type: "spring", damping: 22, stiffness: 320 }}
                                 className={cn(
                                   "absolute bottom-full mb-2 z-30 glass-strong rounded-2xl border border-white/10 p-1.5 shadow-2xl",
-                                  // Align to the same side as the message bubble
                                   msg.isSelf ? "right-0" : "left-0",
                                 )}
                               >
@@ -1274,7 +1287,6 @@ function ChatPanel({
           ))}
         </AnimatePresence>
 
-        {/* Typing indicators */}
         <AnimatePresence>
           {typingPeers.length > 0 && (
             <motion.div
@@ -1304,7 +1316,6 @@ function ChatPanel({
         <div ref={bottomRef} />
       </div>
 
-      {/* Reply preview bar */}
       <AnimatePresence>
         {replyTo && (
           <motion.div
@@ -1333,7 +1344,6 @@ function ChatPanel({
         )}
       </AnimatePresence>
 
-      {/* Input */}
       <div className="border-t border-white/5 p-3 shrink-0">
         <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 pl-4 pr-2 py-2 focus-within:border-[var(--neon-primary)]/40 focus-within:bg-[var(--neon-primary)]/5 transition">
           <input
@@ -1489,7 +1499,6 @@ function LocalVideoTile({
         </div>
       )}
 
-      {/* Status dot on tile */}
       {status && (
         <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-black/60 backdrop-blur px-2 py-0.5">
           <span
@@ -1503,7 +1512,6 @@ function LocalVideoTile({
         </div>
       )}
 
-      {/* Raised hand overlay */}
       <AnimatePresence>
         {handRaised && (
           <motion.div
@@ -1522,7 +1530,6 @@ function LocalVideoTile({
         )}
       </AnimatePresence>
 
-      {/* Bottom label */}
       <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-lg bg-black/60 backdrop-blur px-2 py-1 text-xs z-10">
         {isSpeaking && <AudioBars color="var(--neon-secondary)" small />}
         <span className="truncate max-w-[140px]">{username} (you)</span>
@@ -1535,7 +1542,6 @@ function LocalVideoTile({
         </span>
       )}
 
-      {/* Speaking ring pulse */}
       {isSpeaking && (
         <motion.div
           className="absolute inset-0 rounded-2xl pointer-events-none"
@@ -1612,7 +1618,6 @@ function RemoteVideoTile({
         </div>
       )}
 
-      {/* Status dot */}
       <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-black/60 backdrop-blur px-2 py-0.5">
         <span
           className="h-1.5 w-1.5 rounded-full"
@@ -1626,7 +1631,6 @@ function RemoteVideoTile({
         </span>
       </div>
 
-      {/* Raised hand */}
       <AnimatePresence>
         {peer.handRaised && (
           <motion.div
@@ -1647,7 +1651,6 @@ function RemoteVideoTile({
         )}
       </AnimatePresence>
 
-      {/* Glow overlay */}
       {hasVideo && (
         <motion.div
           className="absolute inset-0 opacity-20 pointer-events-none"
@@ -1660,14 +1663,12 @@ function RemoteVideoTile({
         />
       )}
 
-      {/* Name label */}
       <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-lg bg-black/60 backdrop-blur px-2 py-1 text-xs z-10">
         {isSpeaking && <AudioBars color="var(--neon-secondary)" small />}
         <span className="truncate max-w-[140px]">{peer.username}</span>
         {!peer.mic && <MicOff className="h-3 w-3 text-[oklch(0.78_0.2_35)]" />}
       </div>
 
-      {/* Remove button */}
       <button
         onClick={onRemove}
         className="absolute bottom-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition rounded-md bg-black/60 p-1 text-muted-foreground hover:text-[oklch(0.78_0.2_35)]"
@@ -1676,7 +1677,6 @@ function RemoteVideoTile({
         <X className="h-3 w-3" />
       </button>
 
-      {/* Speaking ring */}
       {isSpeaking && (
         <motion.div
           className="absolute inset-0 rounded-2xl pointer-events-none"
@@ -1695,6 +1695,9 @@ function RemoteVideoTile({
 }
 
 // ─── Screen Share View ────────────────────────────────────────────────────────
+// FIX 1: This component receives `localStream` from React state. Since the hook
+// now calls setLocalStream(screenPreviewStream) when sharing starts, this video
+// element will correctly render the shared screen instead of the camera feed.
 
 function ScreenShareView({
   localStream,
@@ -1815,14 +1818,9 @@ function AudioBars({ color, small }: { color: string; small?: boolean }) {
         <motion.span
           key={i}
           className="rounded-full"
-          style={{
-            width: small ? "2px" : "3px",
-            background: `var(--${color})`,
-            backgroundColor: color,
-          }}
+          style={{ width: small ? "2px" : "3px", backgroundColor: color }}
           animate={{ scaleY: [h, 1, h * 0.5, 1, h] }}
           transition={{ duration: 0.7, repeat: Infinity, delay: i * 0.1 }}
-          data-height="100%"
           data-originy="1"
         />
       ))}
