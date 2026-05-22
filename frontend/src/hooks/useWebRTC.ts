@@ -1,16 +1,14 @@
 /**
- * useWebRTC — Lumina Meet Phase 2 (FIXED)
+ * useWebRTC — Lumina Meet Phase 2 (FIXED v2)
  *
- * Fixes applied:
- *  FIX 1 — Screen share: setLocalStream now updates to the screen track stream so
- *           ScreenShareView actually renders the shared screen (not the camera).
- *           localStreamRef is also kept in sync so track replacement in PCs works
- *           correctly when sharing stops and cam track is restored.
- *
- *  FIX 2 — Status automation: toggleScreenShare now auto-sets localStatus to
- *           "presenting" when sharing starts, and restores the previous status when
- *           sharing stops (both via browser stop-share button and the in-app toggle).
- *           A prevStatusRef keeps track of what to restore to.
+ * Status fixes:
+ *  - "Presenting" is now ONLY set automatically when screen share starts.
+ *  - When screen share stops (any way), status restores to prevStatusRef
+ *    which can NEVER be "presenting" (users cannot manually set it).
+ *  - setStatus() guards against writing "presenting" as prevStatusRef so
+ *    the restore destination is always a real user-chosen status.
+ *  - If user manually changes status while presenting, prevStatusRef is
+ *    updated so the new choice is what gets restored when sharing stops.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -177,8 +175,31 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
   const isTypingRef = useRef(false);
   const chatOpenRef = useRef(false);
 
-  // FIX 2: Track status before presenting so we can restore it when sharing stops
+  /**
+   * STATUS RESTORATION REF
+   *
+   * prevStatusRef stores the status to restore when screen sharing stops.
+   *
+   * INVARIANT: prevStatusRef.current is NEVER "presenting".
+   *   - It starts as "available".
+   *   - setStatus() only writes to it when NOT presenting (or when the new
+   *     value is not "presenting"), so the restore target is always a real
+   *     user-chosen non-presenting status.
+   *   - toggleScreenShare reads it on stop to know what to restore to.
+   */
   const prevStatusRef = useRef<ParticipantStatus>("available");
+
+  /**
+   * sharingRef mirrors the `sharing` state in a ref so that callbacks
+   * created in useEffect (e.g. screenTrack.onended) can read the latest
+   * value without becoming stale closures.
+   */
+  const sharingRef = useRef(false);
+
+  // Keep sharingRef in sync with sharing state
+  useEffect(() => {
+    sharingRef.current = sharing;
+  }, [sharing]);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -679,63 +700,46 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
   }, [cam]);
 
   /**
-   * FIX 1 — Screen share:
-   *
-   * Root cause: When sharing started, we replaced the video sender track in all
-   * RTCPeerConnections (correct), but we never updated localStreamRef or called
-   * setLocalStream. The ScreenShareView's <video> element receives `localStream`
-   * from React state, which still pointed to the camera stream — so it rendered
-   * the camera feed instead of the screen.
-   *
-   * Fix: After getting the screen track, build a new MediaStream that combines
-   * the screen video track with the existing audio tracks from localStreamRef,
-   * update localStreamRef to this combined stream, and call setLocalStream so
-   * React re-renders ScreenShareView with the correct stream.
-   *
-   * When stopping (either via the in-app button or the browser's "Stop sharing"
-   * button), restore localStreamRef and localStream back to the original camera
-   * stream so LocalVideoTile renders correctly again.
-   *
-   * FIX 2 — Status automation:
-   *
-   * When sharing starts, save the current status in prevStatusRef, then call
-   * setStatus("presenting") which updates localStatus and emits to the socket.
-   * When sharing stops, restore the saved status. This way other participants
-   * also see the correct presenting/restored status in real time.
+   * Shared helper: restores state after screen sharing ends (both via
+   * in-app toggle and browser's native "Stop sharing" button).
    */
+  const _stopSharingCleanup = useCallback(() => {
+    const socket = socketRef.current;
+
+    screenStreamRef.current?.getTracks().forEach((t) => t.stop());
+    screenStreamRef.current = null;
+
+    // Restore camera track into all peer connections
+    const camTrack = localStreamRef.current?.getVideoTracks()[0];
+    if (camTrack) {
+      pcsRef.current.forEach((pc) => {
+        const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+        if (sender) sender.replaceTrack(camTrack);
+      });
+    }
+
+    // Restore localStream so React UI shows camera again
+    if (localStreamRef.current) {
+      setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+    }
+
+    setSharing(false);
+    socket?.emit("media-state", { screen: false });
+
+    // Restore to the status saved before presenting started.
+    // prevStatusRef is guaranteed to never be "presenting".
+    const restored = prevStatusRef.current;
+    setLocalStatus(restored);
+    socket?.emit("status-update", { status: restored });
+  }, []);
+
   const toggleScreenShare = useCallback(async () => {
     const socket = socketRef.current;
     if (!socket) return;
 
-    if (sharing) {
+    if (sharingRef.current) {
       // ── Stop sharing ──────────────────────────────────────────────────────
-      screenStreamRef.current?.getTracks().forEach((t) => t.stop());
-      screenStreamRef.current = null;
-
-      // Restore camera track into all peer connections
-      const camTrack = localStreamRef.current?.getVideoTracks()[0];
-      if (camTrack) {
-        pcsRef.current.forEach((pc) => {
-          const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-          if (sender) sender.replaceTrack(camTrack);
-        });
-      }
-
-      // FIX 1: Restore localStream so React UI shows camera again
-      // localStreamRef.current still holds the original camera+audio stream
-      // because we never reassigned it to the screen stream — we only used
-      // the screen track inside senders. We just trigger a re-render.
-      if (localStreamRef.current) {
-        setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
-      }
-
-      setSharing(false);
-      socket.emit("media-state", { screen: false });
-
-      // FIX 2: Restore previous status
-      const restored = prevStatusRef.current;
-      setLocalStatus(restored);
-      socket.emit("status-update", { status: restored });
+      _stopSharingCleanup();
     } else {
       // ── Start sharing ─────────────────────────────────────────────────────
       try {
@@ -749,63 +753,38 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
         // Replace the video sender in every peer connection
         pcsRef.current.forEach((pc) => {
           const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-          if (sender) {
-            sender.replaceTrack(screenTrack);
-          }
+          if (sender) sender.replaceTrack(screenTrack);
         });
 
-        // FIX 1: Build a new MediaStream for the local preview.
-        // Combine screen video + existing audio tracks so ScreenShareView
-        // renders the actual screen and mic audio still works.
+        // Build preview stream: screen video + existing audio
         const cameraStream = localStreamRef.current;
         const audioTracks = cameraStream?.getAudioTracks() ?? [];
         const screenPreviewStream = new MediaStream([screenTrack, ...audioTracks]);
-
-        // Do NOT reassign localStreamRef — it still points to the camera stream
-        // so that when sharing stops, we can restore camera tracks from it.
-        // We only update React state so ScreenShareView gets the screen stream.
         setLocalStream(screenPreviewStream);
 
         setSharing(true);
         socket.emit("media-state", { screen: true });
 
-        // FIX 2: Auto-set status to "presenting"
-        prevStatusRef.current = localStatus; // save current status before override
-        setLocalStatus("presenting");
+        // Save current status (ONLY if it's not "presenting" — defensive guard)
+        // then switch to "presenting". This ensures prevStatusRef always holds
+        // a valid restore target.
+        setLocalStatus((currentStatus) => {
+          if (currentStatus !== "presenting") {
+            prevStatusRef.current = currentStatus;
+          }
+          return "presenting";
+        });
         socket.emit("status-update", { status: "presenting" });
 
         // Handle browser-native "Stop sharing" button
         screenTrack.onended = () => {
-          screenStreamRef.current = null;
-
-          // Restore camera track in all peer senders
-          const camTrack2 = localStreamRef.current?.getVideoTracks()[0];
-          if (camTrack2) {
-            pcsRef.current.forEach((pc) => {
-              const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-              if (sender) sender.replaceTrack(camTrack2);
-            });
-          }
-
-          // FIX 1: Restore camera stream to React state
-          if (localStreamRef.current) {
-            setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
-          }
-
-          setSharing(false);
-          socket.emit("media-state", { screen: false });
-
-          // FIX 2: Restore status when user stops via browser button too
-          const restoredStatus = prevStatusRef.current;
-          setLocalStatus(restoredStatus);
-          socket.emit("status-update", { status: restoredStatus });
+          _stopSharingCleanup();
         };
       } catch (err) {
-        // User cancelled the picker or permission denied — not an error we surface
         console.warn("[WebRTC] Screen share cancelled or denied", err);
       }
     }
-  }, [sharing, localStatus]);
+  }, [_stopSharingCleanup]);
 
   const leaveRoom = useCallback(() => {
     pcsRef.current.forEach((pc) => pc.close());
@@ -888,13 +867,34 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
 
   // ── Phase 2: Status ────────────────────────────────────────────────────────
 
+  /**
+   * setStatus — called when the user manually picks a status from the dropdown.
+   *
+   * Rules:
+   * 1. "Presenting" can NEVER be set manually — it's auto-only. Silently ignore.
+   * 2. If the user is currently presenting (screen sharing), update prevStatusRef
+   *    so when sharing stops, it restores to this new choice — but keep localStatus
+   *    as "presenting" for now (they're still sharing).
+   * 3. If not presenting, apply the status immediately as normal.
+   */
   const setStatus = useCallback((status: ParticipantStatus) => {
-    // If currently presenting (screen sharing), only allow manual override
-    // by also stopping screen share first — but we respect the user's choice
-    // and update both the status display and the socket.
-    prevStatusRef.current = status; // keep prevStatus in sync with manual changes too
-    setLocalStatus(status);
-    socketRef.current?.emit("status-update", { status });
+    // Guard: "presenting" is auto-only, never settable manually.
+    if (status === "presenting") return;
+
+    if (sharingRef.current) {
+      // User changed preferred status while still sharing.
+      // Store it as the restore target but don't change the displayed status
+      // (it stays "presenting" until they stop sharing).
+      prevStatusRef.current = status;
+      // Optionally: emit to socket so server knows intent — but the local UI
+      // keeps showing "presenting". Here we only update the restore target.
+      // (Do NOT emit socket here — the displayed status hasn't changed.)
+    } else {
+      // Normal case: not sharing, apply immediately.
+      prevStatusRef.current = status; // keep in sync
+      setLocalStatus(status);
+      socketRef.current?.emit("status-update", { status });
+    }
   }, []);
 
   // ── Phase 2: Raise hand ────────────────────────────────────────────────────

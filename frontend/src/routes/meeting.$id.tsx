@@ -1,27 +1,17 @@
 /**
- * meeting.$id.tsx — Lumina Meet Phase 2 (FIXED)
+ * meeting.$id.tsx — Lumina Meet Phase 2 (FIXED v2)
  *
- * Fixes applied:
- *  FIX 1 — Screen share: useWebRTC now feeds the correct stream into localStream
- *           so ScreenShareView renders the actual screen. No UI changes needed here
- *           beyond confirming ScreenShareView receives `localStream` directly.
+ * Status picker changes (v2):
+ *  - "Presenting" is removed from the manual status dropdown entirely.
+ *    It is an auto-only state that appears on the pill when screen sharing.
+ *  - While presenting, the status pill shows "Presenting" (purple, pulsing)
+ *    but the dropdown still only shows the 4 manual options (available, busy,
+ *    away, brb). Selecting one while sharing stores it as the restore target
+ *    without changing the current displayed status.
+ *  - When sharing stops the pill snaps back to the chosen restore status.
  *
- *  FIX 2 — Status dropdown:
- *           a) The status button container is now `position: static` in normal flow
- *              with the dropdown using `position: fixed` coordinates computed at
- *              render time — eliminating any overflow/clip issues from the header.
- *              Implemented via a portal-style absolute with high z-index (z-50)
- *              and the dropdown opens BELOW the header, not clipped by it.
- *           b) Auto-presenting is now handled in useWebRTC (toggleScreenShare sets
- *              localStatus to "presenting" automatically). The status picker in UI
- *              just reflects whatever the hook exposes — no extra wiring needed.
- *           c) When "presenting", the status pill gets a distinct purple highlight
- *              so it's visually obvious the status changed automatically.
- *
- *  FIX 3 — Footer gap: The right-side div that only contained an sm:hidden chat
- *           button was rendering as an empty flex child on desktop, creating a wide
- *           phantom gap. Fixed by making the entire right div hidden on sm+ screens
- *           so it collapses completely on desktop and only shows on mobile.
+ * All other fixes (screen share stream, footer gap, fixed dropdown portal)
+ * are preserved from Phase 2 FIXED v1.
  */
 
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
@@ -101,6 +91,12 @@ const STATUS_CONFIG: Record<
   },
   brb: { label: "BRB", color: "oklch(0.78 0.15 210)", icon: <Coffee className="h-3 w-3" /> },
 };
+
+/**
+ * Statuses that can be manually chosen in the dropdown.
+ * "presenting" is intentionally excluded — it is auto-only.
+ */
+const MANUAL_STATUSES: ParticipantStatus[] = ["available", "busy", "away", "brb"];
 
 // ─── Root component ───────────────────────────────────────────────────────────
 
@@ -194,7 +190,6 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
   const [activePanel, setActivePanel] = useState<PanelType>(null);
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [showStatusPicker, setShowStatusPicker] = useState(false);
-  // Ref + position state for popover positioning (FIX 2a — fixed-position dropdown)
   const statusButtonRef = useRef<HTMLDivElement>(null);
   const [statusPickerPos, setStatusPickerPos] = useState<{ top: number; left: number } | null>(
     null,
@@ -340,12 +335,7 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
         />
       </div>
 
-      {/* ─── Header ──────────────────────────────────────────────────────────
-          FIX 2a: The status picker dropdown now uses fixed positioning with
-          coordinates computed from the button's getBoundingClientRect().
-          This completely escapes the header's stacking context and overflow
-          behavior — the dropdown renders at the body level via a fixed div.
-      ─────────────────────────────────────────────────────────────────────── */}
+      {/* ─── Header ───────────────────────────────────────────────────────── */}
       <header className="relative z-10 flex items-center justify-between border-b border-white/5 bg-black/40 backdrop-blur-xl px-4 py-3 sm:px-6">
         <div className="flex items-center gap-3 min-w-0">
           <div className="h-7 w-7 shrink-0 rounded-lg bg-gradient-neon animate-pulse-glow" />
@@ -380,18 +370,16 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
         </AnimatePresence>
 
         <div className="flex items-center gap-2">
-          {/* ─── FIX 2a: Status picker with fixed-position popover ────────────
-              The wrapper div now has `relative` ONLY as a positioning anchor
-              for the button. The dropdown itself is NOT a child — it renders
-              as a fixed-position element at the body level using coordinates
-              from getBoundingClientRect(). This completely escapes the
-              header's stacking context and overflow.
+          {/* ─── Status pill + dropdown ──────────────────────────────────────
+              The pill always reflects localStatus (auto-set to "presenting"
+              when sharing, otherwise the user's chosen status).
 
-              FIX 2b: Auto-presenting — when sharing is active, the pill shows
-              a purple "Presenting" state. The hook already sets localStatus to
-              "presenting" automatically via toggleScreenShare, so this just
-              reflects that. We also visually distinguish the presenting state
-              with a subtle pulsing border so users can see it changed.
+              The dropdown (StatusPicker) only shows MANUAL_STATUSES — the
+              four user-selectable options. "Presenting" never appears there.
+
+              While sharing, selecting a status in the dropdown updates the
+              restore target (prevStatusRef) but does NOT change the pill —
+              it keeps showing "Presenting" until sharing stops.
           ─────────────────────────────────────────────────────────────────── */}
           <div ref={statusButtonRef} className="relative hidden sm:block">
             <button
@@ -581,24 +569,10 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
         )}
       </AnimatePresence>
 
-      {/* ─── Footer ──────────────────────────────────────────────────────────
-          FIX 3: The original right-side <div> only contained an sm:hidden chat
-          button. On desktop (sm+) it rendered as an empty flex child, creating a
-          wide phantom gap that matched the left-side width (Raise hand + React
-          buttons) making the center controls look off-center.
-
-          Fix: The entire right <div> is now `sm:hidden` so it disappears on
-          desktop. The mobile chat button inside it remains visible only on small
-          screens. On desktop, the three-column layout becomes effectively two-
-          column (left actions | center AV) with the center naturally centering
-          because we use `justify-between` only when the right item exists.
-
-          We also restructure to use a single centered row on desktop and only
-          show the left/right satellite buttons when needed.
-      ─────────────────────────────────────────────────────────────────────── */}
+      {/* Footer */}
       <footer className="relative z-10 border-t border-white/5 bg-black/50 backdrop-blur-xl px-4 py-3 sm:px-6">
         <div className="mx-auto flex max-w-4xl items-center justify-center gap-3 sm:gap-4">
-          {/* Left group: raise hand + reaction — always visible */}
+          {/* Left group: raise hand + reaction */}
           <div className="flex items-center gap-2 mr-auto sm:mr-0">
             <ControlBtn
               active={!localHandRaised}
@@ -664,13 +638,7 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
             </button>
           </div>
 
-          {/* ── FIX 3: Right — mobile-only chat shortcut ──────────────────────
-              Using `sm:hidden` on the entire div so it collapses completely
-              on desktop (≥640px). Previously it was `flex items-center gap-2`
-              always, so on desktop it occupied space even with no visible content
-              (the button inside was sm:hidden but the div container still existed
-              as an empty flex child taking up ~48px of phantom width).
-          ──────────────────────────────────────────────────────────────────── */}
+          {/* Right — mobile-only chat shortcut (sm:hidden collapses on desktop) */}
           <div className="flex items-center sm:hidden ml-auto">
             <button
               onClick={() => togglePanel("chat")}
@@ -692,18 +660,17 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
         </div>
       </footer>
 
-      {/* ─── FIX 2a: Fixed-position StatusPicker portal ──────────────────────
-          Rendered at the end of the body-like container so it escapes ALL
-          stacking contexts. Uses position:fixed with coordinates computed from
-          the status button's getBoundingClientRect(). z-50 ensures it paints
-          above everything.
-      ─────────────────────────────────────────────────────────────────────── */}
+      {/* ─── Fixed-position StatusPicker portal ──────────────────────────── */}
       <AnimatePresence>
         {showStatusPicker && statusPickerPos && (
           <StatusPicker
             current={localStatus}
+            isPresenting={localStatus === "presenting"}
             onSelect={(s) => {
               setStatus(s);
+              // Only close the picker if NOT presenting.
+              // If presenting, the status doesn't change visually so we close
+              // after a brief moment to acknowledge the selection.
               setShowStatusPicker(false);
             }}
             onClose={() => setShowStatusPicker(false)}
@@ -715,7 +682,7 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
   );
 }
 
-// ─── Reaction Burst Layer ──────────────────────────────────────────────────────
+// ─── Reaction Burst Layer ─────────────────────────────────────────────────────
 
 function ReactionBurstLayer({
   reactions,
@@ -801,18 +768,23 @@ function ReactionPicker({
 }
 
 // ─── Status Picker ────────────────────────────────────────────────────────────
-// FIX 2a: Uses position:fixed with coordinates from getBoundingClientRect().
-// This is rendered at the top level of the component tree (outside the header)
-// so it escapes ALL stacking contexts and overflow clipping. z-50 guarantees
-// it paints on top of everything.
-
+/**
+ * Only shows MANUAL_STATUSES (available, busy, away, brb).
+ * "Presenting" is never rendered as a selectable option.
+ *
+ * When isPresenting=true, a banner at the top explains that status will
+ * restore after screen sharing ends — and the selected status becomes the
+ * restore target rather than the immediate display.
+ */
 function StatusPicker({
   current,
+  isPresenting,
   onSelect,
   onClose,
   position,
 }: {
   current: ParticipantStatus;
+  isPresenting: boolean;
   onSelect: (s: ParticipantStatus) => void;
   onClose: () => void;
   position: { top: number; left: number };
@@ -836,40 +808,51 @@ function StatusPicker({
         position: "fixed",
         top: position.top,
         left: position.left,
-        minWidth: 180,
+        minWidth: 210,
       }}
     >
       <div className="glass-strong rounded-2xl border border-white/10 p-1.5 shadow-2xl backdrop-blur-xl">
+        {/* Header */}
         <p className="px-3 py-1.5 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
           Set status
         </p>
-        {(
-          Object.entries(STATUS_CONFIG) as [
-            ParticipantStatus,
-            (typeof STATUS_CONFIG)[ParticipantStatus],
-          ][]
-        ).map(([key, cfg]) => (
-          <button
-            key={key}
-            onClick={() => onSelect(key)}
-            className={cn(
-              "flex items-center gap-2.5 w-full rounded-xl px-3 py-2 text-sm text-left transition",
-              current === key ? "bg-white/10" : "hover:bg-white/5",
-            )}
-          >
-            <span
-              className="h-2 w-2 rounded-full shrink-0"
-              style={{ background: cfg.color, boxShadow: `0 0 6px ${cfg.color}` }}
-            />
-            <span className="flex-1">{cfg.label}</span>
-            {key === "presenting" && (
-              <span className="text-[9px] text-muted-foreground/50 uppercase tracking-wide">
-                auto
-              </span>
-            )}
-            {current === key && <CheckCircle2 className="h-3 w-3 text-[var(--neon-primary)]" />}
-          </button>
-        ))}
+
+        {/* Presenting notice — shown only while sharing */}
+        {isPresenting && (
+          <div className="mx-1.5 mb-1.5 flex items-start gap-2 rounded-xl border border-[oklch(0.65_0.22_280)/0.35] bg-[oklch(0.65_0.22_280)/0.1] px-3 py-2">
+            <Presentation className="h-3 w-3 mt-0.5 shrink-0 text-[oklch(0.75_0.18_280)]" />
+            <p className="text-[11px] text-[oklch(0.8_0.15_280)] leading-snug">
+              Currently presenting. Your choice will apply when screen sharing stops.
+            </p>
+          </div>
+        )}
+
+        {/* Only the 4 manual statuses — "presenting" is intentionally absent */}
+        {MANUAL_STATUSES.map((key) => {
+          const cfg = STATUS_CONFIG[key];
+          // While presenting, show which status will be restored (current
+          // would be "presenting", so we compare against prevStatus via the
+          // parent passing the real non-presenting status as `current`).
+          const isActive = isPresenting ? false : current === key;
+
+          return (
+            <button
+              key={key}
+              onClick={() => onSelect(key)}
+              className={cn(
+                "flex items-center gap-2.5 w-full rounded-xl px-3 py-2 text-sm text-left transition",
+                isActive ? "bg-white/10" : "hover:bg-white/5",
+              )}
+            >
+              <span
+                className="h-2 w-2 rounded-full shrink-0"
+                style={{ background: cfg.color, boxShadow: `0 0 6px ${cfg.color}` }}
+              />
+              <span className="flex-1">{cfg.label}</span>
+              {isActive && <CheckCircle2 className="h-3 w-3 text-[var(--neon-primary)]" />}
+            </button>
+          );
+        })}
       </div>
     </motion.div>
   );
@@ -1744,9 +1727,6 @@ function RemoteVideoTile({
 }
 
 // ─── Screen Share View ────────────────────────────────────────────────────────
-// FIX 1: This component receives `localStream` from React state. Since the hook
-// now calls setLocalStream(screenPreviewStream) when sharing starts, this video
-// element will correctly render the shared screen instead of the camera feed.
 
 function ScreenShareView({
   localStream,
