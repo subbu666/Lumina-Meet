@@ -194,6 +194,11 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
   const [activePanel, setActivePanel] = useState<PanelType>(null);
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [showStatusPicker, setShowStatusPicker] = useState(false);
+  // Ref + position state for popover positioning (FIX 2a — fixed-position dropdown)
+  const statusButtonRef = useRef<HTMLDivElement>(null);
+  const [statusPickerPos, setStatusPickerPos] = useState<{ top: number; left: number } | null>(
+    null,
+  );
 
   const webrtc = useWebRTC(id, username, SOCKET_URL);
 
@@ -232,6 +237,36 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
     error,
     isConnecting,
   } = webrtc;
+
+  // Compute dropdown position whenever it opens
+  useEffect(() => {
+    if (showStatusPicker && statusButtonRef.current) {
+      const rect = statusButtonRef.current.getBoundingClientRect();
+      setStatusPickerPos({
+        top: rect.bottom + 8,
+        left: rect.left,
+      });
+    } else {
+      setStatusPickerPos(null);
+    }
+  }, [showStatusPicker]);
+
+  // Recalculate position on resize/scroll while open
+  useEffect(() => {
+    if (!showStatusPicker) return;
+    const handleUpdate = () => {
+      if (statusButtonRef.current) {
+        const rect = statusButtonRef.current.getBoundingClientRect();
+        setStatusPickerPos({ top: rect.bottom + 8, left: rect.left });
+      }
+    };
+    window.addEventListener("resize", handleUpdate);
+    window.addEventListener("scroll", handleUpdate, true);
+    return () => {
+      window.removeEventListener("resize", handleUpdate);
+      window.removeEventListener("scroll", handleUpdate, true);
+    };
+  }, [showStatusPicker]);
 
   useEffect(() => {
     const handler = () => {
@@ -306,9 +341,10 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
       </div>
 
       {/* ─── Header ──────────────────────────────────────────────────────────
-          FIX 2a: Removed overflow:hidden from header (it was clipping the status
-          dropdown). The header now uses z-10 and the status picker dropdown uses
-          z-50, which correctly layers on top of all content below.
+          FIX 2a: The status picker dropdown now uses fixed positioning with
+          coordinates computed from the button's getBoundingClientRect().
+          This completely escapes the header's stacking context and overflow
+          behavior — the dropdown renders at the body level via a fixed div.
       ─────────────────────────────────────────────────────────────────────── */}
       <header className="relative z-10 flex items-center justify-between border-b border-white/5 bg-black/40 backdrop-blur-xl px-4 py-3 sm:px-6">
         <div className="flex items-center gap-3 min-w-0">
@@ -344,19 +380,20 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
         </AnimatePresence>
 
         <div className="flex items-center gap-2">
-          {/* ─── FIX 2b: Status picker ────────────────────────────────────────
-              The wrapper div is `relative` so the dropdown can be positioned
-              absolutely relative to it. The dropdown itself uses z-50 so it
-              renders above the video grid, panels, and all other content.
-              Previously it was getting clipped by the header's stacking context.
+          {/* ─── FIX 2a: Status picker with fixed-position popover ────────────
+              The wrapper div now has `relative` ONLY as a positioning anchor
+              for the button. The dropdown itself is NOT a child — it renders
+              as a fixed-position element at the body level using coordinates
+              from getBoundingClientRect(). This completely escapes the
+              header's stacking context and overflow.
 
-              FIX 2c: Auto-presenting — when sharing is active, the pill shows
+              FIX 2b: Auto-presenting — when sharing is active, the pill shows
               a purple "Presenting" state. The hook already sets localStatus to
               "presenting" automatically via toggleScreenShare, so this just
               reflects that. We also visually distinguish the presenting state
               with a subtle pulsing border so users can see it changed.
           ─────────────────────────────────────────────────────────────────── */}
-          <div className="relative hidden sm:block">
+          <div ref={statusButtonRef} className="relative hidden sm:block">
             <button
               onClick={() => setShowStatusPicker((v) => !v)}
               className={cn(
@@ -381,19 +418,6 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
                 )}
               />
             </button>
-
-            <AnimatePresence>
-              {showStatusPicker && (
-                <StatusPicker
-                  current={localStatus}
-                  onSelect={(s) => {
-                    setStatus(s);
-                    setShowStatusPicker(false);
-                  }}
-                  onClose={() => setShowStatusPicker(false)}
-                />
-              )}
-            </AnimatePresence>
           </div>
 
           <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-[var(--neon-secondary)]/30 bg-[var(--neon-secondary)]/10 px-2.5 py-1 text-[11px] text-[var(--neon-secondary)]">
@@ -571,8 +595,7 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
 
           We also restructure to use a single centered row on desktop and only
           show the left/right satellite buttons when needed.
-      ─────────────────────────────────────────────────────────────────────── -->
-      */}
+      ─────────────────────────────────────────────────────────────────────── */}
       <footer className="relative z-10 border-t border-white/5 bg-black/50 backdrop-blur-xl px-4 py-3 sm:px-6">
         <div className="mx-auto flex max-w-4xl items-center justify-center gap-3 sm:gap-4">
           {/* Left group: raise hand + reaction — always visible */}
@@ -668,6 +691,26 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
           </div>
         </div>
       </footer>
+
+      {/* ─── FIX 2a: Fixed-position StatusPicker portal ──────────────────────
+          Rendered at the end of the body-like container so it escapes ALL
+          stacking contexts. Uses position:fixed with coordinates computed from
+          the status button's getBoundingClientRect(). z-50 ensures it paints
+          above everything.
+      ─────────────────────────────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {showStatusPicker && statusPickerPos && (
+          <StatusPicker
+            current={localStatus}
+            onSelect={(s) => {
+              setStatus(s);
+              setShowStatusPicker(false);
+            }}
+            onClose={() => setShowStatusPicker(false)}
+            position={statusPickerPos}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -758,20 +801,21 @@ function ReactionPicker({
 }
 
 // ─── Status Picker ────────────────────────────────────────────────────────────
-// FIX 2: Uses z-50 so it renders above the video grid and all other content.
-// The parent wrapper is `relative` + `hidden sm:block` in the header, which
-// means the dropdown is positioned relative to the status button — correct.
-// Previously the z-index wasn't high enough to escape the header's stacking
-// context; now z-50 guarantees it paints on top of everything.
+// FIX 2a: Uses position:fixed with coordinates from getBoundingClientRect().
+// This is rendered at the top level of the component tree (outside the header)
+// so it escapes ALL stacking contexts and overflow clipping. z-50 guarantees
+// it paints on top of everything.
 
 function StatusPicker({
   current,
   onSelect,
   onClose,
+  position,
 }: {
   current: ParticipantStatus;
   onSelect: (s: ParticipantStatus) => void;
   onClose: () => void;
+  position: { top: number; left: number };
 }) {
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -787,8 +831,13 @@ function StatusPicker({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -8, scale: 0.95 }}
       transition={{ type: "spring", damping: 22, stiffness: 300 }}
-      // z-50 ensures the dropdown paints above the video grid (z-10) and panels
-      className="status-picker-root absolute top-full left-0 mt-2 z-50 min-w-[180px]"
+      className="status-picker-root z-50"
+      style={{
+        position: "fixed",
+        top: position.top,
+        left: position.left,
+        minWidth: 180,
+      }}
     >
       <div className="glass-strong rounded-2xl border border-white/10 p-1.5 shadow-2xl backdrop-blur-xl">
         <p className="px-3 py-1.5 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
