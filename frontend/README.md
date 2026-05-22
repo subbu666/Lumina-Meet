@@ -22,8 +22,7 @@ Demo OTP for any signup / reset flow: **`123456`**
 src/
 ├── api/
 │   ├── apiClient.ts            # Axios instance + interceptors + rate-limit hook
-│   ├── endpoints.ts            # All REST endpoints in one place
-│   ├── mockAdapter.ts          # Axios mock adapter (delays, errors, 429s)
+│   ├── endpoints.ts            # All REST endpoints in one place  
 │   └── services/
 │       ├── authService.ts
 │       └── meetingService.ts

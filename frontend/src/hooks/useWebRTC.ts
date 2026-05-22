@@ -1,14 +1,10 @@
 /**
- * useWebRTC — Lumina Meet Phase 2 (FIXED v2)
+ * useWebRTC — Lumina Meet Phase 3
  *
- * Status fixes:
- *  - "Presenting" is now ONLY set automatically when screen share starts.
- *  - When screen share stops (any way), status restores to prevStatusRef
- *    which can NEVER be "presenting" (users cannot manually set it).
- *  - setStatus() guards against writing "presenting" as prevStatusRef so
- *    the restore destination is always a real user-chosen status.
- *  - If user manually changes status while presenting, prevStatusRef is
- *    updated so the new choice is what gets restored when sharing stops.
+ * New:
+ *  • Waiting room / lobby admission
+ *  • Host & sub-host tracking with transfer support
+ *  • isWaiting, pendingParticipants, admit/reject, transferHost
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -29,6 +25,8 @@ export interface RemotePeer {
   status: ParticipantStatus;
   handRaised: boolean;
   handRaisedAt: number | null;
+  isHost: boolean;
+  isSubHost: boolean;
 }
 
 export interface ChatMessage {
@@ -52,6 +50,12 @@ export interface ReactionEvent {
 export interface TypingPeer {
   socketId: string;
   username: string;
+}
+
+export interface PendingParticipant {
+  socketId: string;
+  username: string;
+  userId?: string;
 }
 
 export interface UseWebRTCReturn {
@@ -86,6 +90,13 @@ export interface UseWebRTCReturn {
   raisedHands: Array<{ socketId: string; username: string; handRaisedAt: number }>;
   reactions: ReactionEvent[];
   sendReaction: (emoji: string) => void;
+  isHost: boolean;
+  isSubHost: boolean;
+  isWaiting: boolean;
+  pendingParticipants: PendingParticipant[];
+  admitParticipant: (socketId: string) => void;
+  rejectParticipant: (socketId: string) => void;
+  transferHost: (socketId: string, mode: "full" | "sub") => void;
   error: string | null;
   isConnecting: boolean;
 }
@@ -140,7 +151,12 @@ function buildAnalyser(ctx: AudioContext, stream: MediaStream): AnalyserNode | n
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
-export function useWebRTC(roomId: string, username: string, socketUrl: string): UseWebRTCReturn {
+export function useWebRTC(
+  roomId: string,
+  username: string,
+  socketUrl: string,
+  userId?: string,
+): UseWebRTCReturn {
   // ── Core state ─────────────────────────────────────────────────────────────
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [peers, setPeers] = useState<RemotePeer[]>([]);
@@ -161,6 +177,12 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
   const [localHandRaised, setLocalHandRaised] = useState(false);
   const [reactions, setReactions] = useState<ReactionEvent[]>([]);
 
+  // ── Phase 3 state ──────────────────────────────────────────────────────────
+  const [isHost, setIsHost] = useState(false);
+  const [isSubHost, setIsSubHost] = useState(false);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [pendingParticipants, setPendingParticipants] = useState<PendingParticipant[]>([]);
+
   // ── Refs ───────────────────────────────────────────────────────────────────
   const socketRef = useRef<Socket | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -174,29 +196,9 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isTypingRef = useRef(false);
   const chatOpenRef = useRef(false);
-
-  /**
-   * STATUS RESTORATION REF
-   *
-   * prevStatusRef stores the status to restore when screen sharing stops.
-   *
-   * INVARIANT: prevStatusRef.current is NEVER "presenting".
-   *   - It starts as "available".
-   *   - setStatus() only writes to it when NOT presenting (or when the new
-   *     value is not "presenting"), so the restore target is always a real
-   *     user-chosen non-presenting status.
-   *   - toggleScreenShare reads it on stop to know what to restore to.
-   */
   const prevStatusRef = useRef<ParticipantStatus>("available");
-
-  /**
-   * sharingRef mirrors the `sharing` state in a ref so that callbacks
-   * created in useEffect (e.g. screenTrack.onended) can read the latest
-   * value without becoming stale closures.
-   */
   const sharingRef = useRef(false);
 
-  // Keep sharingRef in sync with sharing state
   useEffect(() => {
     sharingRef.current = sharing;
   }, [sharing]);
@@ -254,6 +256,8 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
             status: "available",
             handRaised: false,
             handRaisedAt: null,
+            isHost: false,
+            isSubHost: false,
           },
         ];
       });
@@ -283,7 +287,6 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
     let cancelled = false;
 
     const init = async () => {
-      // 1. Get local media
       let stream: MediaStream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -307,7 +310,7 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
       setLocalStream(stream);
       setIsConnecting(false);
 
-      // 2. Local VAD
+      // Local VAD
       const audioCtx = new AudioContext();
       audioCtxRef.current = audioCtx;
       const localAnalyser = buildAnalyser(audioCtx, stream);
@@ -332,7 +335,7 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
         }, VAD_POLL_MS);
       }
 
-      // 3. Connect socket
+      // Connect socket
       const socket = io(socketUrl, {
         transports: ["websocket", "polling"],
         reconnectionAttempts: 5,
@@ -343,7 +346,7 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
       socket.on("connect", () => {
         if (cancelled) return;
         setLocalSocketId(socket.id ?? null);
-        socket.emit("join-room", { roomId, username });
+        socket.emit("join-room", { roomId, username, userId });
       });
 
       socket.on("connect_error", (err) => {
@@ -351,7 +354,7 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
         setIsConnecting(false);
       });
 
-      // 4. Remote VAD
+      // Remote VAD
       const remoteVadTimer = setInterval(() => {
         let loudestId: string | null = null;
         let loudestVol = VAD_THRESHOLD;
@@ -379,6 +382,8 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
             status?: ParticipantStatus;
             handRaised?: boolean;
             handRaisedAt?: number | null;
+            isHost?: boolean;
+            isSubHost?: boolean;
           }>,
         ) => {
           for (const peer of existingPeers) {
@@ -387,6 +392,8 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
               status: peer.status ?? "available",
               handRaised: peer.handRaised ?? false,
               handRaisedAt: peer.handRaisedAt ?? null,
+              isHost: peer.isHost ?? false,
+              isSubHost: peer.isSubHost ?? false,
             });
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
@@ -397,18 +404,36 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
 
       socket.on(
         "user-joined",
-        ({
-          socketId,
-          username: uname,
-        }: {
+        (data: {
           socketId: string;
           username: string;
           mic: boolean;
           cam: boolean;
           status?: ParticipantStatus;
           handRaised?: boolean;
+          isHost?: boolean;
+          isSubHost?: boolean;
         }) => {
-          console.log(`[WS] user-joined: ${uname} (${socketId})`);
+          setPeers((prev) => {
+            if (prev.some((p) => p.socketId === data.socketId)) return prev;
+            return [
+              ...prev,
+              {
+                socketId: data.socketId,
+                username: data.username,
+                stream: null,
+                mic: data.mic ?? true,
+                cam: data.cam ?? true,
+                screen: false,
+                speaking: false,
+                status: data.status ?? "available",
+                handRaised: data.handRaised ?? false,
+                handRaisedAt: null,
+                isHost: data.isHost ?? false,
+                isSubHost: data.isSubHost ?? false,
+              },
+            ];
+          });
         },
       );
 
@@ -470,7 +495,6 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
             ...(pMic !== undefined && { mic: pMic }),
             ...(pCam !== undefined && { cam: pCam }),
             ...(pScreen !== undefined && { screen: pScreen }),
-            // Auto-update remote peer status based on screen share
             ...(pScreen === true && { status: "presenting" as ParticipantStatus }),
             ...(pScreen === false && { status: "available" as ParticipantStatus }),
           });
@@ -480,18 +504,20 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
       socket.on("user-left", ({ socketId }: { socketId: string }) => {
         closePC(socketId);
         setTypingPeers((prev) => prev.filter((p) => p.socketId !== socketId));
+        setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
       });
 
       socket.on("host-action", ({ action }: { action: string }) => {
+        const stream = localStreamRef.current;
         if (action === "mute") {
-          stream.getAudioTracks().forEach((t) => {
+          stream?.getAudioTracks().forEach((t) => {
             t.enabled = false;
           });
           setMic(false);
           socket.emit("media-state", { mic: false });
         }
         if (action === "cam-off") {
-          stream.getVideoTracks().forEach((t) => {
+          stream?.getVideoTracks().forEach((t) => {
             t.enabled = false;
           });
           setCam(false);
@@ -504,6 +530,69 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
           window.dispatchEvent(new CustomEvent("Lumina Meet:host-removed"));
         }
       });
+
+      // ── Phase 3: Waiting room & Host ─────────────────────────────────────
+
+      socket.on("waiting", () => {
+        setIsWaiting(true);
+        setIsConnecting(false);
+      });
+
+      socket.on("admitted", () => {
+        setIsWaiting(false);
+      });
+
+      socket.on("join-request", (data: PendingParticipant) => {
+        setPendingParticipants((prev) => {
+          if (prev.some((p) => p.socketId === data.socketId)) return prev;
+          return [...prev, data];
+        });
+      });
+
+      socket.on("join-rejected", ({ reason }: { reason: string }) => {
+        setError(reason);
+        setIsWaiting(false);
+        setIsConnecting(false);
+      });
+
+      socket.on("you-are-host", () => setIsHost(true));
+      socket.on("you-are-subhost", () => setIsSubHost(true));
+      socket.on("you-are-participant", () => {
+        setIsHost(false);
+        setIsSubHost(false);
+      });
+
+      socket.on(
+        "host-transferred",
+        (data: {
+          mode: "full" | "sub";
+          newHostSocketId?: string;
+          oldHostSocketId?: string;
+          targetSocketId?: string;
+        }) => {
+          if (data.mode === "full") {
+            if (data.newHostSocketId === socket.id) {
+              setIsHost(true);
+              setIsSubHost(false);
+            } else if (data.oldHostSocketId === socket.id) {
+              setIsHost(false);
+              setIsSubHost(false);
+            }
+            setPeers((prev) =>
+              prev.map((p) => ({
+                ...p,
+                isHost: p.socketId === data.newHostSocketId,
+                isSubHost: p.socketId === data.newHostSocketId ? false : p.isSubHost,
+              })),
+            );
+          } else if (data.mode === "sub" && data.targetSocketId) {
+            if (data.targetSocketId === socket.id) setIsSubHost(true);
+            setPeers((prev) =>
+              prev.map((p) => (p.socketId === data.targetSocketId ? { ...p, isSubHost: true } : p)),
+            );
+          }
+        },
+      );
 
       // ── Phase 2 socket handlers ────────────────────────────────────────────
 
@@ -641,7 +730,7 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
       audioCtxRef.current?.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, username, socketUrl]);
+  }, [roomId, username, socketUrl, userId]);
 
   // ── Controls ───────────────────────────────────────────────────────────────
 
@@ -699,17 +788,11 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
     }
   }, [cam]);
 
-  /**
-   * Shared helper: restores state after screen sharing ends (both via
-   * in-app toggle and browser's native "Stop sharing" button).
-   */
   const _stopSharingCleanup = useCallback(() => {
     const socket = socketRef.current;
-
     screenStreamRef.current?.getTracks().forEach((t) => t.stop());
     screenStreamRef.current = null;
 
-    // Restore camera track into all peer connections
     const camTrack = localStreamRef.current?.getVideoTracks()[0];
     if (camTrack) {
       pcsRef.current.forEach((pc) => {
@@ -718,7 +801,6 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
       });
     }
 
-    // Restore localStream so React UI shows camera again
     if (localStreamRef.current) {
       setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
     }
@@ -726,8 +808,6 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
     setSharing(false);
     socket?.emit("media-state", { screen: false });
 
-    // Restore to the status saved before presenting started.
-    // prevStatusRef is guaranteed to never be "presenting".
     const restored = prevStatusRef.current;
     setLocalStatus(restored);
     socket?.emit("status-update", { status: restored });
@@ -738,10 +818,8 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
     if (!socket) return;
 
     if (sharingRef.current) {
-      // ── Stop sharing ──────────────────────────────────────────────────────
       _stopSharingCleanup();
     } else {
-      // ── Start sharing ─────────────────────────────────────────────────────
       try {
         const screenStream = await navigator.mediaDevices.getDisplayMedia({
           video: { frameRate: { ideal: 30, max: 60 } },
@@ -750,13 +828,11 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
         screenStreamRef.current = screenStream;
         const screenTrack = screenStream.getVideoTracks()[0];
 
-        // Replace the video sender in every peer connection
         pcsRef.current.forEach((pc) => {
           const sender = pc.getSenders().find((s) => s.track?.kind === "video");
           if (sender) sender.replaceTrack(screenTrack);
         });
 
-        // Build preview stream: screen video + existing audio
         const cameraStream = localStreamRef.current;
         const audioTracks = cameraStream?.getAudioTracks() ?? [];
         const screenPreviewStream = new MediaStream([screenTrack, ...audioTracks]);
@@ -765,9 +841,6 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
         setSharing(true);
         socket.emit("media-state", { screen: true });
 
-        // Save current status (ONLY if it's not "presenting" — defensive guard)
-        // then switch to "presenting". This ensures prevStatusRef always holds
-        // a valid restore target.
         setLocalStatus((currentStatus) => {
           if (currentStatus !== "presenting") {
             prevStatusRef.current = currentStatus;
@@ -776,7 +849,6 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
         });
         socket.emit("status-update", { status: "presenting" });
 
-        // Handle browser-native "Stop sharing" button
         screenTrack.onended = () => {
           _stopSharingCleanup();
         };
@@ -815,6 +887,22 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
     },
     [closePC],
   );
+
+  // ── Phase 3: Lobby ─────────────────────────────────────────────────────────
+
+  const admitParticipant = useCallback((socketId: string) => {
+    socketRef.current?.emit("admit-participant", { targetSocketId: socketId });
+    setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
+  }, []);
+
+  const rejectParticipant = useCallback((socketId: string) => {
+    socketRef.current?.emit("reject-participant", { targetSocketId: socketId });
+    setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
+  }, []);
+
+  const transferHost = useCallback((socketId: string, mode: "full" | "sub") => {
+    socketRef.current?.emit("transfer-host", { targetSocketId: socketId, mode });
+  }, []);
 
   // ── Phase 2: Chat ──────────────────────────────────────────────────────────
 
@@ -867,31 +955,12 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
 
   // ── Phase 2: Status ────────────────────────────────────────────────────────
 
-  /**
-   * setStatus — called when the user manually picks a status from the dropdown.
-   *
-   * Rules:
-   * 1. "Presenting" can NEVER be set manually — it's auto-only. Silently ignore.
-   * 2. If the user is currently presenting (screen sharing), update prevStatusRef
-   *    so when sharing stops, it restores to this new choice — but keep localStatus
-   *    as "presenting" for now (they're still sharing).
-   * 3. If not presenting, apply the status immediately as normal.
-   */
   const setStatus = useCallback((status: ParticipantStatus) => {
-    // Guard: "presenting" is auto-only, never settable manually.
     if (status === "presenting") return;
-
     if (sharingRef.current) {
-      // User changed preferred status while still sharing.
-      // Store it as the restore target but don't change the displayed status
-      // (it stays "presenting" until they stop sharing).
       prevStatusRef.current = status;
-      // Optionally: emit to socket so server knows intent — but the local UI
-      // keeps showing "presenting". Here we only update the restore target.
-      // (Do NOT emit socket here — the displayed status hasn't changed.)
     } else {
-      // Normal case: not sharing, apply immediately.
-      prevStatusRef.current = status; // keep in sync
+      prevStatusRef.current = status;
       setLocalStatus(status);
       socketRef.current?.emit("status-update", { status });
     }
@@ -957,6 +1026,13 @@ export function useWebRTC(roomId: string, username: string, socketUrl: string): 
     raisedHands,
     reactions,
     sendReaction,
+    isHost,
+    isSubHost,
+    isWaiting,
+    pendingParticipants,
+    admitParticipant,
+    rejectParticipant,
+    transferHost,
     error,
     isConnecting,
   };

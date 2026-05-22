@@ -1,17 +1,11 @@
-/**
- * meeting.$id.tsx — Lumina Meet Phase 2 (FIXED v2)
+/*
+ * meeting.$id.tsx — Lumina Meet Phase 3
  *
- * Status picker changes (v2):
- *  - "Presenting" is removed from the manual status dropdown entirely.
- *    It is an auto-only state that appears on the pill when screen sharing.
- *  - While presenting, the status pill shows "Presenting" (purple, pulsing)
- *    but the dropdown still only shows the 4 manual options (available, busy,
- *    away, brb). Selecting one while sharing stores it as the restore target
- *    without changing the current displayed status.
- *  - When sharing stops the pill snaps back to the chosen restore status.
- *
- * All other fixes (screen share stream, footer gap, fixed dropdown portal)
- * are preserved from Phase 2 FIXED v1.
+ * New:
+ *  • Waiting room / lobby UI for host & guests
+ *  • Cinematic leave modal (host vs participant flows)
+ *  • Host transfer modal (full host vs co-host)
+ *  • Dynamic host / co-host badges on all tiles
  */
 
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
@@ -44,6 +38,8 @@ import {
   CheckCircle2,
   CornerDownLeft,
   WifiOff,
+  Crown,
+  UserCog,
 } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
 import { NeonButton } from "@/components/ui-custom/NeonButton";
@@ -54,6 +50,7 @@ import {
   type ChatMessage,
   type ParticipantStatus,
 } from "@/hooks/useWebRTC";
+import { apiClient } from "@/api/apiClient";
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
@@ -92,10 +89,6 @@ const STATUS_CONFIG: Record<
   brb: { label: "BRB", color: "oklch(0.78 0.15 210)", icon: <Coffee className="h-3 w-3" /> },
 };
 
-/**
- * Statuses that can be manually chosen in the dropdown.
- * "presenting" is intentionally excluded — it is auto-only.
- */
 const MANUAL_STATUSES: ParticipantStatus[] = ["available", "busy", "away", "brb"];
 
 // ─── Root component ───────────────────────────────────────────────────────────
@@ -132,7 +125,14 @@ function MeetingRoom() {
 
   if (notStarted) return <CountdownScreen scheduledFor={scheduledFor!} now={now} />;
 
-  return <Room id={id} username={user.username} onLeave={() => navigate({ to: "/dashboard" })} />;
+  return (
+    <Room
+      id={id}
+      username={user.username}
+      userId={user.id}
+      onLeave={() => navigate({ to: "/dashboard" })}
+    />
+  );
 }
 
 // ─── Countdown ────────────────────────────────────────────────────────────────
@@ -186,7 +186,17 @@ function TimeBox({ v, l }: { v: number; l: string }) {
 
 type PanelType = "participants" | "chat" | null;
 
-function Room({ id, username, onLeave }: { id: string; username: string; onLeave: () => void }) {
+function Room({
+  id,
+  username,
+  userId,
+  onLeave,
+}: {
+  id: string;
+  username: string;
+  userId: string;
+  onLeave: () => void;
+}) {
   const [activePanel, setActivePanel] = useState<PanelType>(null);
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [showStatusPicker, setShowStatusPicker] = useState(false);
@@ -195,7 +205,11 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
     null,
   );
 
-  const webrtc = useWebRTC(id, username, SOCKET_URL);
+  // Phase 3 modals
+  const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const [transferTarget, setTransferTarget] = useState<RemotePeer | null>(null);
+
+  const webrtc = useWebRTC(id, username, SOCKET_URL, userId);
 
   const {
     localStream,
@@ -229,24 +243,26 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
     raisedHands,
     reactions,
     sendReaction,
+    isHost,
+    isSubHost,
+    isWaiting,
+    pendingParticipants,
+    admitParticipant,
+    rejectParticipant,
+    transferHost,
     error,
     isConnecting,
   } = webrtc;
 
-  // Compute dropdown position whenever it opens
   useEffect(() => {
     if (showStatusPicker && statusButtonRef.current) {
       const rect = statusButtonRef.current.getBoundingClientRect();
-      setStatusPickerPos({
-        top: rect.bottom + 8,
-        left: rect.left,
-      });
+      setStatusPickerPos({ top: rect.bottom + 8, left: rect.left });
     } else {
       setStatusPickerPos(null);
     }
   }, [showStatusPicker]);
 
-  // Recalculate position on resize/scroll while open
   useEffect(() => {
     if (!showStatusPicker) return;
     const handleUpdate = () => {
@@ -272,10 +288,26 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
     return () => window.removeEventListener("Lumina Meet:host-removed", handler);
   }, [leaveRoom, onLeave]);
 
-  const handleLeave = useCallback(() => {
+  const handleLeaveClick = useCallback(() => setShowLeaveModal(true), []);
+  const handleLeaveConfirm = useCallback(async () => {
+    if (isHost) {
+      try {
+        await apiClient.post(`/meeting/${id}/end`);
+      } catch (e) {
+        console.error("Failed to end meeting", e);
+      }
+    }
     leaveRoom();
     onLeave();
-  }, [leaveRoom, onLeave]);
+  }, [isHost, id, leaveRoom, onLeave]);
+
+  const handleTransfer = useCallback(
+    (mode: "full" | "sub") => {
+      if (transferTarget) transferHost(transferTarget.socketId, mode);
+      setTransferTarget(null);
+    },
+    [transferTarget, transferHost],
+  );
 
   const togglePanel = (panel: PanelType) => {
     setActivePanel((prev) => {
@@ -285,7 +317,7 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
     });
   };
 
-  if (isConnecting) {
+  if (isConnecting && !isWaiting) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4">
         <motion.div
@@ -307,6 +339,36 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
         <NeonButton variant="outline" onClick={onLeave}>
           Back to dashboard
         </NeonButton>
+      </div>
+    );
+  }
+
+  // ── Waiting room screen (guest) ───────────────────────────────────────────
+  if (isWaiting) {
+    return (
+      <div className="flex min-h-screen items-center justify-center px-4 relative z-10">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="glass-strong rounded-3xl p-10 text-center max-w-md border border-[var(--neon-primary)]/20"
+        >
+          <motion.div
+            animate={{ scale: [1, 1.1, 1], opacity: [0.5, 1, 0.5] }}
+            transition={{ duration: 2, repeat: Infinity }}
+            className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-[var(--neon-primary)] to-[var(--neon-accent)] glow-primary mb-4"
+          >
+            <Hourglass className="h-8 w-8 text-white" />
+          </motion.div>
+          <h2 className="text-2xl font-semibold text-gradient">Waiting in lobby</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            The host has been notified. Please wait while they review your request to join.
+          </p>
+          <div className="mt-6 flex justify-center">
+            <NeonButton variant="outline" onClick={onLeave}>
+              Leave lobby
+            </NeonButton>
+          </div>
+        </motion.div>
       </div>
     );
   }
@@ -345,7 +407,7 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
           </div>
         </div>
 
-        {/* Raised hands queue — header banner */}
+        {/* Raised hands queue */}
         <AnimatePresence>
           {raisedHands.length > 0 && (
             <motion.div
@@ -370,17 +432,6 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
         </AnimatePresence>
 
         <div className="flex items-center gap-2">
-          {/* ─── Status pill + dropdown ──────────────────────────────────────
-              The pill always reflects localStatus (auto-set to "presenting"
-              when sharing, otherwise the user's chosen status).
-
-              The dropdown (StatusPicker) only shows MANUAL_STATUSES — the
-              four user-selectable options. "Presenting" never appears there.
-
-              While sharing, selecting a status in the dropdown updates the
-              restore target (prevStatusRef) but does NOT change the pill —
-              it keeps showing "Presenting" until sharing stops.
-          ─────────────────────────────────────────────────────────────────── */}
           <div ref={statusButtonRef} className="relative hidden sm:block">
             <button
               onClick={() => setShowStatusPicker((v) => !v)}
@@ -416,7 +467,6 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
             {peers.length + 1} live
           </span>
 
-          {/* Panel toggles */}
           <button
             onClick={() => togglePanel("chat")}
             className={cn(
@@ -455,6 +505,53 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
         </div>
       </header>
 
+      {/* ─── Host Lobby Banner ──────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {isHost && pendingParticipants.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, height: 0 }}
+            animate={{ opacity: 1, y: 0, height: "auto" }}
+            exit={{ opacity: 0, y: -20, height: 0 }}
+            className="relative z-20 mx-4 mt-3 glass-strong rounded-2xl border border-[var(--neon-primary)]/30 p-4 max-h-64 overflow-y-auto"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <Users className="h-4 w-4 text-[var(--neon-primary)]" />
+                Lobby{" "}
+                <span className="text-muted-foreground">
+                  ({pendingParticipants.length} waiting)
+                </span>
+              </h3>
+            </div>
+            <div className="space-y-2">
+              {pendingParticipants.map((p) => (
+                <div
+                  key={p.socketId}
+                  className="flex items-center gap-3 rounded-xl bg-white/5 border border-white/10 p-2.5"
+                >
+                  <Avatar name={p.username} hue={hueForName(p.username)} size={32} />
+                  <span className="text-sm font-medium flex-1">{p.username}</span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => admitParticipant(p.socketId)}
+                      className="flex items-center gap-1 rounded-lg bg-[var(--neon-primary)]/20 border border-[var(--neon-primary)]/30 px-3 py-1.5 text-xs text-[var(--neon-primary)] hover:bg-[var(--neon-primary)]/30 transition"
+                    >
+                      <CheckCircle2 className="h-3 w-3" /> Admit
+                    </button>
+                    <button
+                      onClick={() => rejectParticipant(p.socketId)}
+                      className="flex items-center gap-1 rounded-lg bg-[oklch(0.72_0.22_35)]/15 border border-[oklch(0.72_0.22_35)]/30 px-3 py-1.5 text-xs text-[oklch(0.78_0.2_35)] hover:bg-[oklch(0.72_0.22_35)]/25 transition"
+                    >
+                      <X className="h-3 w-3" /> Decline
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Main area */}
       <div className="relative z-10 flex flex-1 overflow-hidden">
         <main className="flex-1 p-3 sm:p-4 overflow-hidden min-w-0">
@@ -476,6 +573,8 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
               cam={cam}
               localStatus={localStatus}
               localHandRaised={localHandRaised}
+              isHost={isHost}
+              isSubHost={isSubHost}
               peers={peers}
               onRemove={removePeer}
               onLowerHand={lowerPeerHand}
@@ -494,12 +593,15 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
               localHandRaised={localHandRaised}
               mic={mic}
               cam={cam}
+              isHost={isHost}
+              isSubHost={isSubHost}
               peers={peers}
               raisedHands={raisedHands}
               onLowerHand={lowerPeerHand}
               onRemove={removePeer}
               onMuteAll={muteAll}
               onCamOffAll={camOffAll}
+              onTransferHost={setTransferTarget}
               onClose={() => setActivePanel(null)}
             />
           )}
@@ -543,7 +645,7 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
         )}
       </AnimatePresence>
 
-      {/* Raise hand notification toast */}
+      {/* Raise hand toast */}
       <AnimatePresence>
         {localHandRaised && (
           <motion.div
@@ -572,7 +674,6 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
       {/* Footer */}
       <footer className="relative z-10 border-t border-white/5 bg-black/50 backdrop-blur-xl px-4 py-3 sm:px-6">
         <div className="mx-auto flex max-w-4xl items-center justify-center gap-3 sm:gap-4">
-          {/* Left group: raise hand + reaction */}
           <div className="flex items-center gap-2 mr-auto sm:mr-0">
             <ControlBtn
               active={!localHandRaised}
@@ -605,7 +706,6 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
             </div>
           </div>
 
-          {/* Center: core AV controls */}
           <div className="flex items-center gap-2 sm:gap-3">
             <ControlBtn
               active={mic}
@@ -630,7 +730,7 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
               highlightOn={sharing}
             />
             <button
-              onClick={handleLeave}
+              onClick={handleLeaveClick}
               className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-[oklch(0.65_0.25_25)] to-[oklch(0.72_0.22_35)] px-5 py-3 text-sm font-semibold text-white shadow-[0_8px_30px_-8px_oklch(0.72_0.22_35/0.6)] hover:opacity-95 transition"
             >
               <PhoneOff className="h-4 w-4" />
@@ -638,7 +738,6 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
             </button>
           </div>
 
-          {/* Right — mobile-only chat shortcut (sm:hidden collapses on desktop) */}
           <div className="flex items-center sm:hidden ml-auto">
             <button
               onClick={() => togglePanel("chat")}
@@ -660,17 +759,28 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
         </div>
       </footer>
 
-      {/* ─── Fixed-position StatusPicker portal ──────────────────────────── */}
+      {/* ─── Modals ─────────────────────────────────────────────────────────── */}
       <AnimatePresence>
+        {showLeaveModal && (
+          <LeaveModal
+            isHost={isHost}
+            onConfirm={handleLeaveConfirm}
+            onCancel={() => setShowLeaveModal(false)}
+          />
+        )}
+        {transferTarget && (
+          <HostTransferModal
+            peer={transferTarget}
+            onTransfer={handleTransfer}
+            onClose={() => setTransferTarget(null)}
+          />
+        )}
         {showStatusPicker && statusPickerPos && (
           <StatusPicker
             current={localStatus}
             isPresenting={localStatus === "presenting"}
             onSelect={(s) => {
               setStatus(s);
-              // Only close the picker if NOT presenting.
-              // If presenting, the status doesn't change visually so we close
-              // after a brief moment to acknowledge the selection.
               setShowStatusPicker(false);
             }}
             onClose={() => setShowStatusPicker(false)}
@@ -679,6 +789,166 @@ function Room({ id, username, onLeave }: { id: string; username: string; onLeave
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+// ─── Leave Modal ──────────────────────────────────────────────────────────────
+
+function LeaveModal({
+  isHost,
+  onConfirm,
+  onCancel,
+}: {
+  isHost: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md"
+      onClick={onCancel}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.85, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.85, y: 20 }}
+        transition={{ type: "spring", damping: 22, stiffness: 300 }}
+        className="relative mx-4 w-full max-w-md"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Glowing orb behind */}
+        <div className="absolute -inset-1 rounded-[2rem] bg-gradient-to-r from-[var(--neon-primary)] via-[var(--neon-accent)] to-[var(--neon-danger)] opacity-30 blur-xl animate-pulse-glow" />
+
+        <div className="relative glass-strong rounded-3xl border border-white/10 p-8 text-center overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-b from-[var(--neon-danger)]/5 to-transparent pointer-events-none" />
+
+          <motion.div
+            animate={{ scale: [1, 1.15, 1] }}
+            transition={{ duration: 2, repeat: Infinity }}
+            className="relative mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-[oklch(0.72_0.22_35)] to-[oklch(0.6_0.28_20)] shadow-[0_0_40px_-10px_oklch(0.72_0.22_35/0.8)]"
+          >
+            <PhoneOff className="h-10 w-10 text-white" />
+          </motion.div>
+
+          <h2 className="relative text-2xl font-bold text-gradient mb-2">
+            {isHost ? "End meeting for all?" : "Leave meeting?"}
+          </h2>
+          <p className="relative text-sm text-muted-foreground mb-8 max-w-xs mx-auto">
+            {isHost
+              ? "You are the host. If you leave, the meeting will end for everyone and all participants will be disconnected."
+              : "You can rejoin this meeting anytime using the same link while it's active."}
+          </p>
+
+          <div className="relative flex gap-3 justify-center">
+            <NeonButton variant="outline" onClick={onCancel} className="px-6">
+              Stay
+            </NeonButton>
+            <button
+              onClick={onConfirm}
+              className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-[oklch(0.65_0.25_25)] to-[oklch(0.72_0.22_35)] px-6 py-3 text-sm font-semibold text-white shadow-[0_8px_30px_-8px_oklch(0.72_0.22_35/0.6)] hover:opacity-95 transition animate-pulse-danger"
+            >
+              <PhoneOff className="h-4 w-4" />
+              {isHost ? "End meeting" : "Leave"}
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// ─── Host Transfer Modal ──────────────────────────────────────────────────────
+
+function HostTransferModal({
+  peer,
+  onTransfer,
+  onClose,
+}: {
+  peer: RemotePeer;
+  onTransfer: (mode: "full" | "sub") => void;
+  onClose: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.9, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.9, y: 20 }}
+        transition={{ type: "spring", damping: 24, stiffness: 300 }}
+        className="relative mx-4 w-full max-w-md"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="absolute -inset-1 rounded-[2rem] bg-gradient-to-r from-[var(--neon-primary)] to-[var(--neon-secondary)] opacity-20 blur-xl" />
+
+        <div className="relative glass-strong rounded-3xl border border-white/10 p-8">
+          <div className="flex items-center gap-3 mb-5">
+            <Avatar name={peer.username} hue={hueForName(peer.username)} size={48} />
+            <div>
+              <h2 className="text-xl font-bold text-gradient">Transfer Host</h2>
+              <p className="text-xs text-muted-foreground">
+                Choose privileges for{" "}
+                <span className="text-foreground font-medium">{peer.username}</span>
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <button
+              onClick={() => onTransfer("sub")}
+              className="group w-full glass rounded-2xl p-4 text-left hover:bg-white/5 transition border border-white/10 hover:border-[var(--neon-secondary)]/40"
+            >
+              <div className="flex items-center gap-3 mb-1">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--neon-secondary)]/15 text-[var(--neon-secondary)]">
+                  <UserCog className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-[var(--neon-secondary)]">Make Co-Host</h3>
+                  <p className="text-[11px] text-muted-foreground">
+                    They can admit from lobby, mute &amp; remove participants.
+                  </p>
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground/60 mt-2 pl-[52px]">
+                You keep full host control alongside them.
+              </p>
+            </button>
+
+            <button
+              onClick={() => onTransfer("full")}
+              className="group w-full glass rounded-2xl p-4 text-left hover:bg-white/5 transition border border-white/10 hover:border-[var(--neon-primary)]/40"
+            >
+              <div className="flex items-center gap-3 mb-1">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]">
+                  <Crown className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-[var(--neon-primary)]">Transfer Full Host</h3>
+                  <p className="text-[11px] text-muted-foreground">
+                    They become the sole host with complete control.
+                  </p>
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground/60 mt-2 pl-[52px]">
+                You will lose host privileges and become a regular participant.
+              </p>
+            </button>
+          </div>
+
+          <NeonButton variant="ghost" className="mt-5 w-full" onClick={onClose}>
+            Cancel
+          </NeonButton>
+        </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
@@ -768,14 +1038,7 @@ function ReactionPicker({
 }
 
 // ─── Status Picker ────────────────────────────────────────────────────────────
-/**
- * Only shows MANUAL_STATUSES (available, busy, away, brb).
- * "Presenting" is never rendered as a selectable option.
- *
- * When isPresenting=true, a banner at the top explains that status will
- * restore after screen sharing ends — and the selected status becomes the
- * restore target rather than the immediate display.
- */
+
 function StatusPicker({
   current,
   isPresenting,
@@ -804,20 +1067,13 @@ function StatusPicker({
       exit={{ opacity: 0, y: -8, scale: 0.95 }}
       transition={{ type: "spring", damping: 22, stiffness: 300 }}
       className="status-picker-root z-50"
-      style={{
-        position: "fixed",
-        top: position.top,
-        left: position.left,
-        minWidth: 210,
-      }}
+      style={{ position: "fixed", top: position.top, left: position.left, minWidth: 210 }}
     >
       <div className="glass-strong rounded-2xl border border-white/10 p-1.5 shadow-2xl backdrop-blur-xl">
-        {/* Header */}
         <p className="px-3 py-1.5 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
           Set status
         </p>
 
-        {/* Presenting notice — shown only while sharing */}
         {isPresenting && (
           <div className="mx-1.5 mb-1.5 flex items-start gap-2 rounded-xl border border-[oklch(0.65_0.22_280)/0.35] bg-[oklch(0.65_0.22_280)/0.1] px-3 py-2">
             <Presentation className="h-3 w-3 mt-0.5 shrink-0 text-[oklch(0.75_0.18_280)]" />
@@ -827,14 +1083,9 @@ function StatusPicker({
           </div>
         )}
 
-        {/* Only the 4 manual statuses — "presenting" is intentionally absent */}
         {MANUAL_STATUSES.map((key) => {
           const cfg = STATUS_CONFIG[key];
-          // While presenting, show which status will be restored (current
-          // would be "presenting", so we compare against prevStatus via the
-          // parent passing the real non-presenting status as `current`).
           const isActive = isPresenting ? false : current === key;
-
           return (
             <button
               key={key}
@@ -866,12 +1117,15 @@ function ParticipantsPanel({
   localHandRaised,
   mic,
   cam,
+  isHost,
+  isSubHost,
   peers,
   raisedHands,
   onLowerHand,
   onRemove,
   onMuteAll,
   onCamOffAll,
+  onTransferHost,
   onClose,
 }: {
   username: string;
@@ -879,14 +1133,19 @@ function ParticipantsPanel({
   localHandRaised: boolean;
   mic: boolean;
   cam: boolean;
+  isHost: boolean;
+  isSubHost: boolean;
   peers: RemotePeer[];
   raisedHands: Array<{ socketId: string; username: string; handRaisedAt: number }>;
   onLowerHand: (id: string) => void;
   onRemove: (id: string) => void;
   onMuteAll: () => void;
   onCamOffAll: () => void;
+  onTransferHost: (peer: RemotePeer) => void;
   onClose: () => void;
 }) {
+  const canManage = isHost || isSubHost;
+
   return (
     <motion.aside
       initial={{ x: 340 }}
@@ -934,14 +1193,16 @@ function ParticipantsPanel({
           )}
         </AnimatePresence>
 
-        <div className="flex gap-2">
-          <NeonButton variant="outline" className="flex-1 text-xs" onClick={onMuteAll}>
-            Mute all
-          </NeonButton>
-          <NeonButton variant="outline" className="flex-1 text-xs" onClick={onCamOffAll}>
-            Cam off all
-          </NeonButton>
-        </div>
+        {canManage && (
+          <div className="flex gap-2">
+            <NeonButton variant="outline" className="flex-1 text-xs" onClick={onMuteAll}>
+              Mute all
+            </NeonButton>
+            <NeonButton variant="outline" className="flex-1 text-xs" onClick={onCamOffAll}>
+              Cam off all
+            </NeonButton>
+          </div>
+        )}
 
         <ul className="space-y-2">
           <li className="flex items-center gap-3 rounded-xl border border-[var(--neon-primary)]/20 bg-[var(--neon-primary)]/5 p-2.5">
@@ -954,7 +1215,9 @@ function ParticipantsPanel({
                 <p className="truncate text-sm">{username}</p>
                 {localHandRaised && <span className="text-sm">✋</span>}
               </div>
-              <p className="text-[11px] text-muted-foreground">Host · You</p>
+              <p className="text-[11px] text-muted-foreground">
+                {isHost ? "Host · You" : isSubHost ? "Co-Host · You" : "You"}
+              </p>
             </div>
             <div className="flex items-center gap-1 text-muted-foreground">
               {mic ? (
@@ -995,6 +1258,16 @@ function ParticipantsPanel({
                     </motion.span>
                   )}
                   {p.speaking && <AudioBars color="var(--neon-secondary)" small />}
+                  {p.isHost && (
+                    <span className="text-[10px] rounded bg-[var(--neon-primary)]/20 px-1.5 py-0.5 text-[var(--neon-primary)] border border-[var(--neon-primary)]/30">
+                      Host
+                    </span>
+                  )}
+                  {p.isSubHost && (
+                    <span className="text-[10px] rounded bg-[var(--neon-secondary)]/20 px-1.5 py-0.5 text-[var(--neon-secondary)] border border-[var(--neon-secondary)]/30">
+                      Co-Host
+                    </span>
+                  )}
                 </div>
                 <p className="text-[11px] text-muted-foreground">
                   {STATUS_CONFIG[p.status]?.label ?? "Participant"}
@@ -1011,13 +1284,33 @@ function ParticipantsPanel({
                 ) : (
                   <VideoOff className="h-3.5 w-3.5 text-[oklch(0.72_0.22_35)]" />
                 )}
-                <button
-                  onClick={() => onRemove(p.socketId)}
-                  className="ml-1 text-muted-foreground hover:text-[oklch(0.72_0.22_35)] transition"
-                  title="Remove"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
+                {isHost && !p.isHost && (
+                  <>
+                    <button
+                      onClick={() => onTransferHost(p)}
+                      className="ml-1 text-muted-foreground hover:text-[var(--neon-primary)] transition"
+                      title="Transfer host"
+                    >
+                      <Crown className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => onRemove(p.socketId)}
+                      className="ml-1 text-muted-foreground hover:text-[oklch(0.78_0.2_35)] transition"
+                      title="Remove"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </>
+                )}
+                {isSubHost && !p.isHost && !p.isSubHost && (
+                  <button
+                    onClick={() => onRemove(p.socketId)}
+                    className="ml-1 text-muted-foreground hover:text-[oklch(0.78_0.2_35)] transition"
+                    title="Remove"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
             </motion.li>
           ))}
@@ -1419,6 +1712,8 @@ function VideoGrid({
   cam,
   localStatus,
   localHandRaised,
+  isHost,
+  isSubHost,
   peers,
   onRemove,
   onLowerHand,
@@ -1432,6 +1727,8 @@ function VideoGrid({
   cam: boolean;
   localStatus: ParticipantStatus;
   localHandRaised: boolean;
+  isHost: boolean;
+  isSubHost: boolean;
   peers: RemotePeer[];
   onRemove: (id: string) => void;
   onLowerHand: (id: string) => void;
@@ -1457,7 +1754,8 @@ function VideoGrid({
         username={username}
         mic={mic}
         cam={cam}
-        isHost
+        isHost={isHost}
+        isSubHost={isSubHost}
         isSpeaking={isSpeaking}
         status={localStatus}
         handRaised={localHandRaised}
@@ -1484,6 +1782,7 @@ function LocalVideoTile({
   mic,
   cam,
   isHost,
+  isSubHost,
   isSpeaking = false,
   status,
   handRaised,
@@ -1493,6 +1792,7 @@ function LocalVideoTile({
   mic: boolean;
   cam: boolean;
   isHost?: boolean;
+  isSubHost?: boolean;
   isSpeaking?: boolean;
   status?: ParticipantStatus;
   handRaised?: boolean;
@@ -1571,6 +1871,11 @@ function LocalVideoTile({
       {isHost && (
         <span className="absolute top-2 left-2 z-10 rounded-md bg-[var(--neon-primary)]/20 px-1.5 py-0.5 text-[10px] text-[var(--neon-primary)] border border-[var(--neon-primary)]/30">
           Host
+        </span>
+      )}
+      {!isHost && isSubHost && (
+        <span className="absolute top-2 left-2 z-10 rounded-md bg-[var(--neon-secondary)]/20 px-1.5 py-0.5 text-[10px] text-[var(--neon-secondary)] border border-[var(--neon-secondary)]/30">
+          Co-Host
         </span>
       )}
 
@@ -1700,6 +2005,17 @@ function RemoteVideoTile({
         <span className="truncate max-w-[140px]">{peer.username}</span>
         {!peer.mic && <MicOff className="h-3 w-3 text-[oklch(0.78_0.2_35)]" />}
       </div>
+
+      {peer.isHost && (
+        <span className="absolute top-2 left-2 z-10 rounded-md bg-[var(--neon-primary)]/20 px-1.5 py-0.5 text-[10px] text-[var(--neon-primary)] border border-[var(--neon-primary)]/30">
+          Host
+        </span>
+      )}
+      {!peer.isHost && peer.isSubHost && (
+        <span className="absolute top-2 left-2 z-10 rounded-md bg-[var(--neon-secondary)]/20 px-1.5 py-0.5 text-[10px] text-[var(--neon-secondary)] border border-[var(--neon-secondary)]/30">
+          Co-Host
+        </span>
+      )}
 
       <button
         onClick={onRemove}
@@ -1850,7 +2166,6 @@ function AudioBars({ color, small }: { color: string; small?: boolean }) {
           style={{ width: small ? "2px" : "3px", backgroundColor: color }}
           animate={{ scaleY: [h, 1, h * 0.5, 1, h] }}
           transition={{ duration: 0.7, repeat: Infinity, delay: i * 0.1 }}
-          data-originy="1"
         />
       ))}
     </span>

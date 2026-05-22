@@ -1,26 +1,25 @@
 /**
- * WebRTC Signaling Server — Lumina Meet Phase 2
+ * WebRTC Signaling Server — Lumina Meet Phase 3
  *
  * Phase 1 (existing):
  *  • join-room / room-peers / user-joined
- *  • offer / answer / ice-candidate (SDP relay)
- *  • media-state (mic/cam/screen toggles)
- *  • host-action (mute / cam-off / remove)
- *  • disconnect → user-left
+ *  • offer / answer / ice-candidate
+ *  • media-state / host-action / disconnect
  *
- * Phase 2 (new):
- *  • In-meeting chat        → chat-message / chat-history
- *  • Live participant status → status-update / peer-status
- *  • Raise hand             → raise-hand / lower-hand / hand-state
- *  • Reactions / emoji      → reaction / reaction-burst
+ * Phase 2 (existing):
+ *  • chat / reactions / status / raise-hand
+ *
+ * Phase 3 (new):
+ *  • Waiting room / lobby   → join-request / admit / reject / waiting / admitted
+ *  • Host transfer          → transfer-host / host-transferred / you-are-host / you-are-subhost
  */
 
-// ─── Room state ───────────────────────────────────────────────────────────────
-// roomId → Map<socketId, PeerInfo>
-const rooms = new Map();
+import Meeting from "../models/Meeting.js";
 
-// roomId → ChatMessage[]   (in-memory ring buffer, last 200 messages)
-const chatHistory = new Map();
+// ─── Room state ───────────────────────────────────────────────────────────────
+const rooms = new Map(); // roomId → Map<<socketId, PeerInfo>
+const chatHistory = new Map(); // roomId → ChatMessage[]
+const waitingRooms = new Map(); // roomId → Map<<socketId, WaitingPeer>
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const MAX_CHAT_HISTORY = 200;
@@ -45,6 +44,11 @@ function getRoom(roomId) {
   return rooms.get(roomId);
 }
 
+function getWaitingRoom(roomId) {
+  if (!waitingRooms.has(roomId)) waitingRooms.set(roomId, new Map());
+  return waitingRooms.get(roomId);
+}
+
 function getChatHistory(roomId) {
   if (!chatHistory.has(roomId)) chatHistory.set(roomId, []);
   return chatHistory.get(roomId);
@@ -53,7 +57,6 @@ function getChatHistory(roomId) {
 function pushChat(roomId, message) {
   const history = getChatHistory(roomId);
   history.push(message);
-  // Keep only the last MAX_CHAT_HISTORY messages
   if (history.length > MAX_CHAT_HISTORY) {
     history.splice(0, history.length - MAX_CHAT_HISTORY);
   }
@@ -61,9 +64,8 @@ function pushChat(roomId, message) {
 
 function sanitizeText(text) {
   if (typeof text !== "string") return "";
-  // Strip HTML tags, trim, cap length
   return text
-    .replace(/<[^>]*>/g, "")
+    .replace(/<<[^>]*>/g, "")
     .trim()
     .slice(0, 2000);
 }
@@ -75,38 +77,80 @@ export function initSignaling(io) {
     console.log(`[WS] connected: ${socket.id}`);
 
     // ─── JOIN ───────────────────────────────────────────────────────────────
-    socket.on("join-room", ({ roomId, username }) => {
+    socket.on("join-room", async ({ roomId, username, userId }) => {
       if (!roomId || !username) return;
 
-      socket.join(roomId);
       socket.data.roomId = roomId;
       socket.data.username = username;
+      socket.data.userId = userId;
 
+      const meeting = await Meeting.findOne({ meetingId: roomId });
+      const isHost = !!(
+        meeting &&
+        userId &&
+        meeting.host.toString() === userId
+      );
+
+      // Waiting room gate (active meetings only; instant meetings are active by default)
+      if (
+        meeting?.settings?.waitingRoom &&
+        !isHost &&
+        meeting.status === "active"
+      ) {
+        const waiting = getWaitingRoom(roomId);
+        waiting.set(socket.id, {
+          username,
+          userId,
+          socket,
+          requestedAt: Date.now(),
+        });
+
+        // Notify hosts already in the room
+        const room = getRoom(roomId);
+        if (room) {
+          room.forEach((peer, sid) => {
+            if (peer.isHost) {
+              io.to(sid).emit("join-request", {
+                socketId: socket.id,
+                username,
+                userId,
+              });
+            }
+          });
+        }
+
+        socket.emit("waiting", { message: "Waiting for host to admit you" });
+        console.log(`[WS] ${username} waiting in lobby for ${roomId}`);
+        return;
+      }
+
+      // Normal join
+      socket.join(roomId);
       const room = getRoom(roomId);
 
-      // Tell the newcomer who's already here
       const existingPeers = [];
       for (const [sid, info] of room.entries()) {
-        existingPeers.push({ socketId: sid, ...info });
+        if (sid !== socket.id) existingPeers.push({ socketId: sid, ...info });
       }
       socket.emit("room-peers", existingPeers);
-
-      // Send chat history to the newcomer
       socket.emit("chat-history", getChatHistory(roomId));
 
-      // Add newcomer to room state
-      room.set(socket.id, {
+      const peerData = {
         username,
         mic: true,
         cam: true,
         screen: false,
-        // Phase 2 state
         status: "available",
         handRaised: false,
         handRaisedAt: null,
-      });
+        isHost,
+        isSubHost: false,
+      };
 
-      // Notify everyone else
+      room.set(socket.id, peerData);
+
+      if (isHost) socket.emit("you-are-host");
+
       socket.to(roomId).emit("user-joined", {
         socketId: socket.id,
         username,
@@ -114,11 +158,134 @@ export function initSignaling(io) {
         cam: true,
         status: "available",
         handRaised: false,
+        isHost,
+        isSubHost: false,
       });
 
       console.log(
         `[WS] ${username} joined room ${roomId} (${room.size} peers)`,
       );
+    });
+
+    // ─── LOBBY CONTROLS ──────────────────────────────────────────────────────
+
+    socket.on("admit-participant", ({ targetSocketId }) => {
+      const roomId = socket.data.roomId;
+      if (!roomId || !socket.data.isHost) return;
+
+      const waiting = getWaitingRoom(roomId);
+      const waiter = waiting.get(targetSocketId);
+      if (!waiter) return;
+
+      waiting.delete(targetSocketId);
+      const targetSocket = io.sockets.sockets.get(targetSocketId);
+      if (!targetSocket) return;
+
+      targetSocket.join(roomId);
+      targetSocket.data.isAdmitted = true;
+
+      const room = getRoom(roomId);
+      const peerData = {
+        username: targetSocket.data.username,
+        mic: true,
+        cam: true,
+        screen: false,
+        status: "available",
+        handRaised: false,
+        handRaisedAt: null,
+        isHost: false,
+        isSubHost: false,
+      };
+      room.set(targetSocketId, peerData);
+
+      const existingPeers = [];
+      for (const [sid, info] of room.entries()) {
+        if (sid !== targetSocketId)
+          existingPeers.push({ socketId: sid, ...info });
+      }
+
+      targetSocket.emit("room-peers", existingPeers);
+      targetSocket.emit("admitted");
+      targetSocket.emit("chat-history", getChatHistory(roomId));
+
+      targetSocket.to(roomId).emit("user-joined", {
+        socketId: targetSocketId,
+        username: targetSocket.data.username,
+        mic: true,
+        cam: true,
+        status: "available",
+        handRaised: false,
+        isHost: false,
+        isSubHost: false,
+      });
+
+      console.log(`[WS] ${targetSocket.data.username} admitted to ${roomId}`);
+    });
+
+    socket.on("reject-participant", ({ targetSocketId }) => {
+      const roomId = socket.data.roomId;
+      if (!roomId || !socket.data.isHost) return;
+
+      const waiting = getWaitingRoom(roomId);
+      waiting.delete(targetSocketId);
+
+      io.to(targetSocketId).emit("join-rejected", {
+        reason: "Host declined your request",
+      });
+      const targetSocket = io.sockets.sockets.get(targetSocketId);
+      if (targetSocket) targetSocket.disconnect(true);
+    });
+
+    // ─── HOST TRANSFER ───────────────────────────────────────────────────────
+
+    socket.on("transfer-host", ({ targetSocketId, mode }) => {
+      const roomId = socket.data.roomId;
+      if (!roomId || !socket.data.isHost) return;
+
+      const room = getRoom(roomId);
+      const targetPeer = room.get(targetSocketId);
+      if (!targetPeer) return;
+
+      if (mode === "full") {
+        const oldHostPeer = room.get(socket.id);
+        if (oldHostPeer) {
+          oldHostPeer.isHost = false;
+          oldHostPeer.isSubHost = false;
+        }
+        socket.data.isHost = false;
+        socket.data.isSubHost = false;
+
+        targetPeer.isHost = true;
+        targetPeer.isSubHost = false;
+        const targetSocket = io.sockets.sockets.get(targetSocketId);
+        if (targetSocket) {
+          targetSocket.data.isHost = true;
+          targetSocket.data.isSubHost = false;
+        }
+
+        io.to(roomId).emit("host-transferred", {
+          mode: "full",
+          newHostSocketId: targetSocketId,
+          newHostUsername: targetPeer.username,
+          oldHostSocketId: socket.id,
+        });
+
+        io.to(targetSocketId).emit("you-are-host");
+        io.to(socket.id).emit("you-are-participant");
+      } else if (mode === "sub") {
+        targetPeer.isSubHost = true;
+        const targetSocket = io.sockets.sockets.get(targetSocketId);
+        if (targetSocket) targetSocket.data.isSubHost = true;
+
+        io.to(roomId).emit("host-transferred", {
+          mode: "sub",
+          targetSocketId,
+          targetUsername: targetPeer.username,
+          grantedBy: socket.id,
+        });
+
+        io.to(targetSocketId).emit("you-are-subhost");
+      }
     });
 
     // ─── WEBRTC SIGNALING ────────────────────────────────────────────────────
@@ -151,7 +318,6 @@ export function initSignaling(io) {
         if (mic !== undefined) peer.mic = mic;
         if (cam !== undefined) peer.cam = cam;
         if (screen !== undefined) peer.screen = screen;
-        // Auto-set status to "presenting" when screen sharing starts
         if (screen === true) peer.status = "presenting";
         if (screen === false && peer.status === "presenting")
           peer.status = "available";
@@ -175,11 +341,6 @@ export function initSignaling(io) {
     // PHASE 2: IN-MEETING CHAT
     // ════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Client emits: chat-message { text, replyTo? }
-     * Server broadcasts to room: chat-message { id, socketId, username, text, timestamp, replyTo? }
-     * Server also echoes back to sender so they see their own message rendered.
-     */
     socket.on("chat-message", ({ text, replyTo }) => {
       const roomId = socket.data.roomId;
       if (!roomId) return;
@@ -193,22 +354,14 @@ export function initSignaling(io) {
         username: socket.data.username,
         text: clean,
         timestamp: Date.now(),
-        replyTo: replyTo ?? null, // { id, username, text } of the message being replied to
+        replyTo: replyTo ?? null,
       };
 
-      // Persist to in-memory history
       pushChat(roomId, message);
-
-      // Broadcast to everyone in the room including sender
       io.to(roomId).emit("chat-message", message);
-
       console.log(`[Chat] ${message.username}: ${clean.slice(0, 60)}`);
     });
 
-    /**
-     * Client emits: chat-reaction { messageId, emoji }
-     * Server broadcasts: chat-reaction { messageId, emoji, socketId, username }
-     */
     socket.on("chat-reaction", ({ messageId, emoji }) => {
       const roomId = socket.data.roomId;
       if (!roomId || !messageId || !ALLOWED_REACTIONS.includes(emoji)) return;
@@ -221,11 +374,6 @@ export function initSignaling(io) {
       });
     });
 
-    /**
-     * Client emits: chat-typing { isTyping }
-     * Server broadcasts to others: chat-typing { socketId, username, isTyping }
-     * (Not stored — ephemeral)
-     */
     socket.on("chat-typing", ({ isTyping }) => {
       const roomId = socket.data.roomId;
       if (!roomId) return;
@@ -241,11 +389,6 @@ export function initSignaling(io) {
     // PHASE 2: LIVE PARTICIPANT STATUS
     // ════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Client emits: status-update { status }
-     * status ∈ { "available" | "busy" | "away" | "presenting" | "brb" }
-     * Server broadcasts to room: peer-status { socketId, username, status }
-     */
     socket.on("status-update", ({ status }) => {
       const roomId = socket.data.roomId;
       if (!roomId) return;
@@ -253,7 +396,6 @@ export function initSignaling(io) {
       const safeStatus = ALLOWED_STATUSES.includes(status)
         ? status
         : "available";
-
       const room = rooms.get(roomId);
       if (room?.has(socket.id)) {
         room.get(socket.id).status = safeStatus;
@@ -272,11 +414,6 @@ export function initSignaling(io) {
     // PHASE 2: RAISE HAND
     // ════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Client emits: raise-hand {}
-     * Server broadcasts to room: hand-raised { socketId, username, handRaisedAt }
-     * Hand is lowered by: lower-hand or host-action "lower-hand"
-     */
     socket.on("raise-hand", () => {
       const roomId = socket.data.roomId;
       if (!roomId) return;
@@ -284,7 +421,7 @@ export function initSignaling(io) {
       const room = rooms.get(roomId);
       if (room?.has(socket.id)) {
         const peer = room.get(socket.id);
-        if (peer.handRaised) return; // debounce — already raised
+        if (peer.handRaised) return;
         peer.handRaised = true;
         peer.handRaisedAt = Date.now();
       }
@@ -298,10 +435,6 @@ export function initSignaling(io) {
       console.log(`[Hand] ${socket.data.username} raised hand`);
     });
 
-    /**
-     * Client emits: lower-hand {}
-     * Server broadcasts: hand-lowered { socketId }
-     */
     socket.on("lower-hand", () => {
       const roomId = socket.data.roomId;
       if (!roomId) return;
@@ -314,14 +447,9 @@ export function initSignaling(io) {
       }
 
       io.to(roomId).emit("hand-lowered", { socketId: socket.id });
-
       console.log(`[Hand] ${socket.data.username} lowered hand`);
     });
 
-    /**
-     * Host can lower any participant's hand
-     * Client emits: host-lower-hand { targetSocketId }
-     */
     socket.on("host-lower-hand", ({ targetSocketId }) => {
       const roomId = socket.data.roomId;
       if (!roomId) return;
@@ -334,7 +462,6 @@ export function initSignaling(io) {
       }
 
       io.to(roomId).emit("hand-lowered", { socketId: targetSocketId });
-      // Also notify the target so they see their own hand lowered
       io.to(targetSocketId).emit("host-action", { action: "lower-hand" });
     });
 
@@ -342,11 +469,6 @@ export function initSignaling(io) {
     // PHASE 2: REACTIONS / EMOJI BURSTS
     // ════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Client emits: reaction { emoji }
-     * Server validates and broadcasts to room: reaction { socketId, username, emoji, id }
-     * The "id" lets clients deduplicate burst animations.
-     */
     socket.on("reaction", ({ emoji }) => {
       const roomId = socket.data.roomId;
       if (!roomId) return;
@@ -374,15 +496,17 @@ export function initSignaling(io) {
         room.delete(socket.id);
         if (room.size === 0) {
           rooms.delete(roomId);
-          // Keep chat history a bit longer — clear only when room fully empty
-          // Uncomment below to purge immediately:
-          // chatHistory.delete(roomId);
         }
       }
 
-      socket.to(roomId).emit("user-left", { socketId: socket.id });
+      // Clean waiting room too
+      const waiting = waitingRooms.get(roomId);
+      if (waiting) {
+        waiting.delete(socket.id);
+        if (waiting.size === 0) waitingRooms.delete(roomId);
+      }
 
-      // Notify room that typing stopped (if they were typing)
+      socket.to(roomId).emit("user-left", { socketId: socket.id });
       socket.to(roomId).emit("chat-typing", {
         socketId: socket.id,
         username: socket.data.username,
@@ -394,4 +518,4 @@ export function initSignaling(io) {
   });
 }
 
-export { rooms, chatHistory };
+export { rooms, chatHistory, waitingRooms };
