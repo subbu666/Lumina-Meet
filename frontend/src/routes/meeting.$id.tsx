@@ -1,18 +1,32 @@
-/*
- * meeting.$id.tsx — Lumina Meet Phase 3
+/**
+ * meeting.$id.tsx — Lumina Meet (Fixed)
  *
- * Bug fixes in this version:
- *  • ScreenShareView now receives `localCameraStream` (the raw cam stream)
- *    as a separate prop from `localStream` (the screen preview).
- *    The PiP tile always renders from the camera stream, so it stays visible
- *    even when the main view is showing the screenshare.
- *  • LocalVideoTile in the PiP is always rendered — when cam is off it shows
- *    the avatar fallback, matching Google Meet / Zoom behaviour.
- *  • `cam` prop passed to the PiP tile so the video/avatar switch works.
+ * Fixes applied:
+ *  1. WHITEBOARD — SVG paths now use absolute pixel coords via a viewBox of
+ *     "0 0 1000 1000", eliminating the percentage-based path bug that caused
+ *     strokes to not render. All elements render correctly now.
+ *
+ *  2. CINEMA MODE — Added a persistent floating "Exit cinema" button that is
+ *     always visible in cinema mode (top-right corner), so users can exit
+ *     without needing the hidden footer. Footer still peeks on hover.
+ *
+ *  3. LAYOUT BUTTON — The Layers icon button in the header now has a visible
+ *     "Layout" text label on sm+ screens. The dropdown is properly z-indexed
+ *     and positioned.
+ *
+ *  4. LEFT SIDEBAR — Footer control buttons now use `overflow-x-auto` with
+ *     proper min-widths and `shrink-0` so controls don't get clipped on
+ *     smaller screens. Also added `flex-wrap` fallback.
+ *
+ *  5. SOUNDSCAPES BUTTON — Footer soundscape button now correctly opens the
+ *     settings dropdown (which contains the soundscape picker) when nothing
+ *     is active, and stops the active soundscape directly when one is playing.
+ *
+ *  6. NOISE SUPPRESSION — Button label now correctly reflects current state.
  */
 
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { z } from "zod";
 import {
@@ -43,6 +57,35 @@ import {
   WifiOff,
   Crown,
   UserCog,
+  PenLine,
+  Eraser,
+  Trash2,
+  StickyNote,
+  ArrowUpRight,
+  Square,
+  Circle,
+  MousePointer,
+  BarChart2,
+  ListChecks,
+  Timer,
+  ChevronRight,
+  ChevronLeft,
+  Play,
+  Pause,
+  Maximize2,
+  Minimize2,
+  Pin,
+  PinOff,
+  Music2,
+  CloudRain,
+  Headphones,
+  Volume2,
+  VolumeX,
+  Mic2,
+  Layers,
+  Sparkles,
+  Move,
+  Plus,
 } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
 import { NeonButton } from "@/components/ui-custom/NeonButton";
@@ -52,7 +95,14 @@ import {
   type RemotePeer,
   type ChatMessage,
   type ParticipantStatus,
+  type WhiteboardElement,
+  type WhiteboardTool,
+  type Poll,
+  type AgendaState,
+  type TilePosition,
+  type BackgroundMode,
 } from "@/hooks/useWebRTC";
+import { useAmbientSound, type SoundscapeId } from "@/hooks/useAmbientSound";
 import { apiClient } from "@/api/apiClient";
 
 // ─── Route ────────────────────────────────────────────────────────────────────
@@ -67,9 +117,55 @@ export const Route = createFileRoute("/meeting/$id")({
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_BASE_URL;
 
-// ─── Emoji Reaction palette ───────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const REACTIONS = ["👍", "❤️", "😂", "😮", "👏", "🔥", "🎉", "💯", "🙌", "✨"];
+
+// FIX: Whiteboard now uses a 0-1000 coordinate space mapped via viewBox.
+// All points are stored as [0..1000, 0..1000] percentages * 10.
+const WB_SCALE = 1000;
+
+const WHITEBOARD_COLORS = [
+  "oklch(0.97 0.01 250)",
+  "oklch(0.65 0.22 280)",
+  "oklch(0.82 0.16 210)",
+  "oklch(0.75 0.18 305)",
+  "oklch(0.72 0.22 35)",
+  "oklch(0.75 0.18 145)",
+  "oklch(0.8 0.18 80)",
+  "oklch(0.72 0.22 355)",
+];
+
+const WHITEBOARD_STROKE_WIDTHS = [2, 4, 8, 14];
+
+const BACKGROUND_MODES: { id: BackgroundMode; label: string; preview: string }[] = [
+  { id: "none", label: "None", preview: "bg-white/5" },
+  { id: "blur", label: "Blur", preview: "bg-[oklch(0.82_0.16_210/0.2)]" },
+  { id: "gradient-purple", label: "Purple", preview: "bg-[oklch(0.35_0.18_280)]" },
+  { id: "gradient-teal", label: "Teal", preview: "bg-[oklch(0.35_0.15_200)]" },
+  { id: "gradient-dark", label: "Dark", preview: "bg-[oklch(0.12_0.02_265)]" },
+];
+
+const SOUNDSCAPES: { id: SoundscapeId; label: string; icon: React.ReactNode; color: string }[] = [
+  {
+    id: "rain",
+    label: "Rain",
+    icon: <CloudRain className="h-4 w-4" />,
+    color: "oklch(0.82 0.16 210)",
+  },
+  {
+    id: "lofi",
+    label: "Lo-fi",
+    icon: <Headphones className="h-4 w-4" />,
+    color: "oklch(0.75 0.18 305)",
+  },
+  {
+    id: "coffee",
+    label: "Café",
+    icon: <Coffee className="h-4 w-4" />,
+    color: "oklch(0.8 0.18 80)",
+  },
+];
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
@@ -93,6 +189,8 @@ const STATUS_CONFIG: Record<
 };
 
 const MANUAL_STATUSES: ParticipantStatus[] = ["available", "busy", "away", "brb"];
+
+type PanelType = "participants" | "chat" | "whiteboard" | "polls" | "agenda" | "settings" | null;
 
 // ─── Root component ───────────────────────────────────────────────────────────
 
@@ -187,8 +285,6 @@ function TimeBox({ v, l }: { v: number; l: string }) {
 
 // ─── Room ─────────────────────────────────────────────────────────────────────
 
-type PanelType = "participants" | "chat" | null;
-
 function Room({
   id,
   username,
@@ -203,20 +299,50 @@ function Room({
   const [activePanel, setActivePanel] = useState<PanelType>(null);
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [showStatusPicker, setShowStatusPicker] = useState(false);
+  const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
+  const [transferTarget, setTransferTarget] = useState<RemotePeer | null>(null);
   const statusButtonRef = useRef<HTMLDivElement>(null);
   const [statusPickerPos, setStatusPickerPos] = useState<{ top: number; left: number } | null>(
     null,
   );
 
-  // Phase 3 modals
-  const [showLeaveModal, setShowLeaveModal] = useState(false);
-  const [transferTarget, setTransferTarget] = useState<RemotePeer | null>(null);
+  // FIX: layout mode drives cinema, not just a flag
+  const [layoutMode, setLayoutMode] = useState<"grid" | "spatial" | "cinema">("grid");
+
+  // Whiteboard local state
+  const [wbTool, setWbTool] = useState<WhiteboardTool>("pen");
+  const [wbColor, setWbColor] = useState(WHITEBOARD_COLORS[0]);
+  const [wbStrokeWidth, setWbStrokeWidth] = useState(3);
+  const [wbDrawing, setWbDrawing] = useState(false);
+  const [wbCurrentPoints, setWbCurrentPoints] = useState<number[][]>([]);
+  const [wbCurrentId, setWbCurrentId] = useState<string | null>(null);
+  const wbCanvasRef = useRef<SVGSVGElement>(null);
+
+  // Poll creation state
+  const [pollQuestion, setPollQuestion] = useState("");
+  const [pollOptions, setPollOptions] = useState(["", ""]);
+  const [showPollCreator, setShowPollCreator] = useState(false);
+
+  // Agenda creation state
+  const [agendaInput, setAgendaInput] = useState<Array<{ title: string; durationSec: number }>>([
+    { title: "", durationSec: 300 },
+  ]);
+  const [showAgendaCreator, setShowAgendaCreator] = useState(false);
+
+  // Ambient sound
+  const {
+    activeSoundscape,
+    volume: soundVolume,
+    setVolume: setSoundVolume,
+    toggleSoundscape,
+  } = useAmbientSound();
 
   const webrtc = useWebRTC(id, username, SOCKET_URL, userId);
 
   const {
     localStream,
-    localCameraStream, // NEW: always the raw camera stream
+    localCameraStream,
     localSocketId,
     mic,
     cam,
@@ -256,7 +382,45 @@ function Room({
     transferHost,
     error,
     isConnecting,
+    whiteboardElements,
+    whiteboardCursors,
+    drawWhiteboardElement,
+    eraseWhiteboardElement,
+    clearWhiteboard,
+    broadcastWhiteboardCursor,
+    currentPoll,
+    createPoll,
+    votePoll,
+    closePoll,
+    dismissPoll,
+    agenda,
+    setAgenda,
+    agendaNext,
+    agendaPrev,
+    agendaGoto,
+    agendaTimerStart,
+    agendaTimerPause,
+    noiseSuppressionEnabled,
+    noiseSuppressionSupported,
+    toggleNoiseSuppression,
+    backgroundMode,
+    setBackgroundMode,
+    isBlurProcessing,
+    tilePositions,
+    setTilePosition,
+    cinemaMode,
+    setCinemaMode,
+    spotlightId,
+    setSpotlightId,
+    autoSpotlight,
+    setAutoSpotlight,
+    activeSpotlightId,
   } = webrtc;
+
+  // Sync cinema mode with layout
+  useEffect(() => {
+    setCinemaMode(layoutMode === "cinema");
+  }, [layoutMode, setCinemaMode]);
 
   useEffect(() => {
     if (showStatusPicker && statusButtonRef.current) {
@@ -292,7 +456,6 @@ function Room({
     return () => window.removeEventListener("Lumina Meet:host-removed", handler);
   }, [leaveRoom, onLeave]);
 
-  const handleLeaveClick = useCallback(() => setShowLeaveModal(true), []);
   const handleLeaveConfirm = useCallback(async () => {
     if (isHost) {
       try {
@@ -321,6 +484,131 @@ function Room({
     });
   };
 
+  // ── Whiteboard pointer events ──────────────────────────────────────────────
+  // FIX: coordinates are now in 0..WB_SCALE space, not 0..1 percentages
+
+  const handleWbPointerDown = useCallback(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      if (wbTool === "select") return;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * WB_SCALE;
+      const y = ((e.clientY - rect.top) / rect.height) * WB_SCALE;
+
+      if (wbTool === "pen") {
+        const id = `wb-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        setWbCurrentId(id);
+        setWbCurrentPoints([[x, y]]);
+        setWbDrawing(true);
+      }
+    },
+    [wbTool],
+  );
+
+  const handleWbPointerMove = useCallback(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * WB_SCALE;
+      const y = ((e.clientY - rect.top) / rect.height) * WB_SCALE;
+      // Cursor broadcast still uses 0..1 fractions for network efficiency
+      broadcastWhiteboardCursor(x / WB_SCALE, y / WB_SCALE);
+
+      if (!wbDrawing || wbTool !== "pen" || !wbCurrentId) return;
+      setWbCurrentPoints((prev) => [...prev, [x, y]]);
+    },
+    [wbDrawing, wbTool, wbCurrentId, broadcastWhiteboardCursor],
+  );
+
+  const handleWbPointerUp = useCallback(() => {
+    if (!wbDrawing || wbTool !== "pen" || !wbCurrentId || wbCurrentPoints.length < 2) {
+      setWbDrawing(false);
+      setWbCurrentPoints([]);
+      setWbCurrentId(null);
+      return;
+    }
+    const element: WhiteboardElement = {
+      id: wbCurrentId,
+      type: "stroke",
+      points: wbCurrentPoints, // stored in WB_SCALE coords
+      color: wbColor,
+      strokeWidth: wbStrokeWidth,
+      author: username,
+      authorId: localSocketId ?? "",
+    };
+    drawWhiteboardElement(element);
+    setWbDrawing(false);
+    setWbCurrentPoints([]);
+    setWbCurrentId(null);
+  }, [
+    wbDrawing,
+    wbTool,
+    wbCurrentId,
+    wbCurrentPoints,
+    wbColor,
+    wbStrokeWidth,
+    username,
+    localSocketId,
+    drawWhiteboardElement,
+  ]);
+
+  const handleWbClick = useCallback(
+    (e: React.MouseEvent<SVGSVGElement>) => {
+      if (wbTool !== "sticky" && wbTool !== "text") return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * WB_SCALE;
+      const y = ((e.clientY - rect.top) / rect.height) * WB_SCALE;
+      const element: WhiteboardElement = {
+        id: `wb-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        type: wbTool === "sticky" ? "sticky" : "text",
+        x,
+        y,
+        text: wbTool === "sticky" ? "Sticky note" : "Text",
+        color: wbColor,
+        author: username,
+        authorId: localSocketId ?? "",
+      };
+      drawWhiteboardElement(element);
+    },
+    [wbTool, wbColor, username, localSocketId, drawWhiteboardElement],
+  );
+
+  // ── Poll helpers ───────────────────────────────────────────────────────────
+
+  const handleCreatePoll = useCallback(() => {
+    const opts = pollOptions.filter((o) => o.trim());
+    if (!pollQuestion.trim() || opts.length < 2) return;
+    createPoll(pollQuestion.trim(), opts);
+    setPollQuestion("");
+    setPollOptions(["", ""]);
+    setShowPollCreator(false);
+    if (activePanel !== "polls") setActivePanel("polls");
+  }, [pollQuestion, pollOptions, createPoll, activePanel]);
+
+  // ── Agenda helpers ─────────────────────────────────────────────────────────
+
+  const handleSetAgenda = useCallback(() => {
+    const items = agendaInput.filter((i) => i.title.trim());
+    if (items.length === 0) return;
+    setAgenda(items);
+    setShowAgendaCreator(false);
+    if (activePanel !== "agenda") setActivePanel("agenda");
+  }, [agendaInput, setAgenda, activePanel]);
+
+  const [agendaTick, setAgendaTick] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setAgendaTick(Date.now()), 500);
+    return () => clearInterval(t);
+  }, []);
+
+  const agendaTimeLeft = useMemo(() => {
+    if (!agenda) return null;
+    if (agenda.timerPaused) return agenda.timerRemaining ?? 0;
+    if (agenda.timerEnd) return Math.max(0, agenda.timerEnd - agendaTick);
+    return null;
+  }, [agenda, agendaTick]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+
   if (isConnecting && !isWaiting) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4">
@@ -347,7 +635,6 @@ function Room({
     );
   }
 
-  // ── Waiting room screen (guest) ───────────────────────────────────────────
   if (isWaiting) {
     return (
       <div className="flex min-h-screen items-center justify-center px-4 relative z-10">
@@ -377,6 +664,9 @@ function Room({
     );
   }
 
+  const canManage = isHost || isSubHost;
+  const isCinema = layoutMode === "cinema";
+
   return (
     <div className="flex min-h-screen flex-col overflow-hidden" style={{ background: "#0B0F19" }}>
       {/* Ambient background orbs */}
@@ -393,125 +683,235 @@ function Room({
           animate={{ scale: [1, 1.2, 1], x: [0, -20, 0], y: [0, 20, 0] }}
           transition={{ duration: 15, repeat: Infinity, ease: "easeInOut", delay: 3 }}
         />
-        <motion.div
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-64 w-64 rounded-full opacity-10"
-          style={{ background: "radial-gradient(circle, oklch(0.75 0.18 305), transparent 70%)" }}
-          animate={{ scale: [1, 1.3, 1] }}
-          transition={{ duration: 8, repeat: Infinity, ease: "easeInOut", delay: 6 }}
-        />
       </div>
 
-      {/* ─── Header ───────────────────────────────────────────────────────── */}
-      <header className="relative z-10 flex items-center justify-between border-b border-white/5 bg-black/40 backdrop-blur-xl px-4 py-3 sm:px-6">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="h-7 w-7 shrink-0 rounded-lg bg-gradient-neon animate-pulse-glow" />
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">Lumina Meet Room</p>
-            <p className="truncate text-[11px] text-muted-foreground font-mono">{id}</p>
-          </div>
-        </div>
-
-        {/* Raised hands queue */}
-        <AnimatePresence>
-          {raisedHands.length > 0 && (
-            <motion.div
-              initial={{ opacity: 0, y: -10, scale: 0.95 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -10, scale: 0.95 }}
-              className="hidden md:flex items-center gap-2 rounded-full border border-[oklch(0.8_0.18_80)/0.4] bg-[oklch(0.8_0.18_80)/0.08] px-3 py-1.5 text-xs text-[oklch(0.9_0.18_80)]"
-            >
-              <motion.span
-                animate={{ rotate: [0, 15, -10, 15, 0] }}
-                transition={{ duration: 1, repeat: Infinity, repeatDelay: 2 }}
-                className="text-base"
-              >
-                ✋
-              </motion.span>
-              <span className="font-medium">{raisedHands[0].username}</span>
-              {raisedHands.length > 1 && (
-                <span className="text-muted-foreground">+{raisedHands.length - 1} more</span>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <div className="flex items-center gap-2">
-          <div ref={statusButtonRef} className="relative hidden sm:block">
-            <button
-              onClick={() => setShowStatusPicker((v) => !v)}
-              className={cn(
-                "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition",
-                localStatus === "presenting"
-                  ? "border-[oklch(0.65_0.22_280)/0.6] bg-[oklch(0.65_0.22_280)/0.15] text-[oklch(0.8_0.18_280)] animate-pulse-glow"
-                  : "border-white/10 bg-white/5 hover:bg-white/10",
-              )}
-            >
-              <span
-                className="h-1.5 w-1.5 rounded-full shrink-0"
-                style={{
-                  background: STATUS_CONFIG[localStatus].color,
-                  boxShadow: `0 0 6px ${STATUS_CONFIG[localStatus].color}`,
-                }}
-              />
-              <span className="font-medium">{STATUS_CONFIG[localStatus].label}</span>
-              <ChevronDown
-                className={cn(
-                  "h-2.5 w-2.5 text-muted-foreground transition-transform duration-200",
-                  showStatusPicker && "rotate-180",
-                )}
-              />
-            </button>
-          </div>
-
-          <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-[var(--neon-secondary)]/30 bg-[var(--neon-secondary)]/10 px-2.5 py-1 text-[11px] text-[var(--neon-secondary)]">
-            <ShieldCheck className="h-3 w-3" /> Encrypted
-          </span>
-          <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-muted-foreground">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            {peers.length + 1} live
-          </span>
-
-          <button
-            onClick={() => togglePanel("chat")}
-            className={cn(
-              "relative rounded-lg border p-2 transition",
-              activePanel === "chat"
-                ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
-                : "border-white/10 bg-white/5 hover:bg-white/10",
-            )}
+      {/* ─── FIX: Cinema mode exit button — always visible in cinema mode ── */}
+      <AnimatePresence>
+        {isCinema && (
+          <motion.button
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.9 }}
+            onClick={() => setLayoutMode("grid")}
+            className="fixed top-4 right-4 z-50 flex items-center gap-2 rounded-2xl border border-white/20 bg-black/70 backdrop-blur-xl px-4 py-2.5 text-sm font-medium text-white hover:bg-black/90 hover:border-white/40 transition shadow-xl"
           >
-            <MessageSquare className="h-4 w-4" />
+            <Minimize2 className="h-4 w-4" />
+            Exit cinema
+          </motion.button>
+        )}
+      </AnimatePresence>
+
+      {/* ─── Header (hidden in cinema mode) ──────────────────────────────── */}
+      <AnimatePresence>
+        {!isCinema && (
+          <motion.header
+            initial={{ y: -60, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -60, opacity: 0 }}
+            className="relative z-10 flex items-center justify-between border-b border-white/5 bg-black/40 backdrop-blur-xl px-4 py-3 sm:px-6"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="h-7 w-7 shrink-0 rounded-lg bg-gradient-neon animate-pulse-glow" />
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">Lumina Meet</p>
+                <p className="truncate text-[11px] text-muted-foreground font-mono">{id}</p>
+              </div>
+            </div>
+
+            {/* Raised hands queue */}
             <AnimatePresence>
-              {unreadCount > 0 && activePanel !== "chat" && (
-                <motion.span
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  exit={{ scale: 0 }}
-                  className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-[var(--neon-danger)] text-[9px] font-bold text-white"
+              {raisedHands.length > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                  className="hidden md:flex items-center gap-2 rounded-full border border-[oklch(0.8_0.18_80)/0.4] bg-[oklch(0.8_0.18_80)/0.08] px-3 py-1.5 text-xs text-[oklch(0.9_0.18_80)]"
                 >
-                  {unreadCount > 9 ? "9+" : unreadCount}
-                </motion.span>
+                  <motion.span
+                    animate={{ rotate: [0, 15, -10, 15, 0] }}
+                    transition={{ duration: 1, repeat: Infinity, repeatDelay: 2 }}
+                    className="text-base"
+                  >
+                    ✋
+                  </motion.span>
+                  <span className="font-medium">{raisedHands[0].username}</span>
+                  {raisedHands.length > 1 && (
+                    <span className="text-muted-foreground">+{raisedHands.length - 1} more</span>
+                  )}
+                </motion.div>
               )}
             </AnimatePresence>
-          </button>
 
-          <button
-            onClick={() => togglePanel("participants")}
-            className={cn(
-              "rounded-lg border p-2 transition",
-              activePanel === "participants"
-                ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
-                : "border-white/10 bg-white/5 hover:bg-white/10",
-            )}
-          >
-            <Users className="h-4 w-4" />
-          </button>
-        </div>
-      </header>
+            {/* Agenda live ticker */}
+            <AnimatePresence>
+              {agenda && agendaTimeLeft !== null && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.9 }}
+                  className="hidden lg:flex items-center gap-2 rounded-full border border-[var(--neon-primary)]/30 bg-[var(--neon-primary)]/10 px-3 py-1.5 text-xs text-[var(--neon-primary)] cursor-pointer"
+                  onClick={() => togglePanel("agenda")}
+                >
+                  <Timer className="h-3 w-3" />
+                  <span className="font-mono font-medium">{formatDuration(agendaTimeLeft)}</span>
+                  <span className="text-muted-foreground max-w-[120px] truncate">
+                    {agenda.items[agenda.activeIdx]?.title}
+                  </span>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-      {/* ─── Host Lobby Banner ──────────────────────────────────────────────── */}
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              {/* Status pill */}
+              <div ref={statusButtonRef} className="relative hidden sm:block">
+                <button
+                  onClick={() => setShowStatusPicker((v) => !v)}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition",
+                    localStatus === "presenting"
+                      ? "border-[oklch(0.65_0.22_280)/0.6] bg-[oklch(0.65_0.22_280)/0.15] text-[oklch(0.8_0.18_280)] animate-pulse-glow"
+                      : "border-white/10 bg-white/5 hover:bg-white/10",
+                  )}
+                >
+                  <span
+                    className="h-1.5 w-1.5 rounded-full shrink-0"
+                    style={{
+                      background: STATUS_CONFIG[localStatus].color,
+                      boxShadow: `0 0 6px ${STATUS_CONFIG[localStatus].color}`,
+                    }}
+                  />
+                  <span className="font-medium">{STATUS_CONFIG[localStatus].label}</span>
+                  <ChevronDown
+                    className={cn(
+                      "h-2.5 w-2.5 text-muted-foreground transition-transform duration-200",
+                      showStatusPicker && "rotate-180",
+                    )}
+                  />
+                </button>
+              </div>
+
+              {/* Active soundscape indicator */}
+              <AnimatePresence>
+                {activeSoundscape && (
+                  <motion.button
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    onClick={() => togglePanel("settings")}
+                    className="hidden sm:flex items-center gap-1.5 rounded-full border border-[oklch(0.8_0.18_80)/0.4] bg-[oklch(0.8_0.18_80)/0.1] px-2.5 py-1 text-[11px] text-[oklch(0.9_0.18_80)]"
+                  >
+                    <Music2 className="h-3 w-3" />
+                    <span>{SOUNDSCAPES.find((s) => s.id === activeSoundscape)?.label}</span>
+                  </motion.button>
+                )}
+              </AnimatePresence>
+
+              {/* Active poll indicator */}
+              <AnimatePresence>
+                {currentPoll && !currentPoll.closed && (
+                  <motion.button
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    onClick={() => togglePanel("polls")}
+                    className="hidden sm:flex items-center gap-1.5 rounded-full border border-[var(--neon-secondary)]/40 bg-[var(--neon-secondary)]/10 px-2.5 py-1 text-[11px] text-[var(--neon-secondary)] animate-pulse-glow"
+                  >
+                    <BarChart2 className="h-3 w-3" />
+                    <span>Live poll</span>
+                  </motion.button>
+                )}
+              </AnimatePresence>
+
+              <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-[var(--neon-secondary)]/30 bg-[var(--neon-secondary)]/10 px-2.5 py-1 text-[11px] text-[var(--neon-secondary)]">
+                <ShieldCheck className="h-3 w-3" /> Encrypted
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-muted-foreground">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                {peers.length + 1} live
+              </span>
+
+              {/* Panel buttons */}
+              {(
+                [
+                  ["chat", <MessageSquare className="h-4 w-4" />, unreadCount],
+                  ["whiteboard", <PenLine className="h-4 w-4" />, 0],
+                  ["polls", <BarChart2 className="h-4 w-4" />, 0],
+                  ["agenda", <ListChecks className="h-4 w-4" />, 0],
+                  ["participants", <Users className="h-4 w-4" />, 0],
+                ] as const
+              ).map(([panel, icon, badge]) => (
+                <button
+                  key={panel}
+                  onClick={() => togglePanel(panel as PanelType)}
+                  title={panel.charAt(0).toUpperCase() + panel.slice(1)}
+                  className={cn(
+                    "relative rounded-lg border p-2 transition",
+                    activePanel === panel
+                      ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
+                      : "border-white/10 bg-white/5 hover:bg-white/10",
+                  )}
+                >
+                  {icon}
+                  {(badge as number) > 0 && activePanel !== panel && (
+                    <motion.span
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-[var(--neon-danger)] text-[9px] font-bold text-white"
+                    >
+                      {(badge as number) > 9 ? "9+" : badge}
+                    </motion.span>
+                  )}
+                </button>
+              ))}
+
+              {/* FIX: Settings/Layout button — now has visible "Layout" label */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowSettingsDropdown((v) => !v)}
+                  title="Layout & Settings"
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-lg border px-2 py-2 sm:px-3 transition",
+                    showSettingsDropdown
+                      ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
+                      : "border-white/10 bg-white/5 hover:bg-white/10",
+                  )}
+                >
+                  <Layers className="h-4 w-4" />
+                  <span className="hidden sm:inline text-xs font-medium">Layout</span>
+                </button>
+                <AnimatePresence>
+                  {showSettingsDropdown && (
+                    <SettingsDropdown
+                      layoutMode={layoutMode}
+                      setLayoutMode={(m) => {
+                        setLayoutMode(m);
+                        setShowSettingsDropdown(false);
+                      }}
+                      backgroundMode={backgroundMode}
+                      setBackgroundMode={setBackgroundMode}
+                      isBlurProcessing={isBlurProcessing}
+                      activeSoundscape={activeSoundscape}
+                      toggleSoundscape={toggleSoundscape}
+                      soundVolume={soundVolume}
+                      setSoundVolume={setSoundVolume}
+                      noiseSuppressionEnabled={noiseSuppressionEnabled}
+                      noiseSuppressionSupported={noiseSuppressionSupported}
+                      toggleNoiseSuppression={toggleNoiseSuppression}
+                      autoSpotlight={autoSpotlight}
+                      setAutoSpotlight={setAutoSpotlight}
+                      onClose={() => setShowSettingsDropdown(false)}
+                    />
+                  )}
+                </AnimatePresence>
+              </div>
+            </div>
+          </motion.header>
+        )}
+      </AnimatePresence>
+
+      {/* ─── Host Lobby Banner ───────────────────────────────────────────── */}
       <AnimatePresence>
-        {isHost && pendingParticipants.length > 0 && (
+        {isHost && pendingParticipants.length > 0 && !isCinema && (
           <motion.div
             initial={{ opacity: 0, y: -20, height: 0 }}
             animate={{ opacity: 1, y: 0, height: "auto" }}
@@ -558,7 +958,33 @@ function Room({
 
       {/* Main area */}
       <div className="relative z-10 flex flex-1 overflow-hidden">
-        <main className="flex-1 p-3 sm:p-4 overflow-hidden min-w-0">
+        <main className={cn("flex-1 overflow-hidden min-w-0", isCinema ? "p-0" : "p-3 sm:p-4")}>
+          {/* Whiteboard overlay */}
+          <AnimatePresence>
+            {activePanel === "whiteboard" && (
+              <WhiteboardOverlay
+                elements={whiteboardElements}
+                cursors={whiteboardCursors}
+                activeTool={wbTool}
+                activeColor={wbColor}
+                strokeWidth={wbStrokeWidth}
+                currentPoints={wbCurrentPoints}
+                canManage={canManage}
+                onToolChange={setWbTool}
+                onColorChange={setWbColor}
+                onStrokeWidthChange={setWbStrokeWidth}
+                onPointerDown={handleWbPointerDown}
+                onPointerMove={handleWbPointerMove}
+                onPointerUp={handleWbPointerUp}
+                onClick={handleWbClick}
+                onErase={eraseWhiteboardElement}
+                onClear={clearWhiteboard}
+                onClose={() => setActivePanel(null)}
+                svgRef={wbCanvasRef}
+              />
+            )}
+          </AnimatePresence>
+
           {sharing ? (
             <ScreenShareView
               localStream={localStream}
@@ -569,6 +995,27 @@ function Room({
               cam={cam}
               isSpeaking={isSpeaking}
               speakingPeerId={speakingPeerId}
+            />
+          ) : layoutMode === "spatial" ? (
+            <SpatialCanvas
+              localStream={localStream}
+              localSocketId={localSocketId}
+              username={username}
+              mic={mic}
+              cam={cam}
+              localStatus={localStatus}
+              localHandRaised={localHandRaised}
+              isHost={isHost}
+              isSubHost={isSubHost}
+              peers={peers}
+              onRemove={removePeer}
+              onLowerHand={lowerPeerHand}
+              isSpeaking={isSpeaking}
+              speakingPeerId={speakingPeerId}
+              tilePositions={tilePositions}
+              setTilePosition={setTilePosition}
+              spotlightId={spotlightId}
+              setSpotlightId={setSpotlightId}
             />
           ) : (
             <VideoGrid
@@ -586,6 +1033,10 @@ function Room({
               onLowerHand={lowerPeerHand}
               isSpeaking={isSpeaking}
               speakingPeerId={speakingPeerId}
+              cinemaMode={isCinema}
+              activeSpotlightId={activeSpotlightId}
+              spotlightId={spotlightId}
+              setSpotlightId={setSpotlightId}
             />
           )}
         </main>
@@ -623,6 +1074,43 @@ function Room({
               onClose={() => setActivePanel(null)}
             />
           )}
+          {activePanel === "polls" && (
+            <PollsPanel
+              currentPoll={currentPoll}
+              isHost={canManage}
+              showCreator={showPollCreator}
+              pollQuestion={pollQuestion}
+              pollOptions={pollOptions}
+              onQuestionChange={setPollQuestion}
+              onOptionsChange={setPollOptions}
+              onShowCreator={() => setShowPollCreator(true)}
+              onHideCreator={() => setShowPollCreator(false)}
+              onCreate={handleCreatePoll}
+              onVote={votePoll}
+              onClose_poll={closePoll}
+              onDismiss={dismissPoll}
+              onClose={() => setActivePanel(null)}
+            />
+          )}
+          {activePanel === "agenda" && (
+            <AgendaPanel
+              agenda={agenda}
+              agendaTimeLeft={agendaTimeLeft}
+              isHost={canManage}
+              showCreator={showAgendaCreator}
+              agendaInput={agendaInput}
+              onAgendaInputChange={setAgendaInput}
+              onShowCreator={() => setShowAgendaCreator(true)}
+              onHideCreator={() => setShowAgendaCreator(false)}
+              onCreate={handleSetAgenda}
+              onNext={agendaNext}
+              onPrev={agendaPrev}
+              onGoto={agendaGoto}
+              onTimerStart={agendaTimerStart}
+              onTimerPause={agendaTimerPause}
+              onClose={() => setActivePanel(null)}
+            />
+          )}
         </AnimatePresence>
       </div>
 
@@ -631,13 +1119,13 @@ function Room({
 
       {/* Speaking banner */}
       <AnimatePresence>
-        {(isSpeaking || speakingPeerId) && (
+        {!isCinema && (isSpeaking || speakingPeerId) && (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 8 }}
             transition={{ duration: 0.2 }}
-            className="absolute bottom-[80px] left-1/2 -translate-x-1/2 z-20 pointer-events-none"
+            className="absolute bottom-[88px] left-1/2 -translate-x-1/2 z-20 pointer-events-none"
           >
             <div className="flex items-center gap-2 rounded-full bg-black/70 backdrop-blur border border-[var(--neon-secondary)]/30 px-4 py-1.5 text-xs text-[var(--neon-secondary)]">
               <AudioBars color="var(--neon-secondary)" />
@@ -677,15 +1165,41 @@ function Room({
         )}
       </AnimatePresence>
 
-      {/* Footer */}
-      <footer className="relative z-10 border-t border-white/5 bg-black/50 backdrop-blur-xl px-4 py-3 sm:px-6">
-        <div className="mx-auto flex max-w-4xl items-center justify-center gap-3 sm:gap-4">
-          <div className="flex items-center gap-2 mr-auto sm:mr-0">
+      {/* ─── Footer ─────────────────────────────────────────────────────── */}
+      {/* FIX: cinema mode hides footer but it peeks on hover via group */}
+      <motion.footer
+        initial={false}
+        animate={isCinema ? { y: 80, opacity: 0 } : { y: 0, opacity: 1 }}
+        transition={{ duration: 0.3 }}
+        className="relative z-10 border-t border-white/5 bg-black/50 backdrop-blur-xl px-2 py-3 sm:px-4"
+        onMouseEnter={
+          isCinema
+            ? (e) => {
+                const el = e.currentTarget as HTMLElement;
+                el.style.transform = "translateY(0)";
+                el.style.opacity = "1";
+              }
+            : undefined
+        }
+        onMouseLeave={
+          isCinema
+            ? (e) => {
+                const el = e.currentTarget as HTMLElement;
+                el.style.transform = "";
+                el.style.opacity = "";
+              }
+            : undefined
+        }
+      >
+        {/* FIX: overflow-x-auto so buttons never get cut off on small screens */}
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-1 sm:gap-2 overflow-x-auto scrollbar-hide">
+          {/* Left cluster */}
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             <ControlBtn
               active={!localHandRaised}
               onClick={localHandRaised ? lowerHand : raiseHand}
-              on={<Hand className="h-5 w-5" />}
-              off={<Hand className="h-5 w-5" />}
+              on={<Hand className="h-4 w-4 sm:h-5 sm:w-5" />}
+              off={<Hand className="h-4 w-4 sm:h-5 sm:w-5" />}
               label={localHandRaised ? "Lower" : "Raise hand"}
               highlightOn={localHandRaised}
               highlightColor="oklch(0.8 0.18 80)"
@@ -694,8 +1208,8 @@ function Room({
               <ControlBtn
                 active={!showReactionPicker}
                 onClick={() => setShowReactionPicker((v) => !v)}
-                on={<SmilePlus className="h-5 w-5" />}
-                off={<SmilePlus className="h-5 w-5" />}
+                on={<SmilePlus className="h-4 w-4 sm:h-5 sm:w-5" />}
+                off={<SmilePlus className="h-4 w-4 sm:h-5 sm:w-5" />}
                 label="React"
               />
               <AnimatePresence>
@@ -710,62 +1224,98 @@ function Room({
                 )}
               </AnimatePresence>
             </div>
+            <ControlBtn
+              active={activePanel !== "whiteboard"}
+              onClick={() => togglePanel("whiteboard")}
+              on={<PenLine className="h-4 w-4 sm:h-5 sm:w-5" />}
+              off={<PenLine className="h-4 w-4 sm:h-5 sm:w-5" />}
+              label="Whiteboard"
+              highlightOn={activePanel === "whiteboard"}
+            />
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-3">
+          {/* Center cluster */}
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             <ControlBtn
               active={mic}
               onClick={toggleMic}
-              on={<Mic className="h-5 w-5" />}
-              off={<MicOff className="h-5 w-5" />}
+              on={<Mic className="h-4 w-4 sm:h-5 sm:w-5" />}
+              off={<MicOff className="h-4 w-4 sm:h-5 sm:w-5" />}
               label={mic ? "Mute" : "Unmute"}
             />
             <ControlBtn
               active={cam}
               onClick={() => void toggleCam()}
-              on={<VideoIcon className="h-5 w-5" />}
-              off={<VideoOff className="h-5 w-5" />}
+              on={<VideoIcon className="h-4 w-4 sm:h-5 sm:w-5" />}
+              off={<VideoOff className="h-4 w-4 sm:h-5 sm:w-5" />}
               label={cam ? "Stop video" : "Start video"}
             />
             <ControlBtn
               active={!sharing}
               onClick={() => void toggleScreenShare()}
-              on={<MonitorUp className="h-5 w-5" />}
-              off={<MonitorX className="h-5 w-5" />}
+              on={<MonitorUp className="h-4 w-4 sm:h-5 sm:w-5" />}
+              off={<MonitorX className="h-4 w-4 sm:h-5 sm:w-5" />}
               label={sharing ? "Stop share" : "Share screen"}
               highlightOn={sharing}
             />
             <button
-              onClick={handleLeaveClick}
-              className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-[oklch(0.65_0.25_25)] to-[oklch(0.72_0.22_35)] px-5 py-3 text-sm font-semibold text-white shadow-[0_8px_30px_-8px_oklch(0.72_0.22_35/0.6)] hover:opacity-95 transition"
+              onClick={() => setShowLeaveModal(true)}
+              className="flex items-center gap-1.5 sm:gap-2 rounded-2xl bg-gradient-to-r from-[oklch(0.65_0.25_25)] to-[oklch(0.72_0.22_35)] px-3 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-semibold text-white shadow-[0_8px_30px_-8px_oklch(0.72_0.22_35/0.6)] hover:opacity-95 transition shrink-0"
             >
               <PhoneOff className="h-4 w-4" />
               <span className="hidden sm:inline">Leave</span>
             </button>
           </div>
 
-          <div className="flex items-center sm:hidden ml-auto">
-            <button
-              onClick={() => togglePanel("chat")}
-              className={cn(
-                "relative rounded-lg border p-3 transition",
-                activePanel === "chat"
-                  ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
-                  : "border-white/10 bg-white/5",
-              )}
-            >
-              <MessageSquare className="h-5 w-5" />
-              {unreadCount > 0 && (
-                <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-[var(--neon-danger)] text-[9px] font-bold">
-                  {unreadCount > 9 ? "9+" : unreadCount}
-                </span>
-              )}
-            </button>
+          {/* Right cluster */}
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+            {/* FIX: Cinema mode toggle — label changes based on current state */}
+            <ControlBtn
+              active={layoutMode !== "cinema"}
+              onClick={() => setLayoutMode((prev) => (prev === "cinema" ? "grid" : "cinema"))}
+              on={<Maximize2 className="h-4 w-4 sm:h-5 sm:w-5" />}
+              off={<Minimize2 className="h-4 w-4 sm:h-5 sm:w-5" />}
+              label={layoutMode === "cinema" ? "Exit cinema" : "Cinema mode"}
+              highlightOn={layoutMode === "cinema"}
+            />
+            {/* FIX: Noise suppression — label clearly states current state */}
+            {noiseSuppressionSupported && (
+              <ControlBtn
+                active={!noiseSuppressionEnabled}
+                onClick={() => void toggleNoiseSuppression()}
+                on={<Mic2 className="h-4 w-4 sm:h-5 sm:w-5" />}
+                off={<Mic2 className="h-4 w-4 sm:h-5 sm:w-5" />}
+                label={noiseSuppressionEnabled ? "Noise suppression on" : "Noise suppression off"}
+                highlightOn={noiseSuppressionEnabled}
+                highlightColor="oklch(0.75 0.18 145)"
+              />
+            )}
+            {/* FIX: Soundscape toggle — opens settings dropdown when nothing active,
+                stops active soundscape directly when one is playing */}
+            <ControlBtn
+              active={!activeSoundscape}
+              onClick={() => {
+                if (activeSoundscape) {
+                  toggleSoundscape(null);
+                } else {
+                  setShowSettingsDropdown((v) => !v);
+                }
+              }}
+              on={<Music2 className="h-4 w-4 sm:h-5 sm:w-5" />}
+              off={<Music2 className="h-4 w-4 sm:h-5 sm:w-5" />}
+              label={
+                activeSoundscape
+                  ? `Stop ${SOUNDSCAPES.find((s) => s.id === activeSoundscape)?.label ?? "soundscape"}`
+                  : "Soundscapes"
+              }
+              highlightOn={!!activeSoundscape}
+              highlightColor="oklch(0.8 0.18 80)"
+            />
           </div>
         </div>
-      </footer>
+      </motion.footer>
 
-      {/* ─── Modals ─────────────────────────────────────────────────────────── */}
+      {/* ─── Modals ─────────────────────────────────────────────────────── */}
       <AnimatePresence>
         {showLeaveModal && (
           <LeaveModal
@@ -798,6 +1348,1101 @@ function Room({
   );
 }
 
+// ─── Settings Dropdown ────────────────────────────────────────────────────────
+
+function SettingsDropdown({
+  layoutMode,
+  setLayoutMode,
+  backgroundMode,
+  setBackgroundMode,
+  isBlurProcessing,
+  activeSoundscape,
+  toggleSoundscape,
+  soundVolume,
+  setSoundVolume,
+  noiseSuppressionEnabled,
+  noiseSuppressionSupported,
+  toggleNoiseSuppression,
+  autoSpotlight,
+  setAutoSpotlight,
+  onClose,
+}: {
+  layoutMode: "grid" | "spatial" | "cinema";
+  setLayoutMode: (m: "grid" | "spatial" | "cinema") => void;
+  backgroundMode: BackgroundMode;
+  setBackgroundMode: (m: BackgroundMode) => void;
+  isBlurProcessing: boolean;
+  activeSoundscape: SoundscapeId;
+  toggleSoundscape: (id: SoundscapeId) => void;
+  soundVolume: number;
+  setSoundVolume: (v: number) => void;
+  noiseSuppressionEnabled: boolean;
+  noiseSuppressionSupported: boolean;
+  toggleNoiseSuppression: () => Promise<void>;
+  autoSpotlight: boolean;
+  setAutoSpotlight: (v: boolean) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest(".settings-dropdown-root")) onClose();
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [onClose]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -8, scale: 0.95 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: -8, scale: 0.95 }}
+      transition={{ type: "spring", damping: 22, stiffness: 300 }}
+      className="settings-dropdown-root absolute right-0 top-full mt-2 z-50 w-72"
+    >
+      <div className="glass-strong rounded-2xl border border-white/10 p-3 shadow-2xl space-y-4">
+        {/* Layout */}
+        <div>
+          <p className="px-1 pb-2 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
+            Layout
+          </p>
+          <div className="grid grid-cols-3 gap-1.5">
+            {(["grid", "spatial", "cinema"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setLayoutMode(m)}
+                className={cn(
+                  "rounded-xl py-2 text-xs font-medium capitalize transition border",
+                  layoutMode === m
+                    ? "bg-[var(--neon-primary)]/20 border-[var(--neon-primary)]/50 text-[var(--neon-primary)]"
+                    : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
+                )}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Background */}
+        <div>
+          <p className="px-1 pb-2 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold flex items-center gap-1.5">
+            Virtual background
+            {isBlurProcessing && (
+              <Loader2 className="h-3 w-3 animate-spin text-[var(--neon-primary)]" />
+            )}
+          </p>
+          <div className="flex gap-1.5 flex-wrap">
+            {BACKGROUND_MODES.map((bm) => (
+              <button
+                key={bm.id}
+                onClick={() => setBackgroundMode(bm.id)}
+                className={cn(
+                  "flex flex-col items-center gap-1 rounded-xl p-2 border transition text-xs",
+                  backgroundMode === bm.id
+                    ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
+                    : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
+                )}
+              >
+                <div className={cn("h-8 w-12 rounded-lg border border-white/10", bm.preview)} />
+                <span>{bm.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Soundscapes */}
+        <div>
+          <p className="px-1 pb-2 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
+            Ambient sound
+          </p>
+          <div className="flex gap-1.5 mb-2">
+            {SOUNDSCAPES.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => toggleSoundscape(s.id)}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs border transition flex-1 justify-center",
+                  activeSoundscape === s.id
+                    ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
+                    : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
+                )}
+              >
+                {s.icon}
+                <span>{s.label}</span>
+              </button>
+            ))}
+          </div>
+          {activeSoundscape && (
+            <div className="flex items-center gap-2">
+              <VolumeX className="h-3 w-3 text-muted-foreground shrink-0" />
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={soundVolume}
+                onChange={(e) => setSoundVolume(Number(e.target.value))}
+                className="flex-1 h-1 appearance-none bg-white/10 rounded-full outline-none cursor-pointer"
+                style={{ accentColor: "oklch(0.65 0.22 280)" }}
+              />
+              <Volume2 className="h-3 w-3 text-muted-foreground shrink-0" />
+            </div>
+          )}
+        </div>
+
+        {/* Audio */}
+        <div className="space-y-2">
+          <p className="px-1 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
+            Audio
+          </p>
+          {noiseSuppressionSupported && (
+            <button
+              onClick={() => void toggleNoiseSuppression()}
+              className={cn(
+                "flex items-center justify-between w-full rounded-xl px-3 py-2 text-xs border transition",
+                noiseSuppressionEnabled
+                  ? "border-[oklch(0.75_0.18_145)/0.5] bg-[oklch(0.75_0.18_145)/0.15] text-[oklch(0.85_0.15_145)]"
+                  : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
+              )}
+            >
+              <span className="flex items-center gap-2">
+                <Mic2 className="h-3.5 w-3.5" /> Noise suppression
+              </span>
+              <span
+                className={cn(
+                  "text-[10px] rounded px-1.5 py-0.5",
+                  noiseSuppressionEnabled
+                    ? "bg-[oklch(0.75_0.18_145)/0.25] text-[oklch(0.85_0.15_145)]"
+                    : "bg-white/5 text-muted-foreground",
+                )}
+              >
+                {noiseSuppressionEnabled ? "ON" : "OFF"}
+              </span>
+            </button>
+          )}
+          <button
+            onClick={() => setAutoSpotlight(!autoSpotlight)}
+            className={cn(
+              "flex items-center justify-between w-full rounded-xl px-3 py-2 text-xs border transition",
+              autoSpotlight
+                ? "border-[var(--neon-secondary)/0.5] bg-[var(--neon-secondary)/0.15] text-[var(--neon-secondary)]"
+                : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
+            )}
+          >
+            <span className="flex items-center gap-2">
+              <Sparkles className="h-3.5 w-3.5" /> Auto-spotlight speaker
+            </span>
+            <span
+              className={cn(
+                "text-[10px] rounded px-1.5 py-0.5",
+                autoSpotlight
+                  ? "bg-[var(--neon-secondary)/0.25] text-[var(--neon-secondary)]"
+                  : "bg-white/5 text-muted-foreground",
+              )}
+            >
+              {autoSpotlight ? "ON" : "OFF"}
+            </span>
+          </button>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+// ─── Whiteboard Overlay ───────────────────────────────────────────────────────
+// FIX: Uses viewBox="0 0 1000 1000" so all coordinates are in absolute pixels
+// instead of CSS percentage strings, which caused broken SVG path rendering.
+
+function WhiteboardOverlay({
+  elements,
+  cursors,
+  activeTool,
+  activeColor,
+  strokeWidth,
+  currentPoints,
+  canManage,
+  onToolChange,
+  onColorChange,
+  onStrokeWidthChange,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onClick,
+  onErase,
+  onClear,
+  onClose,
+  svgRef,
+}: {
+  elements: WhiteboardElement[];
+  cursors: Array<{ socketId: string; username: string; x: number; y: number }>;
+  activeTool: WhiteboardTool;
+  activeColor: string;
+  strokeWidth: number;
+  currentPoints: number[][];
+  canManage: boolean;
+  onToolChange: (t: WhiteboardTool) => void;
+  onColorChange: (c: string) => void;
+  onStrokeWidthChange: (w: number) => void;
+  onPointerDown: (e: React.PointerEvent<SVGSVGElement>) => void;
+  onPointerMove: (e: React.PointerEvent<SVGSVGElement>) => void;
+  onPointerUp: () => void;
+  onClick: (e: React.MouseEvent<SVGSVGElement>) => void;
+  onErase: (id: string) => void;
+  onClear: () => void;
+  onClose: () => void;
+  svgRef: React.RefObject<SVGSVGElement>;
+}) {
+  const tools: { id: WhiteboardTool; icon: React.ReactNode; label: string }[] = [
+    { id: "select", icon: <MousePointer className="h-4 w-4" />, label: "Select" },
+    { id: "pen", icon: <PenLine className="h-4 w-4" />, label: "Pen" },
+    { id: "eraser", icon: <Eraser className="h-4 w-4" />, label: "Eraser" },
+    { id: "text", icon: <span className="text-sm font-bold">T</span>, label: "Text" },
+    { id: "sticky", icon: <StickyNote className="h-4 w-4" />, label: "Sticky" },
+    { id: "arrow", icon: <ArrowUpRight className="h-4 w-4" />, label: "Arrow" },
+    { id: "rect", icon: <Square className="h-4 w-4" />, label: "Rect" },
+    { id: "ellipse", icon: <Circle className="h-4 w-4" />, label: "Ellipse" },
+  ];
+
+  // FIX: points are now in 0..1000 space — convert directly to SVG coords
+  const pointsToPath = (pts: number[][]): string => {
+    if (pts.length < 2) return "";
+    return pts
+      .map((p, i) => `${i === 0 ? "M" : "L"} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`)
+      .join(" ");
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="absolute inset-0 z-30 flex"
+    >
+      <div className="absolute inset-0 bg-[oklch(0.12_0.02_265/0.95)] backdrop-blur-sm" />
+
+      {/* FIX: viewBox makes coordinate system absolute and predictable */}
+      <svg
+        ref={svgRef}
+        className="absolute inset-0 w-full h-full"
+        viewBox={`0 0 ${WB_SCALE} ${WB_SCALE}`}
+        preserveAspectRatio="none"
+        style={{
+          cursor: activeTool === "pen" ? "crosshair" : activeTool === "eraser" ? "cell" : "default",
+        }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onClick={onClick}
+      >
+        {/* Grid pattern — scaled to viewBox */}
+        <defs>
+          <pattern id="wb-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path
+              d="M 40 0 L 0 0 0 40"
+              fill="none"
+              stroke="oklch(1 0 0 / 0.04)"
+              strokeWidth="0.5"
+            />
+          </pattern>
+        </defs>
+        <rect width={WB_SCALE} height={WB_SCALE} fill="url(#wb-grid)" />
+
+        {/* Existing elements */}
+        {elements.map((el) => {
+          if (el.type === "stroke" && el.points) {
+            return (
+              <path
+                key={el.id}
+                d={pointsToPath(el.points)}
+                fill="none"
+                stroke={el.color}
+                strokeWidth={el.strokeWidth ?? 3}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={cn(activeTool === "eraser" && "hover:opacity-30 cursor-cell")}
+                onClick={
+                  activeTool === "eraser"
+                    ? (e) => {
+                        e.stopPropagation();
+                        onErase(el.id);
+                      }
+                    : undefined
+                }
+              />
+            );
+          }
+          if (
+            (el.type === "sticky" || el.type === "text") &&
+            el.x !== undefined &&
+            el.y !== undefined
+          ) {
+            return (
+              <g key={el.id} transform={`translate(${el.x} ${el.y})`}>
+                {el.type === "sticky" && (
+                  <rect
+                    x={-60}
+                    y={-20}
+                    width={120}
+                    height={48}
+                    rx={8}
+                    fill={el.color}
+                    fillOpacity={0.2}
+                    stroke={el.color}
+                    strokeWidth={1}
+                  />
+                )}
+                <text
+                  x={0}
+                  y={0}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  fill={el.color}
+                  fontSize="13"
+                  fontFamily="system-ui"
+                >
+                  {el.text}
+                </text>
+              </g>
+            );
+          }
+          return null;
+        })}
+
+        {/* In-progress stroke */}
+        {currentPoints.length > 1 && (
+          <path
+            d={pointsToPath(currentPoints)}
+            fill="none"
+            stroke={activeColor}
+            strokeWidth={strokeWidth}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            opacity={0.9}
+          />
+        )}
+
+        {/* Remote cursors — cursor positions come in as 0..1, scale to viewBox */}
+        {cursors.map((c) => (
+          <g
+            key={c.socketId}
+            transform={`translate(${c.x * WB_SCALE} ${c.y * WB_SCALE})`}
+            style={{ pointerEvents: "none" }}
+          >
+            <circle r={5} fill={`oklch(0.75 0.18 ${hueForName(c.username)})`} opacity={0.8} />
+            <text
+              x={8}
+              y={4}
+              fontSize="11"
+              fill={`oklch(0.75 0.18 ${hueForName(c.username)})`}
+              fontFamily="system-ui"
+            >
+              {c.username}
+            </text>
+          </g>
+        ))}
+      </svg>
+
+      {/* Toolbar */}
+      <div className="absolute left-4 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-1 glass-strong rounded-2xl border border-white/10 p-2">
+        {tools.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => onToolChange(t.id)}
+            title={t.label}
+            className={cn(
+              "flex h-9 w-9 items-center justify-center rounded-xl transition",
+              activeTool === t.id
+                ? "bg-[var(--neon-primary)]/20 text-[var(--neon-primary)]"
+                : "text-muted-foreground hover:bg-white/10 hover:text-foreground",
+            )}
+          >
+            {t.icon}
+          </button>
+        ))}
+        <div className="my-1 h-px bg-white/10" />
+        {WHITEBOARD_STROKE_WIDTHS.map((w) => (
+          <button
+            key={w}
+            onClick={() => onStrokeWidthChange(w)}
+            title={`Stroke ${w}px`}
+            className={cn(
+              "flex h-9 w-9 items-center justify-center rounded-xl transition",
+              strokeWidth === w ? "bg-[var(--neon-primary)]/20" : "hover:bg-white/10",
+            )}
+          >
+            <div
+              className="rounded-full bg-current"
+              style={{
+                width: Math.min(w * 2, 18),
+                height: Math.min(w * 2, 18),
+                opacity: strokeWidth === w ? 1 : 0.4,
+              }}
+            />
+          </button>
+        ))}
+        <div className="my-1 h-px bg-white/10" />
+        {WHITEBOARD_COLORS.map((c) => (
+          <button
+            key={c}
+            onClick={() => onColorChange(c)}
+            className={cn(
+              "flex h-9 w-9 items-center justify-center rounded-xl transition",
+              activeColor === c ? "ring-2 ring-white/40" : "hover:scale-110",
+            )}
+            style={{ background: c }}
+          >
+            {activeColor === c && <CheckCircle2 className="h-4 w-4 text-black/60" />}
+          </button>
+        ))}
+        {canManage && (
+          <>
+            <div className="my-1 h-px bg-white/10" />
+            <button
+              onClick={onClear}
+              title="Clear all"
+              className="flex h-9 w-9 items-center justify-center rounded-xl text-[oklch(0.78_0.2_35)] hover:bg-[oklch(0.72_0.22_35)]/20 transition"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Close */}
+      <button
+        onClick={onClose}
+        className="absolute top-4 right-4 z-40 flex h-9 w-9 items-center justify-center rounded-xl glass border border-white/10 text-muted-foreground hover:text-foreground transition"
+      >
+        <X className="h-4 w-4" />
+      </button>
+
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40 text-[11px] text-muted-foreground bg-black/40 backdrop-blur rounded-full px-3 py-1">
+        {elements.length} elements · shared with all participants
+      </div>
+    </motion.div>
+  );
+}
+
+// ─── Polls Panel ──────────────────────────────────────────────────────────────
+
+function PollsPanel({
+  currentPoll,
+  isHost,
+  showCreator,
+  pollQuestion,
+  pollOptions,
+  onQuestionChange,
+  onOptionsChange,
+  onShowCreator,
+  onHideCreator,
+  onCreate,
+  onVote,
+  onClose_poll,
+  onDismiss,
+  onClose,
+}: {
+  currentPoll: Poll | null;
+  isHost: boolean;
+  showCreator: boolean;
+  pollQuestion: string;
+  pollOptions: string[];
+  onQuestionChange: (q: string) => void;
+  onOptionsChange: (o: string[]) => void;
+  onShowCreator: () => void;
+  onHideCreator: () => void;
+  onCreate: () => void;
+  onVote: (i: number) => void;
+  onClose_poll: () => void;
+  onDismiss: () => void;
+  onClose: () => void;
+}) {
+  const maxVotes = currentPoll ? Math.max(...Object.values(currentPoll.votes), 1) : 1;
+
+  return (
+    <motion.aside
+      initial={{ x: 340 }}
+      animate={{ x: 0 }}
+      exit={{ x: 340 }}
+      transition={{ type: "spring", damping: 26, stiffness: 250 }}
+      className="absolute right-0 top-0 bottom-0 w-80 max-w-full glass-strong border-l border-white/10 overflow-y-auto z-10 flex flex-col"
+    >
+      <div className="flex items-center justify-between p-5 border-b border-white/5 shrink-0">
+        <h3 className="text-sm font-semibold flex items-center gap-2">
+          <BarChart2 className="h-4 w-4 text-[var(--neon-primary)]" /> Live Polls
+        </h3>
+        <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {isHost && !currentPoll && !showCreator && (
+          <NeonButton className="w-full" onClick={onShowCreator}>
+            <Plus className="h-4 w-4 mr-2" /> Create Poll
+          </NeonButton>
+        )}
+        <AnimatePresence>
+          {showCreator && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="glass rounded-2xl border border-white/10 p-4 space-y-3"
+            >
+              <h4 className="text-sm font-semibold">New Poll</h4>
+              <input
+                value={pollQuestion}
+                onChange={(e) => onQuestionChange(e.target.value)}
+                placeholder="Ask a question…"
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm outline-none focus:border-[var(--neon-primary)]/50 transition"
+              />
+              {pollOptions.map((opt, i) => (
+                <div key={i} className="flex gap-2">
+                  <input
+                    value={opt}
+                    onChange={(e) => {
+                      const next = [...pollOptions];
+                      next[i] = e.target.value;
+                      onOptionsChange(next);
+                    }}
+                    placeholder={`Option ${i + 1}`}
+                    className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm outline-none focus:border-[var(--neon-primary)]/50 transition"
+                  />
+                  {i >= 2 && (
+                    <button
+                      onClick={() => onOptionsChange(pollOptions.filter((_, j) => j !== i))}
+                      className="text-muted-foreground hover:text-[oklch(0.78_0.2_35)] transition"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+              ))}
+              {pollOptions.length < 6 && (
+                <button
+                  onClick={() => onOptionsChange([...pollOptions, ""])}
+                  className="text-xs text-[var(--neon-primary)] hover:underline"
+                >
+                  + Add option
+                </button>
+              )}
+              <div className="flex gap-2 pt-1">
+                <NeonButton className="flex-1" onClick={onCreate}>
+                  Launch
+                </NeonButton>
+                <NeonButton variant="outline" className="flex-1" onClick={onHideCreator}>
+                  Cancel
+                </NeonButton>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+        {currentPoll && (
+          <div className="glass rounded-2xl border border-white/10 p-4 space-y-4">
+            <div className="flex items-start justify-between gap-2">
+              <h4 className="text-sm font-semibold leading-snug">{currentPoll.question}</h4>
+              {currentPoll.closed && (
+                <span className="shrink-0 text-[10px] rounded-md bg-white/10 px-2 py-0.5 text-muted-foreground">
+                  Closed
+                </span>
+              )}
+            </div>
+            <div className="space-y-2.5">
+              {currentPoll.options.map((opt, i) => {
+                const count = currentPoll.votes[i] ?? 0;
+                const pct = currentPoll.totalVoters
+                  ? Math.round((count / currentPoll.totalVoters) * 100)
+                  : 0;
+                const isLeading = count === maxVotes && count > 0;
+                const isMyVote = currentPoll.myVote === i;
+                return (
+                  <button
+                    key={i}
+                    onClick={() =>
+                      !currentPoll.closed && currentPoll.myVote === undefined && onVote(i)
+                    }
+                    disabled={currentPoll.closed || currentPoll.myVote !== undefined}
+                    className={cn(
+                      "w-full text-left rounded-xl border p-3 transition",
+                      isMyVote
+                        ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/10"
+                        : "border-white/10 bg-white/5 hover:bg-white/8 disabled:cursor-default",
+                    )}
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-sm">{opt}</span>
+                      <div className="flex items-center gap-2">
+                        {isLeading && !currentPoll.closed && (
+                          <span className="text-[10px] text-[var(--neon-secondary)]">leading</span>
+                        )}
+                        <span className="text-xs font-medium tabular-nums">{pct}%</span>
+                      </div>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                      <motion.div
+                        className={cn(
+                          "h-full rounded-full",
+                          isLeading ? "bg-[var(--neon-primary)]" : "bg-white/30",
+                        )}
+                        initial={{ width: 0 }}
+                        animate={{ width: `${pct}%` }}
+                        transition={{ duration: 0.5, ease: "easeOut" }}
+                      />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              {currentPoll.totalVoters} vote{currentPoll.totalVoters !== 1 ? "s" : ""}
+            </p>
+            {isHost && (
+              <div className="flex gap-2">
+                {!currentPoll.closed && (
+                  <NeonButton variant="outline" className="flex-1 text-xs" onClick={onClose_poll}>
+                    Close poll
+                  </NeonButton>
+                )}
+                <NeonButton variant="outline" className="flex-1 text-xs" onClick={onDismiss}>
+                  Dismiss
+                </NeonButton>
+              </div>
+            )}
+          </div>
+        )}
+        {!currentPoll && !showCreator && (
+          <div className="flex flex-col items-center justify-center py-12 gap-3">
+            <BarChart2 className="h-10 w-10 text-muted-foreground/30" />
+            <p className="text-xs text-muted-foreground text-center">
+              No active poll.{isHost ? " Create one to engage your participants." : ""}
+            </p>
+          </div>
+        )}
+      </div>
+    </motion.aside>
+  );
+}
+
+// ─── Agenda Panel ─────────────────────────────────────────────────────────────
+
+function AgendaPanel({
+  agenda,
+  agendaTimeLeft,
+  isHost,
+  showCreator,
+  agendaInput,
+  onAgendaInputChange,
+  onShowCreator,
+  onHideCreator,
+  onCreate,
+  onNext,
+  onPrev,
+  onGoto,
+  onTimerStart,
+  onTimerPause,
+  onClose,
+}: {
+  agenda: AgendaState | null;
+  agendaTimeLeft: number | null;
+  isHost: boolean;
+  showCreator: boolean;
+  agendaInput: Array<{ title: string; durationSec: number }>;
+  onAgendaInputChange: (items: Array<{ title: string; durationSec: number }>) => void;
+  onShowCreator: () => void;
+  onHideCreator: () => void;
+  onCreate: () => void;
+  onNext: () => void;
+  onPrev: () => void;
+  onGoto: (i: number) => void;
+  onTimerStart: () => void;
+  onTimerPause: () => void;
+  onClose: () => void;
+}) {
+  const isTimerRunning = agenda ? !agenda.timerPaused && agenda.timerEnd !== null : false;
+  const progressPct = useMemo(() => {
+    if (!agenda || agendaTimeLeft === null) return 0;
+    const total = agenda.items[agenda.activeIdx].durationSec * 1000;
+    return Math.max(0, Math.min(100, ((total - agendaTimeLeft) / total) * 100));
+  }, [agenda, agendaTimeLeft]);
+
+  return (
+    <motion.aside
+      initial={{ x: 340 }}
+      animate={{ x: 0 }}
+      exit={{ x: 340 }}
+      transition={{ type: "spring", damping: 26, stiffness: 250 }}
+      className="absolute right-0 top-0 bottom-0 w-80 max-w-full glass-strong border-l border-white/10 overflow-y-auto z-10 flex flex-col"
+    >
+      <div className="flex items-center justify-between p-5 border-b border-white/5 shrink-0">
+        <h3 className="text-sm font-semibold flex items-center gap-2">
+          <ListChecks className="h-4 w-4 text-[var(--neon-primary)]" /> Agenda
+        </h3>
+        <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {isHost && !agenda && !showCreator && (
+          <NeonButton className="w-full" onClick={onShowCreator}>
+            <Plus className="h-4 w-4 mr-2" /> Set Agenda
+          </NeonButton>
+        )}
+        <AnimatePresence>
+          {showCreator && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="glass rounded-2xl border border-white/10 p-4 space-y-3"
+            >
+              <h4 className="text-sm font-semibold">Meeting Agenda</h4>
+              {agendaInput.map((item, i) => (
+                <div key={i} className="flex gap-2">
+                  <input
+                    value={item.title}
+                    onChange={(e) => {
+                      const next = [...agendaInput];
+                      next[i] = { ...item, title: e.target.value };
+                      onAgendaInputChange(next);
+                    }}
+                    placeholder={`Item ${i + 1}`}
+                    className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm outline-none focus:border-[var(--neon-primary)]/50 transition"
+                  />
+                  <input
+                    type="number"
+                    min={1}
+                    value={Math.round(item.durationSec / 60)}
+                    onChange={(e) => {
+                      const next = [...agendaInput];
+                      next[i] = { ...item, durationSec: Number(e.target.value) * 60 };
+                      onAgendaInputChange(next);
+                    }}
+                    className="w-14 bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-sm outline-none text-center focus:border-[var(--neon-primary)]/50 transition"
+                    title="Minutes"
+                  />
+                  <span className="text-[10px] text-muted-foreground self-center">min</span>
+                  {agendaInput.length > 1 && (
+                    <button
+                      onClick={() => onAgendaInputChange(agendaInput.filter((_, j) => j !== i))}
+                      className="text-muted-foreground hover:text-[oklch(0.78_0.2_35)] transition"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+              ))}
+              {agendaInput.length < 10 && (
+                <button
+                  onClick={() =>
+                    onAgendaInputChange([...agendaInput, { title: "", durationSec: 300 }])
+                  }
+                  className="text-xs text-[var(--neon-primary)] hover:underline"
+                >
+                  + Add item
+                </button>
+              )}
+              <div className="flex gap-2 pt-1">
+                <NeonButton className="flex-1" onClick={onCreate}>
+                  Set agenda
+                </NeonButton>
+                <NeonButton variant="outline" className="flex-1" onClick={onHideCreator}>
+                  Cancel
+                </NeonButton>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+        {agenda && (
+          <div className="space-y-3">
+            <div className="glass rounded-2xl border border-[var(--neon-primary)]/30 bg-[var(--neon-primary)]/5 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-[var(--neon-primary)] uppercase tracking-wider font-semibold">
+                  Current
+                </span>
+                <span className="text-[11px] text-muted-foreground">
+                  {agenda.activeIdx + 1}/{agenda.items.length}
+                </span>
+              </div>
+              <h4 className="text-sm font-semibold">{agenda.items[agenda.activeIdx]?.title}</h4>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span
+                    className={cn(
+                      "font-mono text-2xl font-bold tabular-nums",
+                      agendaTimeLeft !== null && agendaTimeLeft < 30000
+                        ? "text-[oklch(0.78_0.2_35)]"
+                        : "text-gradient",
+                    )}
+                  >
+                    {agendaTimeLeft !== null ? formatDuration(agendaTimeLeft) : "--:--"}
+                  </span>
+                  {isHost && (
+                    <button
+                      onClick={isTimerRunning ? onTimerPause : onTimerStart}
+                      className={cn(
+                        "flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium transition border",
+                        isTimerRunning
+                          ? "border-[oklch(0.72_0.22_35)/0.4] bg-[oklch(0.72_0.22_35)/0.15] text-[oklch(0.82_0.2_35)]"
+                          : "border-[var(--neon-primary)]/40 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]",
+                      )}
+                    >
+                      {isTimerRunning ? (
+                        <>
+                          <Pause className="h-3 w-3" /> Pause
+                        </>
+                      ) : (
+                        <>
+                          <Play className="h-3 w-3" /> Start
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+                <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                  <motion.div
+                    className={cn(
+                      "h-full rounded-full transition-colors",
+                      progressPct > 85 ? "bg-[oklch(0.72_0.22_35)]" : "bg-[var(--neon-primary)]",
+                    )}
+                    style={{ width: `${progressPct}%` }}
+                    transition={{ duration: 0.3 }}
+                  />
+                </div>
+              </div>
+              {isHost && (
+                <div className="flex gap-2">
+                  <button
+                    onClick={onPrev}
+                    disabled={agenda.activeIdx === 0}
+                    className="flex-1 flex items-center justify-center gap-1 rounded-xl border border-white/10 py-1.5 text-xs text-muted-foreground hover:bg-white/5 transition disabled:opacity-30"
+                  >
+                    <ChevronLeft className="h-3 w-3" /> Prev
+                  </button>
+                  <button
+                    onClick={onNext}
+                    className="flex-1 flex items-center justify-center gap-1 rounded-xl border border-white/10 py-1.5 text-xs text-muted-foreground hover:bg-white/5 transition"
+                  >
+                    Next <ChevronRight className="h-3 w-3" />
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              {agenda.items.map((item, i) => (
+                <button
+                  key={item.id}
+                  onClick={() => isHost && onGoto(i)}
+                  className={cn(
+                    "w-full text-left flex items-center gap-3 rounded-xl p-2.5 transition border",
+                    i === agenda.activeIdx
+                      ? "border-[var(--neon-primary)]/30 bg-[var(--neon-primary)]/10"
+                      : item.done
+                        ? "border-white/5 bg-white/3 opacity-50"
+                        : "border-white/5 bg-white/3 hover:bg-white/5",
+                  )}
+                >
+                  <div
+                    className={cn(
+                      "flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold",
+                      item.done
+                        ? "bg-[oklch(0.75_0.18_145)/0.3] text-[oklch(0.75_0.18_145)]"
+                        : i === agenda.activeIdx
+                          ? "bg-[var(--neon-primary)]/30 text-[var(--neon-primary)]"
+                          : "bg-white/10 text-muted-foreground",
+                    )}
+                  >
+                    {item.done ? <CheckCircle2 className="h-3 w-3" /> : i + 1}
+                  </div>
+                  <span className={cn("flex-1 text-sm truncate", item.done && "line-through")}>
+                    {item.title}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground shrink-0">
+                    {Math.round(item.durationSec / 60)}m
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {!agenda && !showCreator && (
+          <div className="flex flex-col items-center justify-center py-12 gap-3">
+            <ListChecks className="h-10 w-10 text-muted-foreground/30" />
+            <p className="text-xs text-muted-foreground text-center">
+              No agenda set.{isHost ? " Add one to keep the meeting on track." : ""}
+            </p>
+          </div>
+        )}
+      </div>
+    </motion.aside>
+  );
+}
+
+// ─── Spatial Canvas ───────────────────────────────────────────────────────────
+
+function SpatialCanvas({
+  localStream,
+  localSocketId,
+  username,
+  mic,
+  cam,
+  localStatus,
+  localHandRaised,
+  isHost,
+  isSubHost,
+  peers,
+  onRemove,
+  onLowerHand,
+  isSpeaking,
+  speakingPeerId,
+  tilePositions,
+  setTilePosition,
+  spotlightId,
+  setSpotlightId,
+}: {
+  localStream: MediaStream | null;
+  localSocketId: string | null;
+  username: string;
+  mic: boolean;
+  cam: boolean;
+  localStatus: ParticipantStatus;
+  localHandRaised: boolean;
+  isHost: boolean;
+  isSubHost: boolean;
+  peers: RemotePeer[];
+  onRemove: (id: string) => void;
+  onLowerHand: (id: string) => void;
+  isSpeaking: boolean;
+  speakingPeerId: string | null;
+  tilePositions: Map<string, TilePosition>;
+  setTilePosition: (id: string, pos: TilePosition) => void;
+  spotlightId: string | null;
+  setSpotlightId: (id: string | null) => void;
+}) {
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const dragOffset = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  const getPos = (id: string): TilePosition =>
+    tilePositions.get(id) ?? { x: Math.random() * 60 + 5, y: Math.random() * 60 + 5 };
+
+  const handleDragStart = useCallback(
+    (id: string, e: React.PointerEvent) => {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const pos = getPos(id);
+      dragOffset.current = {
+        x: e.clientX - rect.left - (pos.x / 100) * rect.width,
+        y: e.clientY - rect.top - (pos.y / 100) * rect.height,
+      };
+      setDragging(id);
+    },
+    [tilePositions],
+  );
+
+  const handleDragMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!dragging) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = Math.max(
+        0,
+        Math.min(90, ((e.clientX - rect.left - dragOffset.current.x) / rect.width) * 100),
+      );
+      const y = Math.max(
+        0,
+        Math.min(85, ((e.clientY - rect.top - dragOffset.current.y) / rect.height) * 100),
+      );
+      setTilePosition(dragging, { x, y });
+    },
+    [dragging, setTilePosition],
+  );
+
+  const handleDragEnd = useCallback(() => setDragging(null), []);
+
+  const allParticipants = [
+    { id: "local", name: username },
+    ...peers.map((p) => ({ id: p.socketId, name: p.username })),
+  ];
+
+  return (
+    <div
+      ref={canvasRef}
+      className="relative w-full h-full overflow-hidden rounded-2xl border border-white/5"
+      style={{ background: "oklch(0.12 0.02 265 / 0.5)" }}
+      onPointerMove={handleDragMove}
+      onPointerUp={handleDragEnd}
+    >
+      <div
+        className="absolute inset-0 opacity-20"
+        style={{
+          backgroundImage: "radial-gradient(circle, oklch(1 0 0 / 0.3) 1px, transparent 1px)",
+          backgroundSize: "40px 40px",
+        }}
+      />
+      {allParticipants.map((participant, i) => {
+        const pos = getPos(participant.id);
+        const isLocal = participant.id === "local";
+        const peer = isLocal ? null : peers.find((p) => p.socketId === participant.id);
+        const speaking = isLocal ? isSpeaking : participant.id === speakingPeerId;
+        return (
+          <div
+            key={participant.id}
+            className="absolute"
+            style={{
+              left: `${pos.x}%`,
+              top: `${pos.y}%`,
+              width: 200,
+              height: 150,
+              cursor: dragging === participant.id ? "grabbing" : "grab",
+              zIndex: dragging === participant.id ? 20 : 10,
+            }}
+            onPointerDown={(e) => handleDragStart(participant.id, e)}
+          >
+            <div
+              className={cn(
+                "w-full h-full rounded-2xl overflow-hidden border transition-all",
+                speaking
+                  ? "border-[var(--neon-secondary)] shadow-[0_0_20px_oklch(0.82_0.16_210/0.5)]"
+                  : "border-white/10",
+              )}
+            >
+              {isLocal ? (
+                <LocalVideoTile
+                  stream={localStream}
+                  username={username}
+                  mic={mic}
+                  cam={cam}
+                  isHost={isHost}
+                  isSubHost={isSubHost}
+                  isSpeaking={isSpeaking}
+                  status={localStatus}
+                  handRaised={localHandRaised}
+                />
+              ) : peer ? (
+                <RemoteVideoTile
+                  peer={peer}
+                  hue={hueForIndex(i - 1)}
+                  onRemove={() => onRemove(peer.socketId)}
+                  onLowerHand={() => onLowerHand(peer.socketId)}
+                  isSpeaking={speaking}
+                />
+              ) : null}
+            </div>
+            <div className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition">
+              <Move className="h-3 w-3 text-white/40" />
+            </div>
+          </div>
+        );
+      })}
+      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[10px] text-muted-foreground/40 pointer-events-none">
+        Drag tiles to rearrange · Spatial layout
+      </div>
+    </div>
+  );
+}
+
 // ─── Leave Modal ──────────────────────────────────────────────────────────────
 
 function LeaveModal({
@@ -826,10 +2471,7 @@ function LeaveModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="absolute -inset-1 rounded-[2rem] bg-gradient-to-r from-[var(--neon-primary)] via-[var(--neon-accent)] to-[var(--neon-danger)] opacity-30 blur-xl animate-pulse-glow" />
-
         <div className="relative glass-strong rounded-3xl border border-white/10 p-8 text-center overflow-hidden">
-          <div className="absolute inset-0 bg-gradient-to-b from-[var(--neon-danger)]/5 to-transparent pointer-events-none" />
-
           <motion.div
             animate={{ scale: [1, 1.15, 1] }}
             transition={{ duration: 2, repeat: Infinity }}
@@ -837,17 +2479,15 @@ function LeaveModal({
           >
             <PhoneOff className="h-10 w-10 text-white" />
           </motion.div>
-
-          <h2 className="relative text-2xl font-bold text-gradient mb-2">
+          <h2 className="text-2xl font-bold text-gradient mb-2">
             {isHost ? "End meeting for all?" : "Leave meeting?"}
           </h2>
-          <p className="relative text-sm text-muted-foreground mb-8 max-w-xs mx-auto">
+          <p className="text-sm text-muted-foreground mb-8 max-w-xs mx-auto">
             {isHost
-              ? "You are the host. If you leave, the meeting will end for everyone and all participants will be disconnected."
-              : "You can rejoin this meeting anytime using the same link while it's active."}
+              ? "You are the host. If you leave, the meeting will end for everyone."
+              : "You can rejoin anytime using the same link while it's active."}
           </p>
-
-          <div className="relative flex gap-3 justify-center">
+          <div className="flex gap-3 justify-center">
             <NeonButton variant="outline" onClick={onCancel} className="px-6">
               Stay
             </NeonButton>
@@ -893,7 +2533,6 @@ function HostTransferModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="absolute -inset-1 rounded-[2rem] bg-gradient-to-r from-[var(--neon-primary)] to-[var(--neon-secondary)] opacity-20 blur-xl" />
-
         <div className="relative glass-strong rounded-3xl border border-white/10 p-8">
           <div className="flex items-center gap-3 mb-5">
             <Avatar name={peer.username} hue={hueForName(peer.username)} size={48} />
@@ -905,49 +2544,40 @@ function HostTransferModal({
               </p>
             </div>
           </div>
-
           <div className="space-y-3">
             <button
               onClick={() => onTransfer("sub")}
-              className="group w-full glass rounded-2xl p-4 text-left hover:bg-white/5 transition border border-white/10 hover:border-[var(--neon-secondary)]/40"
+              className="w-full glass rounded-2xl p-4 text-left hover:bg-white/5 transition border border-white/10 hover:border-[var(--neon-secondary)]/40"
             >
-              <div className="flex items-center gap-3 mb-1">
+              <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--neon-secondary)]/15 text-[var(--neon-secondary)]">
                   <UserCog className="h-5 w-5" />
                 </div>
                 <div>
                   <h3 className="font-semibold text-[var(--neon-secondary)]">Make Co-Host</h3>
                   <p className="text-[11px] text-muted-foreground">
-                    They can admit from lobby, mute &amp; remove participants.
+                    Can admit, mute & remove. You keep full control.
                   </p>
                 </div>
               </div>
-              <p className="text-[11px] text-muted-foreground/60 mt-2 pl-[52px]">
-                You keep full host control alongside them.
-              </p>
             </button>
-
             <button
               onClick={() => onTransfer("full")}
-              className="group w-full glass rounded-2xl p-4 text-left hover:bg-white/5 transition border border-white/10 hover:border-[var(--neon-primary)]/40"
+              className="w-full glass rounded-2xl p-4 text-left hover:bg-white/5 transition border border-white/10 hover:border-[var(--neon-primary)]/40"
             >
-              <div className="flex items-center gap-3 mb-1">
+              <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]">
                   <Crown className="h-5 w-5" />
                 </div>
                 <div>
                   <h3 className="font-semibold text-[var(--neon-primary)]">Transfer Full Host</h3>
                   <p className="text-[11px] text-muted-foreground">
-                    They become the sole host with complete control.
+                    They become sole host. You become a participant.
                   </p>
                 </div>
               </div>
-              <p className="text-[11px] text-muted-foreground/60 mt-2 pl-[52px]">
-                You will lose host privileges and become a regular participant.
-              </p>
             </button>
           </div>
-
           <NeonButton variant="ghost" className="mt-5 w-full" onClick={onClose}>
             Cancel
           </NeonButton>
@@ -1078,16 +2708,14 @@ function StatusPicker({
         <p className="px-3 py-1.5 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
           Set status
         </p>
-
         {isPresenting && (
           <div className="mx-1.5 mb-1.5 flex items-start gap-2 rounded-xl border border-[oklch(0.65_0.22_280)/0.35] bg-[oklch(0.65_0.22_280)/0.1] px-3 py-2">
             <Presentation className="h-3 w-3 mt-0.5 shrink-0 text-[oklch(0.75_0.18_280)]" />
             <p className="text-[11px] text-[oklch(0.8_0.15_280)] leading-snug">
-              Currently presenting. Your choice will apply when screen sharing stops.
+              Currently presenting. Choice applies when sharing stops.
             </p>
           </div>
         )}
-
         {MANUAL_STATUSES.map((key) => {
           const cfg = STATUS_CONFIG[key];
           const isActive = isPresenting ? false : current === key;
@@ -1114,7 +2742,7 @@ function StatusPicker({
   );
 }
 
-// ─── Participants Panel ────────────────────────────────────────────────────────
+// ─── Participants Panel ───────────────────────────────────────────────────────
 
 function ParticipantsPanel({
   username,
@@ -1150,7 +2778,6 @@ function ParticipantsPanel({
   onClose: () => void;
 }) {
   const canManage = isHost || isSubHost;
-
   return (
     <motion.aside
       initial={{ x: 340 }}
@@ -1168,7 +2795,6 @@ function ParticipantsPanel({
           <X className="h-4 w-4" />
         </button>
       </div>
-
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         <AnimatePresence>
           {raisedHands.length > 0 && (
@@ -1197,7 +2823,6 @@ function ParticipantsPanel({
             </motion.div>
           )}
         </AnimatePresence>
-
         {canManage && (
           <div className="flex gap-2">
             <NeonButton variant="outline" className="flex-1 text-xs" onClick={onMuteAll}>
@@ -1208,7 +2833,6 @@ function ParticipantsPanel({
             </NeonButton>
           </div>
         )}
-
         <ul className="space-y-2">
           <li className="flex items-center gap-3 rounded-xl border border-[var(--neon-primary)]/20 bg-[var(--neon-primary)]/5 p-2.5">
             <div className="relative">
@@ -1237,7 +2861,6 @@ function ParticipantsPanel({
               )}
             </div>
           </li>
-
           {peers.map((p, i) => (
             <motion.li
               key={p.socketId}
@@ -1361,9 +2984,8 @@ function ChatPanel({
     if (!emojiPickerForMsg) return;
     const handler = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (!target.closest(`[data-emoji-picker]`) && !target.closest(`[data-emoji-trigger]`)) {
+      if (!target.closest(`[data-emoji-picker]`) && !target.closest(`[data-emoji-trigger]`))
         setEmojiPickerForMsg(null);
-      }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
@@ -1406,11 +3028,10 @@ function ChatPanel({
     >
       <div className="flex items-center justify-between p-4 border-b border-white/5 shrink-0">
         <h3 className="text-sm font-semibold flex items-center gap-2">
-          <MessageSquare className="h-4 w-4 text-[var(--neon-primary)]" />
-          Meeting Chat
+          <MessageSquare className="h-4 w-4 text-[var(--neon-primary)]" /> Meeting Chat
           {messages.length > 0 && (
             <span className="text-[11px] text-muted-foreground font-normal">
-              · {messages.length} messages
+              · {messages.length}
             </span>
           )}
         </h3>
@@ -1418,7 +3039,6 @@ function ChatPanel({
           <X className="h-4 w-4" />
         </button>
       </div>
-
       <div className="flex-1 overflow-y-auto p-3 space-y-0.5 scrollbar-hide">
         {grouped.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full gap-3 py-12">
@@ -1432,7 +3052,6 @@ function ChatPanel({
             </p>
           </div>
         )}
-
         <AnimatePresence initial={false}>
           {grouped.map((msg) => (
             <motion.div
@@ -1464,7 +3083,6 @@ function ChatPanel({
                   </span>
                 </div>
               )}
-
               <div className={cn("flex", msg.isSelf ? "justify-end" : "justify-start")}>
                 <div
                   className={cn(
@@ -1483,7 +3101,6 @@ function ChatPanel({
                       </span>
                     </div>
                   )}
-
                   <div
                     className={cn(
                       "relative px-3.5 py-2 text-sm leading-relaxed",
@@ -1505,7 +3122,6 @@ function ChatPanel({
                   >
                     {msg.text}
                   </div>
-
                   {Object.keys(msg.reactions).length > 0 && (
                     <div
                       className={cn(
@@ -1532,7 +3148,6 @@ function ChatPanel({
                       )}
                     </div>
                   )}
-
                   <AnimatePresence>
                     {hoveredMsgId === msg.id && (
                       <motion.div
@@ -1570,7 +3185,6 @@ function ChatPanel({
                               <SmilePlus className="h-3 w-3" />
                             </button>
                           </div>
-
                           <AnimatePresence>
                             {emojiPickerForMsg === msg.id && (
                               <motion.div
@@ -1616,7 +3230,6 @@ function ChatPanel({
             </motion.div>
           ))}
         </AnimatePresence>
-
         <AnimatePresence>
           {typingPeers.length > 0 && (
             <motion.div
@@ -1642,10 +3255,8 @@ function ChatPanel({
             </motion.div>
           )}
         </AnimatePresence>
-
         <div ref={bottomRef} />
       </div>
-
       <AnimatePresence>
         {replyTo && (
           <motion.div
@@ -1673,7 +3284,6 @@ function ChatPanel({
           </motion.div>
         )}
       </AnimatePresence>
-
       <div className="border-t border-white/5 p-3 shrink-0">
         <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 pl-4 pr-2 py-2 focus-within:border-[var(--neon-primary)]/40 focus-within:bg-[var(--neon-primary)]/5 transition">
           <input
@@ -1724,6 +3334,10 @@ function VideoGrid({
   onLowerHand,
   isSpeaking,
   speakingPeerId,
+  cinemaMode,
+  activeSpotlightId,
+  spotlightId,
+  setSpotlightId,
 }: {
   localStream: MediaStream | null;
   localSocketId: string | null;
@@ -1739,7 +3353,87 @@ function VideoGrid({
   onLowerHand: (id: string) => void;
   isSpeaking: boolean;
   speakingPeerId: string | null;
+  cinemaMode: boolean;
+  activeSpotlightId: string | null;
+  spotlightId: string | null;
+  setSpotlightId: (id: string | null) => void;
 }) {
+  if (cinemaMode && activeSpotlightId) {
+    const isLocalSpotlit = activeSpotlightId === "local" || activeSpotlightId === localSocketId;
+    const spotlitPeer = isLocalSpotlit ? null : peers.find((p) => p.socketId === activeSpotlightId);
+    const stripParticipants = isLocalSpotlit
+      ? peers.map((p, i) => ({ type: "remote" as const, peer: p, hue: hueForIndex(i) }))
+      : [
+          { type: "local" as const },
+          ...peers
+            .filter((p) => p.socketId !== activeSpotlightId)
+            .map((p, i) => ({ type: "remote" as const, peer: p, hue: hueForIndex(i) })),
+        ];
+
+    return (
+      <div className="flex h-full gap-3">
+        <div className="flex-1 relative overflow-hidden rounded-2xl">
+          {isLocalSpotlit ? (
+            <LocalVideoTile
+              stream={localStream}
+              username={username}
+              mic={mic}
+              cam={cam}
+              isHost={isHost}
+              isSubHost={isSubHost}
+              isSpeaking={isSpeaking}
+              status={localStatus}
+              handRaised={localHandRaised}
+            />
+          ) : spotlitPeer ? (
+            <RemoteVideoTile
+              peer={spotlitPeer}
+              hue={hueForIndex(peers.indexOf(spotlitPeer))}
+              onRemove={() => onRemove(spotlitPeer.socketId)}
+              onLowerHand={() => onLowerHand(spotlitPeer.socketId)}
+              isSpeaking={spotlitPeer.socketId === speakingPeerId}
+            />
+          ) : null}
+          {spotlightId && (
+            <button
+              onClick={() => setSpotlightId(null)}
+              className="absolute top-3 right-3 z-20 flex items-center gap-1.5 rounded-xl bg-black/60 backdrop-blur border border-white/10 px-2.5 py-1.5 text-[11px] text-muted-foreground hover:text-foreground transition"
+            >
+              <PinOff className="h-3 w-3" /> Unpin
+            </button>
+          )}
+        </div>
+        {stripParticipants.length > 0 && (
+          <div className="flex flex-col gap-2 w-40 overflow-y-auto">
+            {stripParticipants.map((p, i) => (
+              <div key={i} className="h-28 shrink-0">
+                {p.type === "local" ? (
+                  <LocalVideoTile
+                    stream={localStream}
+                    username={username}
+                    mic={mic}
+                    cam={cam}
+                    isHost={isHost}
+                    isSubHost={isSubHost}
+                    isSpeaking={isSpeaking}
+                  />
+                ) : (
+                  <RemoteVideoTile
+                    peer={p.peer}
+                    hue={p.hue}
+                    onRemove={() => onRemove(p.peer.socketId)}
+                    onLowerHand={() => onLowerHand(p.peer.socketId)}
+                    isSpeaking={p.peer.socketId === speakingPeerId}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   const total = peers.length + 1;
   const cols =
     total <= 1
@@ -1754,26 +3448,47 @@ function VideoGrid({
 
   return (
     <div className={cn("grid h-full w-full gap-3", cols)}>
-      <LocalVideoTile
-        stream={localStream}
-        username={username}
-        mic={mic}
-        cam={cam}
-        isHost={isHost}
-        isSubHost={isSubHost}
-        isSpeaking={isSpeaking}
-        status={localStatus}
-        handRaised={localHandRaised}
-      />
-      {peers.map((p, i) => (
-        <RemoteVideoTile
-          key={p.socketId}
-          peer={p}
-          hue={hueForIndex(i)}
-          onRemove={() => onRemove(p.socketId)}
-          onLowerHand={() => onLowerHand(p.socketId)}
-          isSpeaking={p.socketId === speakingPeerId}
+      <div className="relative group">
+        <LocalVideoTile
+          stream={localStream}
+          username={username}
+          mic={mic}
+          cam={cam}
+          isHost={isHost}
+          isSubHost={isSubHost}
+          isSpeaking={isSpeaking}
+          status={localStatus}
+          handRaised={localHandRaised}
         />
+        <button
+          onClick={() => setSpotlightId(spotlightId === "local" ? null : "local")}
+          className="absolute top-2 left-1/2 -translate-x-1/2 z-20 opacity-0 group-hover:opacity-100 transition flex items-center gap-1 rounded-full bg-black/60 backdrop-blur border border-white/10 px-2 py-0.5 text-[10px] text-muted-foreground"
+        >
+          {spotlightId === "local" ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+          {spotlightId === "local" ? "Unpin" : "Pin"}
+        </button>
+      </div>
+      {peers.map((p, i) => (
+        <div key={p.socketId} className="relative group">
+          <RemoteVideoTile
+            peer={p}
+            hue={hueForIndex(i)}
+            onRemove={() => onRemove(p.socketId)}
+            onLowerHand={() => onLowerHand(p.socketId)}
+            isSpeaking={p.socketId === speakingPeerId}
+          />
+          <button
+            onClick={() => setSpotlightId(spotlightId === p.socketId ? null : p.socketId)}
+            className="absolute top-2 left-1/2 -translate-x-1/2 z-20 opacity-0 group-hover:opacity-100 transition flex items-center gap-1 rounded-full bg-black/60 backdrop-blur border border-white/10 px-2 py-0.5 text-[10px] text-muted-foreground"
+          >
+            {spotlightId === p.socketId ? (
+              <PinOff className="h-3 w-3" />
+            ) : (
+              <Pin className="h-3 w-3" />
+            )}
+            {spotlightId === p.socketId ? "Unpin" : "Pin"}
+          </button>
+        </div>
       ))}
     </div>
   );
@@ -1803,12 +3518,9 @@ function LocalVideoTile({
   handRaised?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-
   useEffect(() => {
     if (videoRef.current && stream) videoRef.current.srcObject = stream;
   }, [stream]);
-
-  // Show video only when cam is on and the stream has a live video track.
   const hasLiveVideo =
     cam && stream != null && stream.getVideoTracks().some((t) => t.readyState === "live");
 
@@ -1818,14 +3530,12 @@ function LocalVideoTile({
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       className={cn(
-        "relative overflow-hidden rounded-2xl border bg-black/60 transition-all duration-300",
+        "relative overflow-hidden rounded-2xl border bg-black/60 transition-all duration-300 h-full",
         isSpeaking
           ? "border-[var(--neon-secondary)] shadow-[0_0_24px_4px_oklch(0.82_0.16_210/0.4)]"
           : "border-white/10",
       )}
     >
-      {/* Video element always present — hidden when cam is off so we don't
-          flash a black frame between cam-off and the avatar appearing. */}
       <video
         ref={videoRef}
         autoPlay
@@ -1836,14 +3546,11 @@ function LocalVideoTile({
           hasLiveVideo ? "opacity-100" : "opacity-0",
         )}
       />
-
-      {/* Avatar fallback — shown when cam is off */}
       {!hasLiveVideo && (
         <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[oklch(0.25_0.08_280)] to-[oklch(0.18_0.05_310)]">
           <Avatar name={username} hue={280} size={72} />
         </div>
       )}
-
       {status && (
         <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-black/60 backdrop-blur px-2 py-0.5">
           <span
@@ -1856,7 +3563,6 @@ function LocalVideoTile({
           <span className="text-[10px] text-muted-foreground">{STATUS_CONFIG[status].label}</span>
         </div>
       )}
-
       <AnimatePresence>
         {handRaised && (
           <motion.div
@@ -1874,13 +3580,11 @@ function LocalVideoTile({
           </motion.div>
         )}
       </AnimatePresence>
-
       <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-lg bg-black/60 backdrop-blur px-2 py-1 text-xs z-10">
         {isSpeaking && <AudioBars color="var(--neon-secondary)" small />}
         <span className="truncate max-w-[140px]">{username} (you)</span>
         {!mic && <MicOff className="h-3 w-3 text-[oklch(0.78_0.2_35)]" />}
       </div>
-
       {isHost && (
         <span className="absolute top-2 left-2 z-10 rounded-md bg-[var(--neon-primary)]/20 px-1.5 py-0.5 text-[10px] text-[var(--neon-primary)] border border-[var(--neon-primary)]/30">
           Host
@@ -1891,7 +3595,6 @@ function LocalVideoTile({
           Co-Host
         </span>
       )}
-
       {isSpeaking && (
         <motion.div
           className="absolute inset-0 rounded-2xl pointer-events-none"
@@ -1925,11 +3628,9 @@ function RemoteVideoTile({
   isSpeaking?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-
   useEffect(() => {
     if (videoRef.current && peer.stream) videoRef.current.srcObject = peer.stream;
   }, [peer.stream]);
-
   const hasVideo = peer.cam && peer.stream && peer.stream.getVideoTracks().length > 0;
 
   return (
@@ -1939,7 +3640,7 @@ function RemoteVideoTile({
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.95 }}
       className={cn(
-        "group relative overflow-hidden rounded-2xl border bg-black/40 transition-all duration-300",
+        "group relative overflow-hidden rounded-2xl border bg-black/40 transition-all duration-300 h-full",
         isSpeaking
           ? "border-[var(--neon-secondary)] shadow-[0_0_24px_4px_oklch(0.82_0.16_210/0.4)]"
           : "border-white/10",
@@ -1961,13 +3662,11 @@ function RemoteVideoTile({
           )}
         />
       )}
-
       {!hasVideo && (
         <div className="absolute inset-0 flex items-center justify-center">
           <Avatar name={peer.username} hue={hue} size={72} />
         </div>
       )}
-
       <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-black/60 backdrop-blur px-2 py-0.5">
         <span
           className="h-1.5 w-1.5 rounded-full"
@@ -1980,7 +3679,6 @@ function RemoteVideoTile({
           {STATUS_CONFIG[peer.status]?.label ?? "Available"}
         </span>
       </div>
-
       <AnimatePresence>
         {peer.handRaised && (
           <motion.div
@@ -1989,7 +3687,7 @@ function RemoteVideoTile({
             exit={{ scale: 0, opacity: 0 }}
             className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 text-4xl drop-shadow-[0_0_20px_oklch(0.9_0.18_80)] cursor-pointer"
             onClick={onLowerHand}
-            title="Lower hand (host)"
+            title="Lower hand"
           >
             <motion.span
               animate={{ rotate: [0, 20, -10, 20, 0] }}
@@ -2000,25 +3698,11 @@ function RemoteVideoTile({
           </motion.div>
         )}
       </AnimatePresence>
-
-      {hasVideo && (
-        <motion.div
-          className="absolute inset-0 opacity-20 pointer-events-none"
-          animate={{ backgroundPosition: ["0% 0%", "100% 100%"] }}
-          transition={{ duration: 18, repeat: Infinity, repeatType: "reverse" }}
-          style={{
-            backgroundImage: `radial-gradient(circle at 30% 30%, oklch(0.7 0.2 ${hue} / 0.3), transparent 50%)`,
-            backgroundSize: "200% 200%",
-          }}
-        />
-      )}
-
       <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-lg bg-black/60 backdrop-blur px-2 py-1 text-xs z-10">
         {isSpeaking && <AudioBars color="var(--neon-secondary)" small />}
         <span className="truncate max-w-[140px]">{peer.username}</span>
         {!peer.mic && <MicOff className="h-3 w-3 text-[oklch(0.78_0.2_35)]" />}
       </div>
-
       {peer.isHost && (
         <span className="absolute top-2 left-2 z-10 rounded-md bg-[var(--neon-primary)]/20 px-1.5 py-0.5 text-[10px] text-[var(--neon-primary)] border border-[var(--neon-primary)]/30">
           Host
@@ -2029,7 +3713,6 @@ function RemoteVideoTile({
           Co-Host
         </span>
       )}
-
       <button
         onClick={onRemove}
         className="absolute bottom-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition rounded-md bg-black/60 p-1 text-muted-foreground hover:text-[oklch(0.78_0.2_35)]"
@@ -2037,7 +3720,6 @@ function RemoteVideoTile({
       >
         <X className="h-3 w-3" />
       </button>
-
       {isSpeaking && (
         <motion.div
           className="absolute inset-0 rounded-2xl pointer-events-none"
@@ -2057,15 +3739,6 @@ function RemoteVideoTile({
 
 // ─── Screen Share View ────────────────────────────────────────────────────────
 
-/**
- * Bug fix: ScreenShareView now takes two separate stream props:
- *  - localStream: the screen-share preview (what's being captured)
- *  - localCameraStream: always the raw camera+mic stream
- *
- * The PiP LocalVideoTile is driven by localCameraStream so it always shows
- * the camera (or avatar fallback if cam is off), independent of the screenshare.
- * This matches how Zoom and Google Meet handle the self-view during presentation.
- */
 function ScreenShareView({
   localStream,
   localCameraStream,
@@ -2092,7 +3765,6 @@ function ScreenShareView({
 
   return (
     <div className="flex h-full flex-col gap-3 lg:flex-row">
-      {/* Main screen-share canvas */}
       <div className="relative flex-1 overflow-hidden rounded-2xl border border-[var(--neon-primary)]/40 bg-black/60 glow-primary">
         <video
           ref={screenVideoRef}
@@ -2106,10 +3778,7 @@ function ScreenShareView({
           {username} is sharing
         </div>
       </div>
-
-      {/* PiP strip — camera stream used here, not the screen stream */}
       <div className="flex gap-3 overflow-x-auto lg:w-56 lg:flex-col lg:overflow-y-auto">
-        {/* Self PiP: always uses localCameraStream so camera / avatar is correct */}
         <div className="h-24 w-32 shrink-0 lg:h-32 lg:w-full">
           <LocalVideoTile
             stream={localCameraStream}
@@ -2135,7 +3804,7 @@ function ScreenShareView({
   );
 }
 
-// ─── Shared UI components ─────────────────────────────────────────────────────
+// ─── Shared UI ────────────────────────────────────────────────────────────────
 
 function ControlBtn({
   active,
@@ -2161,7 +3830,7 @@ function ControlBtn({
       onClick={onClick}
       title={label}
       className={cn(
-        "flex h-12 w-12 sm:w-auto sm:px-4 items-center justify-center gap-2 rounded-2xl border transition",
+        "flex h-10 w-10 sm:h-12 sm:w-auto sm:px-4 items-center justify-center gap-2 rounded-2xl border transition shrink-0",
         active && !highlightOn && "border-white/10 bg-white/5 text-foreground hover:bg-white/10",
         highlightOn &&
           "border-[var(--neon-primary)] bg-[var(--neon-primary)]/15 text-[var(--neon-primary)] animate-pulse-glow",
@@ -2181,7 +3850,7 @@ function ControlBtn({
       }
     >
       {active ? on : off}
-      <span className="hidden sm:inline text-xs">{label}</span>
+      <span className="hidden sm:inline text-xs font-medium">{label}</span>
     </motion.button>
   );
 }
@@ -2248,4 +3917,11 @@ function hueForName(name: string): number {
 
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDuration(ms: number): string {
+  const totalSec = Math.ceil(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }

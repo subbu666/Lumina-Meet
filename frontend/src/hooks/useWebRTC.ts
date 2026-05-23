@@ -1,21 +1,22 @@
 /**
- * useWebRTC — Lumina Meet Phase 3
+ * useWebRTC — Lumina Meet Phase 4
  *
- * Bug fixes in this version:
- *  • cameraStreamRef introduced — always holds the raw cam+mic stream,
- *    never replaced. localStreamRef/localStream now only drives the preview.
- *  • toggleCam always operates on cameraStreamRef so screen-share is
- *    unaffected when cam is toggled.
- *  • toggleScreenShare passes cameraStreamRef to ScreenShareView so the
- *    PiP tile always shows the camera (or avatar) even while presenting.
- *  • _stopSharingCleanup restores the camera track from cameraStreamRef
- *    instead of the (now stale) localStreamRef.
- *  • localCameraStream exposed in the return value so the UI can render
- *    the PiP independently of the screen-share preview stream.
+ * NEW in Phase 4:
+ *  • Collaborative whiteboard (draw, erase, clear, cursor relay)
+ *  • Live polls (create, vote, close, dismiss)
+ *  • Shared agenda + focus timer (set, navigate, start/pause timer)
+ *  • Noise suppression toggle (RNNoise WASM / spectral gate fallback)
+ *  • Background blur / virtual backgrounds (MediaPipe / canvas fallback)
+ *  • Spatial layout (drag-drop tile positions persisted in local state)
+ *  • Auto-spotlight / cinema mode (derived from existing VAD)
+ *
+ * All Phase 1/2/3 functionality is preserved unchanged.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
+import { useNoiseSuppression } from "./useNoiseSuppression";
+import { useBackgroundBlur, type BackgroundMode } from "./useBackgroundBlur";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -65,9 +66,75 @@ export interface PendingParticipant {
   userId?: string;
 }
 
+// ─── Phase 4 Types ────────────────────────────────────────────────────────────
+
+export type WhiteboardTool =
+  | "pen"
+  | "eraser"
+  | "text"
+  | "sticky"
+  | "arrow"
+  | "rect"
+  | "ellipse"
+  | "select";
+export type WhiteboardColor = string;
+
+export interface WhiteboardElement {
+  id: string;
+  type: "stroke" | "text" | "sticky" | "arrow" | "rect" | "ellipse";
+  points?: number[][]; // for stroke
+  x?: number;
+  y?: number; // for placed elements
+  width?: number;
+  height?: number;
+  text?: string;
+  color: string;
+  strokeWidth?: number;
+  author: string;
+  authorId: string;
+}
+
+export interface WhiteboardCursor {
+  socketId: string;
+  username: string;
+  x: number;
+  y: number;
+}
+
+export interface Poll {
+  id: string;
+  question: string;
+  options: string[];
+  votes: Record<number, number>; // optionIndex → count
+  totalVoters: number;
+  closed: boolean;
+  myVote?: number; // local user's vote
+}
+
+export interface AgendaItem {
+  id: string;
+  title: string;
+  durationSec: number;
+  done: boolean;
+}
+
+export interface AgendaState {
+  items: AgendaItem[];
+  activeIdx: number;
+  timerEnd: number | null; // epoch ms
+  timerPaused: boolean;
+  timerRemaining: number | null; // ms, set when paused
+}
+
+// Tile position for spatial layout
+export interface TilePosition {
+  x: number; // percent 0-100
+  y: number; // percent 0-100
+}
+
 export interface UseWebRTCReturn {
+  // ── Core ──────────────────────────────────────────────────────────────────
   localStream: MediaStream | null;
-  /** Always the raw camera+mic stream — use this for the PiP tile during screenshare */
   localCameraStream: MediaStream | null;
   localSocketId: string | null;
   mic: boolean;
@@ -83,6 +150,7 @@ export interface UseWebRTCReturn {
   removePeer: (socketId: string) => void;
   isSpeaking: boolean;
   speakingPeerId: string | null;
+  // ── Phase 2 ──────────────────────────────────────────────────────────────
   messages: ChatMessage[];
   typingPeers: TypingPeer[];
   sendChatMessage: (text: string, replyTo?: ChatMessage | null) => void;
@@ -99,6 +167,7 @@ export interface UseWebRTCReturn {
   raisedHands: Array<{ socketId: string; username: string; handRaisedAt: number }>;
   reactions: ReactionEvent[];
   sendReaction: (emoji: string) => void;
+  // ── Phase 3 ──────────────────────────────────────────────────────────────
   isHost: boolean;
   isSubHost: boolean;
   isWaiting: boolean;
@@ -108,6 +177,47 @@ export interface UseWebRTCReturn {
   transferHost: (socketId: string, mode: "full" | "sub") => void;
   error: string | null;
   isConnecting: boolean;
+  // ── Phase 4: Whiteboard ───────────────────────────────────────────────────
+  whiteboardElements: WhiteboardElement[];
+  whiteboardCursors: WhiteboardCursor[];
+  drawWhiteboardElement: (element: WhiteboardElement) => void;
+  eraseWhiteboardElement: (elementId: string) => void;
+  clearWhiteboard: () => void;
+  broadcastWhiteboardCursor: (x: number, y: number) => void;
+  // ── Phase 4: Polls ────────────────────────────────────────────────────────
+  currentPoll: Poll | null;
+  createPoll: (question: string, options: string[]) => void;
+  votePoll: (optionIndex: number) => void;
+  closePoll: () => void;
+  dismissPoll: () => void;
+  // ── Phase 4: Agenda ───────────────────────────────────────────────────────
+  agenda: AgendaState | null;
+  setAgenda: (items: Array<{ title: string; durationSec: number }>) => void;
+  agendaNext: () => void;
+  agendaPrev: () => void;
+  agendaGoto: (index: number) => void;
+  agendaTimerStart: () => void;
+  agendaTimerPause: () => void;
+  // ── Phase 4: Noise Suppression ────────────────────────────────────────────
+  noiseSuppressionEnabled: boolean;
+  noiseSuppressionSupported: boolean;
+  toggleNoiseSuppression: () => Promise<void>;
+  // ── Phase 4: Background Blur ──────────────────────────────────────────────
+  backgroundMode: BackgroundMode;
+  setBackgroundMode: (mode: BackgroundMode) => void;
+  isBlurProcessing: boolean;
+  // ── Phase 4: Spatial Layout ───────────────────────────────────────────────
+  tilePositions: Map<string, TilePosition>;
+  setTilePosition: (id: string, pos: TilePosition) => void;
+  // ── Phase 4: Cinema / Spotlight mode ─────────────────────────────────────
+  cinemaMode: boolean;
+  setCinemaMode: (v: boolean) => void;
+  spotlightId: string | null; // manually pinned tile ID (socketId or "local")
+  setSpotlightId: (id: string | null) => void;
+  autoSpotlight: boolean; // whether VAD auto-pins the speaker
+  setAutoSpotlight: (v: boolean) => void;
+  /** The effective tile currently spotlighted (auto or manual) */
+  activeSpotlightId: string | null;
 }
 
 // ─── ICE servers ──────────────────────────────────────────────────────────────
@@ -131,8 +241,7 @@ const TYPING_DEBOUNCE_MS = 1500;
 function createBlackVideoTrack(width = 640, height = 480): MediaStreamTrack {
   const canvas = Object.assign(document.createElement("canvas"), { width, height });
   canvas.getContext("2d")?.fillRect(0, 0, width, height);
-  // @ts-ignore
-  const stream: MediaStream = canvas.captureStream(0);
+  const stream: MediaStream = (canvas as any).captureStream(0);
   return stream.getVideoTracks()[0];
 }
 
@@ -168,7 +277,6 @@ export function useWebRTC(
 ): UseWebRTCReturn {
   // ── Core state ─────────────────────────────────────────────────────────────
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  // The camera stream is always the raw cam+mic — never replaced by screen share.
   const [localCameraStream, setLocalCameraStream] = useState<MediaStream | null>(null);
   const [peers, setPeers] = useState<RemotePeer[]>([]);
   const [mic, setMic] = useState(true);
@@ -194,19 +302,19 @@ export function useWebRTC(
   const [isWaiting, setIsWaiting] = useState(false);
   const [pendingParticipants, setPendingParticipants] = useState<PendingParticipant[]>([]);
 
+  // ── Phase 4 state ──────────────────────────────────────────────────────────
+  const [whiteboardElements, setWhiteboardElements] = useState<WhiteboardElement[]>([]);
+  const [whiteboardCursors, setWhiteboardCursors] = useState<WhiteboardCursor[]>([]);
+  const [currentPoll, setCurrentPoll] = useState<Poll | null>(null);
+  const [agenda, setAgendaState] = useState<AgendaState | null>(null);
+  const [tilePositions, setTilePositionsState] = useState<Map<string, TilePosition>>(new Map());
+  const [cinemaMode, setCinemaMode] = useState(false);
+  const [spotlightId, setSpotlightId] = useState<string | null>(null);
+  const [autoSpotlight, setAutoSpotlight] = useState(false);
+
   // ── Refs ───────────────────────────────────────────────────────────────────
   const socketRef = useRef<Socket | null>(null);
-  /**
-   * ALWAYS points to the raw camera+mic MediaStream.
-   * Never reassigned to a screen-share stream.
-   * This is the source of truth for cam/mic track manipulation.
-   */
   const cameraStreamRef = useRef<MediaStream | null>(null);
-  /**
-   * Used only for the <video> preview that the local user sees.
-   * During screen-share this will contain the screen track + audio.
-   * Not used for track operations on peer connections.
-   */
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
@@ -220,10 +328,23 @@ export function useWebRTC(
   const chatOpenRef = useRef(false);
   const prevStatusRef = useRef<ParticipantStatus>("available");
   const sharingRef = useRef(false);
+  const myVoteRef = useRef<number | undefined>(undefined);
+  // Expose refs for the noise/blur sub-hooks
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     sharingRef.current = sharing;
   }, [sharing]);
+
+  // ── Phase 4 sub-hooks ──────────────────────────────────────────────────────
+  const { noiseSuppressionEnabled, noiseSuppressionSupported, toggleNoiseSuppression } =
+    useNoiseSuppression(cameraStreamRef, pcsRef);
+
+  const {
+    backgroundMode,
+    setBackgroundMode,
+    isProcessing: isBlurProcessing,
+  } = useBackgroundBlur(cameraStreamRef, pcsRef, localVideoRef);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -234,12 +355,8 @@ export function useWebRTC(
   const createPC = useCallback(
     (remoteSocketId: string, remoteUsername: string): RTCPeerConnection => {
       const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-
-      // Always use cameraStreamRef — never the screen-preview stream.
       const stream = cameraStreamRef.current;
-      if (stream) {
-        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-      }
+      if (stream) stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
       pc.onicecandidate = ({ candidate }) => {
         if (candidate && socketRef.current) {
@@ -251,7 +368,6 @@ export function useWebRTC(
       pc.ontrack = ({ track }) => {
         remoteStream.addTrack(track);
         updatePeer(remoteSocketId, { stream: remoteStream });
-
         if (track.kind === "audio" && audioCtxRef.current) {
           const analyser = buildAnalyser(audioCtxRef.current, remoteStream);
           if (analyser) remoteAnalysers.current.set(remoteSocketId, analyser);
@@ -329,14 +445,12 @@ export function useWebRTC(
         return;
       }
 
-      // Store in both refs — they point to the same stream initially.
       cameraStreamRef.current = stream;
       localStreamRef.current = stream;
       setLocalStream(stream);
       setLocalCameraStream(stream);
       setIsConnecting(false);
 
-      // Local VAD
       const audioCtx = new AudioContext();
       audioCtxRef.current = audioCtx;
       const localAnalyser = buildAnalyser(audioCtx, stream);
@@ -361,7 +475,6 @@ export function useWebRTC(
         }, VAD_POLL_MS);
       }
 
-      // Connect socket
       const socket = io(socketUrl, {
         transports: ["websocket", "polling"],
         reconnectionAttempts: 5,
@@ -380,7 +493,6 @@ export function useWebRTC(
         setIsConnecting(false);
       });
 
-      // Remote VAD
       const remoteVadTimer = setInterval(() => {
         let loudestId: string | null = null;
         let loudestVol = VAD_THRESHOLD;
@@ -397,144 +509,94 @@ export function useWebRTC(
 
       // ── Signaling ──────────────────────────────────────────────────────────
 
-      socket.on(
-        "room-peers",
-        async (
-          existingPeers: Array<{
-            socketId: string;
-            username: string;
-            mic: boolean;
-            cam: boolean;
-            status?: ParticipantStatus;
-            handRaised?: boolean;
-            handRaisedAt?: number | null;
-            isHost?: boolean;
-            isSubHost?: boolean;
-          }>,
-        ) => {
-          for (const peer of existingPeers) {
-            const pc = createPC(peer.socketId, peer.username);
-            updatePeer(peer.socketId, {
-              status: peer.status ?? "available",
-              handRaised: peer.handRaised ?? false,
-              handRaisedAt: peer.handRaisedAt ?? null,
-              isHost: peer.isHost ?? false,
-              isSubHost: peer.isSubHost ?? false,
-            });
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            socket.emit("offer", { to: peer.socketId, offer });
-          }
-        },
-      );
-
-      socket.on(
-        "user-joined",
-        (data: {
-          socketId: string;
-          username: string;
-          mic: boolean;
-          cam: boolean;
-          status?: ParticipantStatus;
-          handRaised?: boolean;
-          isHost?: boolean;
-          isSubHost?: boolean;
-        }) => {
-          setPeers((prev) => {
-            if (prev.some((p) => p.socketId === data.socketId)) return prev;
-            return [
-              ...prev,
-              {
-                socketId: data.socketId,
-                username: data.username,
-                stream: null,
-                mic: data.mic ?? true,
-                cam: data.cam ?? true,
-                screen: false,
-                speaking: false,
-                status: data.status ?? "available",
-                handRaised: data.handRaised ?? false,
-                handRaisedAt: null,
-                isHost: data.isHost ?? false,
-                isSubHost: data.isSubHost ?? false,
-              },
-            ];
+      socket.on("room-peers", async (existingPeers: any[]) => {
+        for (const peer of existingPeers) {
+          const pc = createPC(peer.socketId, peer.username);
+          updatePeer(peer.socketId, {
+            status: peer.status ?? "available",
+            handRaised: peer.handRaised ?? false,
+            handRaisedAt: peer.handRaisedAt ?? null,
+            isHost: peer.isHost ?? false,
+            isSubHost: peer.isSubHost ?? false,
           });
-        },
-      );
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit("offer", { to: peer.socketId, offer });
+        }
+      });
 
-      socket.on(
-        "offer",
-        async ({
-          from,
-          username: uname,
-          offer,
-        }: {
-          from: string;
-          username: string;
-          offer: RTCSessionDescriptionInit;
-        }) => {
-          const pc = createPC(from, uname);
-          await pc.setRemoteDescription(new RTCSessionDescription(offer));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          socket.emit("answer", { to: from, answer });
-        },
-      );
+      socket.on("user-joined", (data: any) => {
+        setPeers((prev) => {
+          if (prev.some((p) => p.socketId === data.socketId)) return prev;
+          return [
+            ...prev,
+            {
+              socketId: data.socketId,
+              username: data.username,
+              stream: null,
+              mic: data.mic ?? true,
+              cam: data.cam ?? true,
+              screen: false,
+              speaking: false,
+              status: data.status ?? "available",
+              handRaised: data.handRaised ?? false,
+              handRaisedAt: null,
+              isHost: data.isHost ?? false,
+              isSubHost: data.isSubHost ?? false,
+            },
+          ];
+        });
+      });
 
-      socket.on(
-        "answer",
-        async ({ from, answer }: { from: string; answer: RTCSessionDescriptionInit }) => {
-          const pc = pcsRef.current.get(from);
-          if (pc) await pc.setRemoteDescription(new RTCSessionDescription(answer));
-        },
-      );
+      socket.on("offer", async ({ from, username: uname, offer }: any) => {
+        const pc = createPC(from, uname);
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit("answer", { to: from, answer });
+      });
 
-      socket.on(
-        "ice-candidate",
-        async ({ from, candidate }: { from: string; candidate: RTCIceCandidateInit }) => {
-          const pc = pcsRef.current.get(from);
-          if (pc) {
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(candidate));
-            } catch (e) {
-              console.warn("[ICE] Failed", e);
-            }
+      socket.on("answer", async ({ from, answer }: any) => {
+        const pc = pcsRef.current.get(from);
+        if (pc) await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      });
+
+      socket.on("ice-candidate", async ({ from, candidate }: any) => {
+        const pc = pcsRef.current.get(from);
+        if (pc) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (e) {
+            console.warn("[ICE] Failed", e);
           }
-        },
-      );
+        }
+      });
 
-      socket.on(
-        "peer-media-state",
-        ({
-          socketId,
-          mic: pMic,
-          cam: pCam,
-          screen: pScreen,
-        }: {
-          socketId: string;
-          mic?: boolean;
-          cam?: boolean;
-          screen?: boolean;
-        }) => {
-          updatePeer(socketId, {
-            ...(pMic !== undefined && { mic: pMic }),
-            ...(pCam !== undefined && { cam: pCam }),
-            ...(pScreen !== undefined && { screen: pScreen }),
-            ...(pScreen === true && { status: "presenting" as ParticipantStatus }),
-            ...(pScreen === false && { status: "available" as ParticipantStatus }),
-          });
-        },
-      );
+      socket.on("peer-media-state", ({ socketId, mic: pMic, cam: pCam, screen: pScreen }: any) => {
+        updatePeer(socketId, {
+          ...(pMic !== undefined && { mic: pMic }),
+          ...(pCam !== undefined && { cam: pCam }),
+          ...(pScreen !== undefined && { screen: pScreen }),
+          ...(pScreen === true && { status: "presenting" as ParticipantStatus }),
+          ...(pScreen === false && { status: "available" as ParticipantStatus }),
+        });
+      });
 
-      socket.on("user-left", ({ socketId }: { socketId: string }) => {
+      socket.on("user-left", ({ socketId }: any) => {
         closePC(socketId);
         setTypingPeers((prev) => prev.filter((p) => p.socketId !== socketId));
         setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
+        // Remove from spatial positions
+        setTilePositionsState((prev) => {
+          const next = new Map(prev);
+          next.delete(socketId);
+          return next;
+        });
+        // Clean cursor
+        setWhiteboardCursors((prev) => prev.filter((c) => c.socketId !== socketId));
       });
 
-      socket.on("host-action", ({ action }: { action: string }) => {
-        // Always use cameraStreamRef for track operations.
+      socket.on("host-action", ({ action }: any) => {
         const camStream = cameraStreamRef.current;
         if (action === "mute") {
           camStream?.getAudioTracks().forEach((t) => {
@@ -550,174 +612,101 @@ export function useWebRTC(
           setCam(false);
           socket.emit("media-state", { cam: false });
         }
-        if (action === "lower-hand") {
-          setLocalHandRaised(false);
-        }
-        if (action === "remove") {
-          window.dispatchEvent(new CustomEvent("Lumina Meet:host-removed"));
-        }
+        if (action === "lower-hand") setLocalHandRaised(false);
+        if (action === "remove") window.dispatchEvent(new CustomEvent("Lumina Meet:host-removed"));
       });
 
-      // ── Phase 3: Waiting room & Host ─────────────────────────────────────
+      // ── Phase 3 ────────────────────────────────────────────────────────────
 
       socket.on("waiting", () => {
         setIsWaiting(true);
         setIsConnecting(false);
       });
-
-      socket.on("admitted", () => {
-        setIsWaiting(false);
-      });
-
+      socket.on("admitted", () => setIsWaiting(false));
       socket.on("join-request", (data: PendingParticipant) => {
         setPendingParticipants((prev) => {
           if (prev.some((p) => p.socketId === data.socketId)) return prev;
           return [...prev, data];
         });
       });
-
-      socket.on("join-rejected", ({ reason }: { reason: string }) => {
+      socket.on("join-rejected", ({ reason }: any) => {
         setError(reason);
         setIsWaiting(false);
         setIsConnecting(false);
       });
-
       socket.on("you-are-host", () => setIsHost(true));
       socket.on("you-are-subhost", () => setIsSubHost(true));
       socket.on("you-are-participant", () => {
         setIsHost(false);
         setIsSubHost(false);
       });
-
-      socket.on(
-        "host-transferred",
-        (data: {
-          mode: "full" | "sub";
-          newHostSocketId?: string;
-          oldHostSocketId?: string;
-          targetSocketId?: string;
-        }) => {
-          if (data.mode === "full") {
-            if (data.newHostSocketId === socket.id) {
-              setIsHost(true);
-              setIsSubHost(false);
-            } else if (data.oldHostSocketId === socket.id) {
-              setIsHost(false);
-              setIsSubHost(false);
-            }
-            setPeers((prev) =>
-              prev.map((p) => ({
-                ...p,
-                isHost: p.socketId === data.newHostSocketId,
-                isSubHost: p.socketId === data.newHostSocketId ? false : p.isSubHost,
-              })),
-            );
-          } else if (data.mode === "sub" && data.targetSocketId) {
-            if (data.targetSocketId === socket.id) setIsSubHost(true);
-            setPeers((prev) =>
-              prev.map((p) => (p.socketId === data.targetSocketId ? { ...p, isSubHost: true } : p)),
-            );
+      socket.on("host-transferred", (data: any) => {
+        if (data.mode === "full") {
+          if (data.newHostSocketId === socket.id) {
+            setIsHost(true);
+            setIsSubHost(false);
+          } else if (data.oldHostSocketId === socket.id) {
+            setIsHost(false);
+            setIsSubHost(false);
           }
-        },
-      );
-
-      // ── Phase 2 socket handlers ────────────────────────────────────────────
-
-      socket.on("chat-history", (history: Omit<ChatMessage, "reactions">[]) => {
-        setMessages(history.map((m) => ({ ...m, reactions: {} })));
+          setPeers((prev) =>
+            prev.map((p) => ({
+              ...p,
+              isHost: p.socketId === data.newHostSocketId,
+              isSubHost: p.socketId === data.newHostSocketId ? false : p.isSubHost,
+            })),
+          );
+        } else if (data.mode === "sub" && data.targetSocketId) {
+          if (data.targetSocketId === socket.id) setIsSubHost(true);
+          setPeers((prev) =>
+            prev.map((p) => (p.socketId === data.targetSocketId ? { ...p, isSubHost: true } : p)),
+          );
+        }
       });
 
-      socket.on("chat-message", (msg: Omit<ChatMessage, "reactions">) => {
+      // ── Phase 2 ────────────────────────────────────────────────────────────
+
+      socket.on("chat-history", (history: any[]) => {
+        setMessages(history.map((m) => ({ ...m, reactions: {} })));
+      });
+      socket.on("chat-message", (msg: any) => {
         setMessages((prev) => {
           if (prev.some((m) => m.id === msg.id)) return prev;
           return [...prev, { ...msg, reactions: {} }];
         });
-        if (!chatOpenRef.current && msg.socketId !== socket.id) {
-          setUnreadCount((n) => n + 1);
-        }
+        if (!chatOpenRef.current && msg.socketId !== socket.id) setUnreadCount((n) => n + 1);
         setTypingPeers((prev) => prev.filter((p) => p.socketId !== msg.socketId));
       });
-
-      socket.on(
-        "chat-reaction",
-        ({
-          messageId,
-          emoji,
-          socketId: sid,
-        }: {
-          messageId: string;
-          emoji: string;
-          socketId: string;
-          username: string;
-        }) => {
-          setMessages((prev) =>
-            prev.map((m) => {
-              if (m.id !== messageId) return m;
-              const newReactions = { ...m.reactions };
-              if (!newReactions[emoji]) newReactions[emoji] = new Set();
-              const clone = new Set(newReactions[emoji]);
-              if (clone.has(sid)) clone.delete(sid);
-              else clone.add(sid);
-              newReactions[emoji] = clone;
-              return { ...m, reactions: newReactions };
-            }),
-          );
-        },
-      );
-
-      socket.on(
-        "chat-typing",
-        ({
-          socketId: sid,
-          username: uname,
-          isTyping,
-        }: {
-          socketId: string;
-          username: string;
-          isTyping: boolean;
-        }) => {
-          setTypingPeers((prev) => {
-            if (isTyping) {
-              if (prev.some((p) => p.socketId === sid)) return prev;
-              return [...prev, { socketId: sid, username: uname }];
-            }
-            return prev.filter((p) => p.socketId !== sid);
-          });
-        },
-      );
-
-      socket.on(
-        "peer-status",
-        ({
-          socketId: sid,
-          status,
-        }: {
-          socketId: string;
-          username: string;
-          status: ParticipantStatus;
-        }) => {
-          updatePeer(sid, { status });
-        },
-      );
-
-      socket.on(
-        "hand-raised",
-        ({
-          socketId: sid,
-          handRaisedAt,
-        }: {
-          socketId: string;
-          username: string;
-          handRaisedAt: number;
-        }) => {
-          updatePeer(sid, { handRaised: true, handRaisedAt });
-        },
-      );
-
-      socket.on("hand-lowered", ({ socketId: sid }: { socketId: string }) => {
-        updatePeer(sid, { handRaised: false, handRaisedAt: null });
+      socket.on("chat-reaction", ({ messageId, emoji, socketId: sid }: any) => {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== messageId) return m;
+            const newReactions = { ...m.reactions };
+            if (!newReactions[emoji]) newReactions[emoji] = new Set();
+            const clone = new Set(newReactions[emoji]);
+            if (clone.has(sid)) clone.delete(sid);
+            else clone.add(sid);
+            newReactions[emoji] = clone;
+            return { ...m, reactions: newReactions };
+          }),
+        );
       });
-
+      socket.on("chat-typing", ({ socketId: sid, username: uname, isTyping }: any) => {
+        setTypingPeers((prev) => {
+          if (isTyping) {
+            if (prev.some((p) => p.socketId === sid)) return prev;
+            return [...prev, { socketId: sid, username: uname }];
+          }
+          return prev.filter((p) => p.socketId !== sid);
+        });
+      });
+      socket.on("peer-status", ({ socketId: sid, status }: any) => updatePeer(sid, { status }));
+      socket.on("hand-raised", ({ socketId: sid, handRaisedAt }: any) =>
+        updatePeer(sid, { handRaised: true, handRaisedAt }),
+      );
+      socket.on("hand-lowered", ({ socketId: sid }: any) =>
+        updatePeer(sid, { handRaised: false, handRaisedAt: null }),
+      );
       socket.on("reaction", (event: ReactionEvent) => {
         setReactions((prev) => [...prev, event]);
         setTimeout(() => {
@@ -725,13 +714,76 @@ export function useWebRTC(
         }, REACTION_LIFETIME_MS);
       });
 
+      // ── Phase 4: Whiteboard ────────────────────────────────────────────────
+
+      socket.on("whiteboard-state", (elements: WhiteboardElement[]) => {
+        setWhiteboardElements(elements ?? []);
+      });
+      socket.on("whiteboard-draw", ({ element }: any) => {
+        setWhiteboardElements((prev) => {
+          const idx = prev.findIndex((e) => e.id === element.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = element;
+            return next;
+          }
+          return [...prev, element];
+        });
+      });
+      socket.on("whiteboard-erase", ({ elementId }: any) => {
+        setWhiteboardElements((prev) => prev.filter((e) => e.id !== elementId));
+      });
+      socket.on("whiteboard-clear", () => setWhiteboardElements([]));
+      socket.on("whiteboard-cursor", (cursor: WhiteboardCursor) => {
+        setWhiteboardCursors((prev) => {
+          const idx = prev.findIndex((c) => c.socketId === cursor.socketId);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = cursor;
+            return next;
+          }
+          return [...prev, cursor];
+        });
+        // Auto-expire cursor after 3s of inactivity
+        setTimeout(() => {
+          setWhiteboardCursors((prev) =>
+            prev.filter(
+              (c) => c.socketId !== cursor.socketId || c.x !== cursor.x || c.y !== cursor.y,
+            ),
+          );
+        }, 3000);
+      });
+
+      // ── Phase 4: Polls ─────────────────────────────────────────────────────
+
+      socket.on("poll-state", (poll: any) => {
+        setCurrentPoll({ ...poll, myVote: myVoteRef.current });
+      });
+      socket.on("poll-update", ({ id, votes, totalVoters }: any) => {
+        setCurrentPoll((prev) => (prev && prev.id === id ? { ...prev, votes, totalVoters } : prev));
+      });
+      socket.on("poll-closed", ({ id, votes }: any) => {
+        setCurrentPoll((prev) =>
+          prev && prev.id === id ? { ...prev, closed: true, votes } : prev,
+        );
+      });
+      socket.on("poll-dismissed", () => {
+        setCurrentPoll(null);
+        myVoteRef.current = undefined;
+      });
+
+      // ── Phase 4: Agenda ────────────────────────────────────────────────────
+
+      socket.on("agenda-state", (state: AgendaState) => setAgendaState(state));
+      socket.on("agenda-tick", (state: AgendaState) => setAgendaState(state));
+      socket.on("agenda-complete", () => setAgendaState(null));
+
       return () => {
         clearInterval(remoteVadTimer);
       };
     };
 
     let cleanupFn: (() => void) | undefined;
-
     init()
       .then((fn) => {
         cleanupFn = fn;
@@ -762,7 +814,6 @@ export function useWebRTC(
   // ── Controls ───────────────────────────────────────────────────────────────
 
   const toggleMic = useCallback(() => {
-    // Always operate on cameraStreamRef, not the screen-preview stream.
     const stream = cameraStreamRef.current;
     if (!stream) return;
     const next = !mic;
@@ -774,16 +825,10 @@ export function useWebRTC(
   }, [mic]);
 
   const toggleCam = useCallback(async () => {
-    // Bug fix: always use cameraStreamRef — never localStreamRef.
-    // During screenshare, localStreamRef points to the screen preview stream
-    // which contains the screen track, not the camera track. Operating on it
-    // would stop the screen share instead of the camera.
     const stream = cameraStreamRef.current;
     if (!stream) return;
 
     if (cam) {
-      // Turn camera off — stop the video track and replace with a black frame
-      // in all peer connections so remote peers see a black tile.
       stream.getVideoTracks().forEach((t) => {
         t.stop();
         stream.removeTrack(t);
@@ -792,40 +837,27 @@ export function useWebRTC(
         const sender = pc.getSenders().find((s) => s.track?.kind === "video");
         if (sender) sender.replaceTrack(createBlackVideoTrack());
       });
-
-      // Rebuild the camera stream state without a video track.
       const updatedCamStream = new MediaStream(stream.getTracks());
       cameraStreamRef.current = updatedCamStream;
       setLocalCameraStream(updatedCamStream);
-
-      // If not sharing, also update the preview stream.
       if (!sharingRef.current) {
         localStreamRef.current = updatedCamStream;
         setLocalStream(updatedCamStream);
       }
-
       setCam(false);
       socketRef.current?.emit("media-state", { cam: false });
     } else {
-      // Turn camera back on — acquire a fresh video track.
       try {
         const newStream = await navigator.mediaDevices.getUserMedia({
           video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
         });
         const newVideoTrack = newStream.getVideoTracks()[0];
         if (!newVideoTrack) return;
-
-        // Clean up any leftover video tracks on the camera stream.
         stream.getVideoTracks().forEach((t) => {
           t.stop();
           stream.removeTrack(t);
         });
         stream.addTrack(newVideoTrack);
-
-        // Push the new video track into every peer connection.
-        // If we're currently sharing the screen, we do NOT replace the screen
-        // track on the senders — we only update the cameraStreamRef so the
-        // PiP tile becomes live. The screen track continues being sent.
         if (!sharingRef.current) {
           pcsRef.current.forEach((pc) => {
             const sender = pc.getSenders().find((s) => s.track?.kind === "video");
@@ -833,18 +865,13 @@ export function useWebRTC(
             else pc.addTrack(newVideoTrack, stream);
           });
         }
-
-        // Always update the camera stream state (drives the PiP).
         const updatedCamStream = new MediaStream(stream.getTracks());
         cameraStreamRef.current = updatedCamStream;
         setLocalCameraStream(updatedCamStream);
-
-        // Update preview only when not screensharing.
         if (!sharingRef.current) {
           localStreamRef.current = updatedCamStream;
           setLocalStream(updatedCamStream);
         }
-
         setCam(true);
         socketRef.current?.emit("media-state", { cam: true });
       } catch (err) {
@@ -857,11 +884,6 @@ export function useWebRTC(
     const socket = socketRef.current;
     screenStreamRef.current?.getTracks().forEach((t) => t.stop());
     screenStreamRef.current = null;
-
-    // Bug fix: restore the camera track from cameraStreamRef, not localStreamRef.
-    // localStreamRef was pointing to the screen preview stream during share,
-    // so its video track is already stopped. cameraStreamRef still has the
-    // correct live camera track (or none if cam is off).
     const camTrack = cameraStreamRef.current?.getVideoTracks()[0];
     if (camTrack) {
       pcsRef.current.forEach((pc) => {
@@ -869,17 +891,13 @@ export function useWebRTC(
         if (sender) sender.replaceTrack(camTrack);
       });
     }
-
-    // Restore local preview to the camera stream.
     if (cameraStreamRef.current) {
       const restoredStream = new MediaStream(cameraStreamRef.current.getTracks());
       localStreamRef.current = restoredStream;
       setLocalStream(restoredStream);
     }
-
     setSharing(false);
     socket?.emit("media-state", { screen: false });
-
     const restored = prevStatusRef.current;
     setLocalStatus(restored);
     socket?.emit("status-update", { status: restored });
@@ -888,7 +906,6 @@ export function useWebRTC(
   const toggleScreenShare = useCallback(async () => {
     const socket = socketRef.current;
     if (!socket) return;
-
     if (sharingRef.current) {
       _stopSharingCleanup();
     } else {
@@ -899,33 +916,21 @@ export function useWebRTC(
         });
         screenStreamRef.current = screenStream;
         const screenTrack = screenStream.getVideoTracks()[0];
-
-        // Replace the video sender track with the screen track on all peers.
         pcsRef.current.forEach((pc) => {
           const sender = pc.getSenders().find((s) => s.track?.kind === "video");
           if (sender) sender.replaceTrack(screenTrack);
         });
-
-        // Build the local preview stream from screen + audio.
-        // cameraStreamRef is intentionally NOT modified here.
         const audioTracks = cameraStreamRef.current?.getAudioTracks() ?? [];
         const screenPreviewStream = new MediaStream([screenTrack, ...audioTracks]);
         localStreamRef.current = screenPreviewStream;
         setLocalStream(screenPreviewStream);
-        // localCameraStream (and cameraStreamRef) remain unchanged — they
-        // continue to drive the PiP tile independently.
-
         setSharing(true);
         socket.emit("media-state", { screen: true });
-
         setLocalStatus((currentStatus) => {
-          if (currentStatus !== "presenting") {
-            prevStatusRef.current = currentStatus;
-          }
+          if (currentStatus !== "presenting") prevStatusRef.current = currentStatus;
           return "presenting";
         });
         socket.emit("status-update", { status: "presenting" });
-
         screenTrack.onended = () => {
           _stopSharingCleanup();
         };
@@ -965,8 +970,6 @@ export function useWebRTC(
     [closePC],
   );
 
-  // ── Phase 3: Lobby ─────────────────────────────────────────────────────────
-
   const admitParticipant = useCallback((socketId: string) => {
     socketRef.current?.emit("admit-participant", { targetSocketId: socketId });
     setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
@@ -981,7 +984,7 @@ export function useWebRTC(
     socketRef.current?.emit("transfer-host", { targetSocketId: socketId, mode });
   }, []);
 
-  // ── Phase 2: Chat ──────────────────────────────────────────────────────────
+  // ── Chat ───────────────────────────────────────────────────────────────────
 
   const sendChatMessage = useCallback((text: string, replyTo?: ChatMessage | null) => {
     const socket = socketRef.current;
@@ -1030,8 +1033,6 @@ export function useWebRTC(
     chatOpenRef.current = true;
   }, []);
 
-  // ── Phase 2: Status ────────────────────────────────────────────────────────
-
   const setStatus = useCallback((status: ParticipantStatus) => {
     if (status === "presenting") return;
     if (sharingRef.current) {
@@ -1043,8 +1044,6 @@ export function useWebRTC(
     }
   }, []);
 
-  // ── Phase 2: Raise hand ────────────────────────────────────────────────────
-
   const raiseHand = useCallback(() => {
     if (localHandRaised) return;
     setLocalHandRaised(true);
@@ -1055,7 +1054,6 @@ export function useWebRTC(
     setLocalHandRaised(false);
     socketRef.current?.emit("lower-hand");
   }, []);
-
   const lowerPeerHand = useCallback((socketId: string) => {
     socketRef.current?.emit("host-lower-hand", { targetSocketId: socketId });
   }, []);
@@ -1065,11 +1063,97 @@ export function useWebRTC(
     .map((p) => ({ socketId: p.socketId, username: p.username, handRaisedAt: p.handRaisedAt! }))
     .sort((a, b) => a.handRaisedAt - b.handRaisedAt);
 
-  // ── Phase 2: Reactions ─────────────────────────────────────────────────────
-
   const sendReaction = useCallback((emoji: string) => {
     socketRef.current?.emit("reaction", { emoji });
   }, []);
+
+  // ── Phase 4: Whiteboard ────────────────────────────────────────────────────
+
+  const drawWhiteboardElement = useCallback((element: WhiteboardElement) => {
+    // Optimistic update
+    setWhiteboardElements((prev) => {
+      const idx = prev.findIndex((e) => e.id === element.id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = element;
+        return next;
+      }
+      return [...prev, element];
+    });
+    socketRef.current?.emit("whiteboard-draw", { element });
+  }, []);
+
+  const eraseWhiteboardElement = useCallback((elementId: string) => {
+    setWhiteboardElements((prev) => prev.filter((e) => e.id !== elementId));
+    socketRef.current?.emit("whiteboard-erase", { elementId });
+  }, []);
+
+  const clearWhiteboard = useCallback(() => {
+    setWhiteboardElements([]);
+    socketRef.current?.emit("whiteboard-clear");
+  }, []);
+
+  const broadcastWhiteboardCursor = useCallback((x: number, y: number) => {
+    socketRef.current?.emit("whiteboard-cursor", { x, y });
+  }, []);
+
+  // ── Phase 4: Polls ─────────────────────────────────────────────────────────
+
+  const createPoll = useCallback((question: string, options: string[]) => {
+    myVoteRef.current = undefined;
+    socketRef.current?.emit("poll-create", { question, options });
+  }, []);
+
+  const votePoll = useCallback((optionIndex: number) => {
+    myVoteRef.current = optionIndex;
+    setCurrentPoll((prev) => (prev ? { ...prev, myVote: optionIndex } : prev));
+    socketRef.current?.emit("poll-vote", { optionIndex });
+  }, []);
+
+  const closePoll = useCallback(() => {
+    socketRef.current?.emit("poll-close");
+  }, []);
+  const dismissPoll = useCallback(() => {
+    setCurrentPoll(null);
+    socketRef.current?.emit("poll-dismiss");
+  }, []);
+
+  // ── Phase 4: Agenda ────────────────────────────────────────────────────────
+
+  const setAgenda = useCallback((items: Array<{ title: string; durationSec: number }>) => {
+    socketRef.current?.emit("agenda-set", { items });
+  }, []);
+
+  const agendaNext = useCallback(() => {
+    socketRef.current?.emit("agenda-next");
+  }, []);
+  const agendaPrev = useCallback(() => {
+    socketRef.current?.emit("agenda-prev");
+  }, []);
+  const agendaGoto = useCallback((index: number) => {
+    socketRef.current?.emit("agenda-goto", { index });
+  }, []);
+  const agendaTimerStart = useCallback(() => {
+    socketRef.current?.emit("agenda-timer-start");
+  }, []);
+  const agendaTimerPause = useCallback(() => {
+    socketRef.current?.emit("agenda-timer-pause");
+  }, []);
+
+  // ── Phase 4: Spatial layout ────────────────────────────────────────────────
+
+  const setTilePosition = useCallback((id: string, pos: TilePosition) => {
+    setTilePositionsState((prev) => {
+      const next = new Map(prev);
+      next.set(id, pos);
+      return next;
+    });
+  }, []);
+
+  // ── Phase 4: Spotlight ─────────────────────────────────────────────────────
+  // activeSpotlightId = manual pin if set, else auto-detected speaker if autoSpotlight on
+  const activeSpotlightId =
+    spotlightId ?? (autoSpotlight ? (isSpeaking ? "local" : speakingPeerId) : null);
 
   return {
     localStream,
@@ -1113,5 +1197,39 @@ export function useWebRTC(
     transferHost,
     error,
     isConnecting,
+    // Phase 4
+    whiteboardElements,
+    whiteboardCursors,
+    drawWhiteboardElement,
+    eraseWhiteboardElement,
+    clearWhiteboard,
+    broadcastWhiteboardCursor,
+    currentPoll,
+    createPoll,
+    votePoll,
+    closePoll,
+    dismissPoll,
+    agenda,
+    setAgenda,
+    agendaNext,
+    agendaPrev,
+    agendaGoto,
+    agendaTimerStart,
+    agendaTimerPause,
+    noiseSuppressionEnabled,
+    noiseSuppressionSupported,
+    toggleNoiseSuppression,
+    backgroundMode,
+    setBackgroundMode,
+    isBlurProcessing,
+    tilePositions,
+    setTilePosition,
+    cinemaMode,
+    setCinemaMode,
+    spotlightId,
+    setSpotlightId,
+    autoSpotlight,
+    setAutoSpotlight,
+    activeSpotlightId,
   };
 }

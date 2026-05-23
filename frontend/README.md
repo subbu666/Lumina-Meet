@@ -36,6 +36,9 @@ src/
 │
 ├── hooks/
 │   └── useWebRTC.ts            # Full WebRTC + Socket.IO hook (see below)
+│   └── useAmbientSound.ts       
+│   └── useNoiseSuppression.ts    
+│   └── useBackgroundBlur.ts            
 │
 ├── routes/
 │   ├── __root.tsx              # Shell, providers, global overlays
