@@ -1,10 +1,17 @@
 /**
  * useWebRTC — Lumina Meet Phase 3
  *
- * New:
- *  • Waiting room / lobby admission
- *  • Host & sub-host tracking with transfer support
- *  • isWaiting, pendingParticipants, admit/reject, transferHost
+ * Bug fixes in this version:
+ *  • cameraStreamRef introduced — always holds the raw cam+mic stream,
+ *    never replaced. localStreamRef/localStream now only drives the preview.
+ *  • toggleCam always operates on cameraStreamRef so screen-share is
+ *    unaffected when cam is toggled.
+ *  • toggleScreenShare passes cameraStreamRef to ScreenShareView so the
+ *    PiP tile always shows the camera (or avatar) even while presenting.
+ *  • _stopSharingCleanup restores the camera track from cameraStreamRef
+ *    instead of the (now stale) localStreamRef.
+ *  • localCameraStream exposed in the return value so the UI can render
+ *    the PiP independently of the screen-share preview stream.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -60,6 +67,8 @@ export interface PendingParticipant {
 
 export interface UseWebRTCReturn {
   localStream: MediaStream | null;
+  /** Always the raw camera+mic stream — use this for the PiP tile during screenshare */
+  localCameraStream: MediaStream | null;
   localSocketId: string | null;
   mic: boolean;
   cam: boolean;
@@ -159,6 +168,8 @@ export function useWebRTC(
 ): UseWebRTCReturn {
   // ── Core state ─────────────────────────────────────────────────────────────
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  // The camera stream is always the raw cam+mic — never replaced by screen share.
+  const [localCameraStream, setLocalCameraStream] = useState<MediaStream | null>(null);
   const [peers, setPeers] = useState<RemotePeer[]>([]);
   const [mic, setMic] = useState(true);
   const [cam, setCam] = useState(true);
@@ -185,6 +196,17 @@ export function useWebRTC(
 
   // ── Refs ───────────────────────────────────────────────────────────────────
   const socketRef = useRef<Socket | null>(null);
+  /**
+   * ALWAYS points to the raw camera+mic MediaStream.
+   * Never reassigned to a screen-share stream.
+   * This is the source of truth for cam/mic track manipulation.
+   */
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  /**
+   * Used only for the <video> preview that the local user sees.
+   * During screen-share this will contain the screen track + audio.
+   * Not used for track operations on peer connections.
+   */
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
@@ -213,7 +235,8 @@ export function useWebRTC(
     (remoteSocketId: string, remoteUsername: string): RTCPeerConnection => {
       const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
-      const stream = localStreamRef.current;
+      // Always use cameraStreamRef — never the screen-preview stream.
+      const stream = cameraStreamRef.current;
       if (stream) {
         stream.getTracks().forEach((track) => pc.addTrack(track, stream));
       }
@@ -306,8 +329,11 @@ export function useWebRTC(
         return;
       }
 
+      // Store in both refs — they point to the same stream initially.
+      cameraStreamRef.current = stream;
       localStreamRef.current = stream;
       setLocalStream(stream);
+      setLocalCameraStream(stream);
       setIsConnecting(false);
 
       // Local VAD
@@ -508,16 +534,17 @@ export function useWebRTC(
       });
 
       socket.on("host-action", ({ action }: { action: string }) => {
-        const stream = localStreamRef.current;
+        // Always use cameraStreamRef for track operations.
+        const camStream = cameraStreamRef.current;
         if (action === "mute") {
-          stream?.getAudioTracks().forEach((t) => {
+          camStream?.getAudioTracks().forEach((t) => {
             t.enabled = false;
           });
           setMic(false);
           socket.emit("media-state", { mic: false });
         }
         if (action === "cam-off") {
-          stream?.getVideoTracks().forEach((t) => {
+          camStream?.getVideoTracks().forEach((t) => {
             t.enabled = false;
           });
           setCam(false);
@@ -720,7 +747,7 @@ export function useWebRTC(
       cleanupFn?.();
       pcsRef.current.forEach((pc) => pc.close());
       pcsRef.current.clear();
-      localStreamRef.current?.getTracks().forEach((t) => t.stop());
+      cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
       screenStreamRef.current?.getTracks().forEach((t) => t.stop());
       socketRef.current?.disconnect();
       if (vadTimerRef.current) clearInterval(vadTimerRef.current);
@@ -735,7 +762,8 @@ export function useWebRTC(
   // ── Controls ───────────────────────────────────────────────────────────────
 
   const toggleMic = useCallback(() => {
-    const stream = localStreamRef.current;
+    // Always operate on cameraStreamRef, not the screen-preview stream.
+    const stream = cameraStreamRef.current;
     if (!stream) return;
     const next = !mic;
     stream.getAudioTracks().forEach((t) => {
@@ -746,10 +774,16 @@ export function useWebRTC(
   }, [mic]);
 
   const toggleCam = useCallback(async () => {
-    const stream = localStreamRef.current;
+    // Bug fix: always use cameraStreamRef — never localStreamRef.
+    // During screenshare, localStreamRef points to the screen preview stream
+    // which contains the screen track, not the camera track. Operating on it
+    // would stop the screen share instead of the camera.
+    const stream = cameraStreamRef.current;
     if (!stream) return;
 
     if (cam) {
+      // Turn camera off — stop the video track and replace with a black frame
+      // in all peer connections so remote peers see a black tile.
       stream.getVideoTracks().forEach((t) => {
         t.stop();
         stream.removeTrack(t);
@@ -758,28 +792,59 @@ export function useWebRTC(
         const sender = pc.getSenders().find((s) => s.track?.kind === "video");
         if (sender) sender.replaceTrack(createBlackVideoTrack());
       });
+
+      // Rebuild the camera stream state without a video track.
+      const updatedCamStream = new MediaStream(stream.getTracks());
+      cameraStreamRef.current = updatedCamStream;
+      setLocalCameraStream(updatedCamStream);
+
+      // If not sharing, also update the preview stream.
+      if (!sharingRef.current) {
+        localStreamRef.current = updatedCamStream;
+        setLocalStream(updatedCamStream);
+      }
+
       setCam(false);
       socketRef.current?.emit("media-state", { cam: false });
     } else {
+      // Turn camera back on — acquire a fresh video track.
       try {
         const newStream = await navigator.mediaDevices.getUserMedia({
           video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
         });
         const newVideoTrack = newStream.getVideoTracks()[0];
         if (!newVideoTrack) return;
+
+        // Clean up any leftover video tracks on the camera stream.
         stream.getVideoTracks().forEach((t) => {
           t.stop();
           stream.removeTrack(t);
         });
         stream.addTrack(newVideoTrack);
-        pcsRef.current.forEach((pc) => {
-          const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-          if (sender) sender.replaceTrack(newVideoTrack);
-          else pc.addTrack(newVideoTrack, stream);
-        });
-        const updatedStream = new MediaStream(stream.getTracks());
-        localStreamRef.current = updatedStream;
-        setLocalStream(updatedStream);
+
+        // Push the new video track into every peer connection.
+        // If we're currently sharing the screen, we do NOT replace the screen
+        // track on the senders — we only update the cameraStreamRef so the
+        // PiP tile becomes live. The screen track continues being sent.
+        if (!sharingRef.current) {
+          pcsRef.current.forEach((pc) => {
+            const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+            if (sender) sender.replaceTrack(newVideoTrack);
+            else pc.addTrack(newVideoTrack, stream);
+          });
+        }
+
+        // Always update the camera stream state (drives the PiP).
+        const updatedCamStream = new MediaStream(stream.getTracks());
+        cameraStreamRef.current = updatedCamStream;
+        setLocalCameraStream(updatedCamStream);
+
+        // Update preview only when not screensharing.
+        if (!sharingRef.current) {
+          localStreamRef.current = updatedCamStream;
+          setLocalStream(updatedCamStream);
+        }
+
         setCam(true);
         socketRef.current?.emit("media-state", { cam: true });
       } catch (err) {
@@ -793,7 +858,11 @@ export function useWebRTC(
     screenStreamRef.current?.getTracks().forEach((t) => t.stop());
     screenStreamRef.current = null;
 
-    const camTrack = localStreamRef.current?.getVideoTracks()[0];
+    // Bug fix: restore the camera track from cameraStreamRef, not localStreamRef.
+    // localStreamRef was pointing to the screen preview stream during share,
+    // so its video track is already stopped. cameraStreamRef still has the
+    // correct live camera track (or none if cam is off).
+    const camTrack = cameraStreamRef.current?.getVideoTracks()[0];
     if (camTrack) {
       pcsRef.current.forEach((pc) => {
         const sender = pc.getSenders().find((s) => s.track?.kind === "video");
@@ -801,8 +870,11 @@ export function useWebRTC(
       });
     }
 
-    if (localStreamRef.current) {
-      setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+    // Restore local preview to the camera stream.
+    if (cameraStreamRef.current) {
+      const restoredStream = new MediaStream(cameraStreamRef.current.getTracks());
+      localStreamRef.current = restoredStream;
+      setLocalStream(restoredStream);
     }
 
     setSharing(false);
@@ -828,15 +900,20 @@ export function useWebRTC(
         screenStreamRef.current = screenStream;
         const screenTrack = screenStream.getVideoTracks()[0];
 
+        // Replace the video sender track with the screen track on all peers.
         pcsRef.current.forEach((pc) => {
           const sender = pc.getSenders().find((s) => s.track?.kind === "video");
           if (sender) sender.replaceTrack(screenTrack);
         });
 
-        const cameraStream = localStreamRef.current;
-        const audioTracks = cameraStream?.getAudioTracks() ?? [];
+        // Build the local preview stream from screen + audio.
+        // cameraStreamRef is intentionally NOT modified here.
+        const audioTracks = cameraStreamRef.current?.getAudioTracks() ?? [];
         const screenPreviewStream = new MediaStream([screenTrack, ...audioTracks]);
+        localStreamRef.current = screenPreviewStream;
         setLocalStream(screenPreviewStream);
+        // localCameraStream (and cameraStreamRef) remain unchanged — they
+        // continue to drive the PiP tile independently.
 
         setSharing(true);
         socket.emit("media-state", { screen: true });
@@ -861,7 +938,7 @@ export function useWebRTC(
   const leaveRoom = useCallback(() => {
     pcsRef.current.forEach((pc) => pc.close());
     pcsRef.current.clear();
-    localStreamRef.current?.getTracks().forEach((t) => t.stop());
+    cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
     screenStreamRef.current?.getTracks().forEach((t) => t.stop());
     socketRef.current?.disconnect();
   }, []);
@@ -996,6 +1073,7 @@ export function useWebRTC(
 
   return {
     localStream,
+    localCameraStream,
     localSocketId,
     mic,
     cam,

@@ -44,8 +44,8 @@ function VerifyOtpPage() {
         // Signup flow — verifies OTP, creates account, returns tokens
         const res = await authService.verifyOtp({ email, otp });
         setSession(res.user, res.tokens);
-        toast.success("Verified! Welcome aboard 🎉");
-        navigate({ to: "/dashboard" });
+        toast.success("Verified! Please login 🎉");
+        navigate({ to: "/login" });
       } else {
         // Reset flow — verifies OTP against password:reset: Redis key
         await authService.verifyResetOtp({ email, otp });

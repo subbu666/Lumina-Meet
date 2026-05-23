@@ -1,11 +1,14 @@
 /*
  * meeting.$id.tsx — Lumina Meet Phase 3
  *
- * New:
- *  • Waiting room / lobby UI for host & guests
- *  • Cinematic leave modal (host vs participant flows)
- *  • Host transfer modal (full host vs co-host)
- *  • Dynamic host / co-host badges on all tiles
+ * Bug fixes in this version:
+ *  • ScreenShareView now receives `localCameraStream` (the raw cam stream)
+ *    as a separate prop from `localStream` (the screen preview).
+ *    The PiP tile always renders from the camera stream, so it stays visible
+ *    even when the main view is showing the screenshare.
+ *  • LocalVideoTile in the PiP is always rendered — when cam is off it shows
+ *    the avatar fallback, matching Google Meet / Zoom behaviour.
+ *  • `cam` prop passed to the PiP tile so the video/avatar switch works.
  */
 
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
@@ -213,6 +216,7 @@ function Room({
 
   const {
     localStream,
+    localCameraStream, // NEW: always the raw camera stream
     localSocketId,
     mic,
     cam,
@@ -558,9 +562,11 @@ function Room({
           {sharing ? (
             <ScreenShareView
               localStream={localStream}
+              localCameraStream={localCameraStream}
               peers={peers}
               username={username}
               mic={mic}
+              cam={cam}
               isSpeaking={isSpeaking}
               speakingPeerId={speakingPeerId}
             />
@@ -819,7 +825,6 @@ function LeaveModal({
         className="relative mx-4 w-full max-w-md"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Glowing orb behind */}
         <div className="absolute -inset-1 rounded-[2rem] bg-gradient-to-r from-[var(--neon-primary)] via-[var(--neon-accent)] to-[var(--neon-danger)] opacity-30 blur-xl animate-pulse-glow" />
 
         <div className="relative glass-strong rounded-3xl border border-white/10 p-8 text-center overflow-hidden">
@@ -1803,6 +1808,10 @@ function LocalVideoTile({
     if (videoRef.current && stream) videoRef.current.srcObject = stream;
   }, [stream]);
 
+  // Show video only when cam is on and the stream has a live video track.
+  const hasLiveVideo =
+    cam && stream != null && stream.getVideoTracks().some((t) => t.readyState === "live");
+
   return (
     <motion.div
       layout
@@ -1815,17 +1824,21 @@ function LocalVideoTile({
           : "border-white/10",
       )}
     >
-      {cam && stream && stream.getVideoTracks().length > 0 && (
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className="absolute inset-0 h-full w-full object-cover scale-x-[-1]"
-        />
-      )}
+      {/* Video element always present — hidden when cam is off so we don't
+          flash a black frame between cam-off and the avatar appearing. */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className={cn(
+          "absolute inset-0 h-full w-full object-cover scale-x-[-1] transition-opacity duration-300",
+          hasLiveVideo ? "opacity-100" : "opacity-0",
+        )}
+      />
 
-      {(!cam || !stream || stream.getVideoTracks().length === 0) && (
+      {/* Avatar fallback — shown when cam is off */}
+      {!hasLiveVideo && (
         <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[oklch(0.25_0.08_280)] to-[oklch(0.18_0.05_310)]">
           <Avatar name={username} hue={280} size={72} />
         </div>
@@ -2044,18 +2057,31 @@ function RemoteVideoTile({
 
 // ─── Screen Share View ────────────────────────────────────────────────────────
 
+/**
+ * Bug fix: ScreenShareView now takes two separate stream props:
+ *  - localStream: the screen-share preview (what's being captured)
+ *  - localCameraStream: always the raw camera+mic stream
+ *
+ * The PiP LocalVideoTile is driven by localCameraStream so it always shows
+ * the camera (or avatar fallback if cam is off), independent of the screenshare.
+ * This matches how Zoom and Google Meet handle the self-view during presentation.
+ */
 function ScreenShareView({
   localStream,
+  localCameraStream,
   peers,
   username,
   mic,
+  cam,
   isSpeaking,
   speakingPeerId,
 }: {
   localStream: MediaStream | null;
+  localCameraStream: MediaStream | null;
   peers: RemotePeer[];
   username: string;
   mic: boolean;
+  cam: boolean;
   isSpeaking: boolean;
   speakingPeerId: string | null;
 }) {
@@ -2066,6 +2092,7 @@ function ScreenShareView({
 
   return (
     <div className="flex h-full flex-col gap-3 lg:flex-row">
+      {/* Main screen-share canvas */}
       <div className="relative flex-1 overflow-hidden rounded-2xl border border-[var(--neon-primary)]/40 bg-black/60 glow-primary">
         <video
           ref={screenVideoRef}
@@ -2079,13 +2106,16 @@ function ScreenShareView({
           {username} is sharing
         </div>
       </div>
+
+      {/* PiP strip — camera stream used here, not the screen stream */}
       <div className="flex gap-3 overflow-x-auto lg:w-56 lg:flex-col lg:overflow-y-auto">
+        {/* Self PiP: always uses localCameraStream so camera / avatar is correct */}
         <div className="h-24 w-32 shrink-0 lg:h-32 lg:w-full">
           <LocalVideoTile
-            stream={localStream}
+            stream={localCameraStream}
             username={username}
             mic={mic}
-            cam
+            cam={cam}
             isSpeaking={isSpeaking}
           />
         </div>

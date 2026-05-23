@@ -14,4 +14,5 @@ export const API_ENDPOINTS = {
   /** Generates a new instant meeting then emails the given list in one request */
   GENERATE_AND_INVITE: "/api/meeting/generate-and-invite",
   MEETING_HISTORY: "/api/meeting/history",
+  RECORD_JOINED_MEETING: "/meeting/record-joined",
 } as const;
