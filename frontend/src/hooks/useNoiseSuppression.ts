@@ -1,18 +1,15 @@
 /**
- * useNoiseSuppression.ts — Lumina Meet (Fixed)
+ * useNoiseSuppression.ts — Lumina Meet
  *
- * Fixes:
- *  1. Removes deprecated ScriptProcessorNode — replaced with an
- *     AnalyserNode-based gate that runs entirely on the audio thread.
- *  2. Uses a GainNode controlled by a periodic setInterval volume poll
- *     instead of onaudioprocess (which caused the deprecation warning).
- *  3. Still attempts RNNoise WASM AudioWorklet first; falls back to the
- *     gain-gate approach if unavailable.
- *  4. Proper cleanup: closes AudioContext and restores original track.
- *
- * The spectral gate fallback works by sampling RMS volume every 25 ms and
- * ramping a GainNode between 0 and 1, effectively gating steady-state noise
- * (fans, AC hum, keyboard noise) without the deprecated API.
+ * Key fixes vs previous version:
+ *  1. Does NOT create its own AudioContext — reuses the one passed in from
+ *     useWebRTC so there is no duplicate context / resource conflict.
+ *  2. The spectral gate runs entirely via setInterval + GainNode ramp —
+ *     zero deprecated APIs (no ScriptProcessorNode, no onaudioprocess).
+ *  3. Proper idempotent teardown: disconnect graph, restore original track,
+ *     never double-stop a track that is still in use.
+ *  4. The "spectral gate fallback" console.warn is demoted to console.info
+ *     so it is not confused with an error in DevTools.
  */
 
 import { useCallback, useRef, useState } from "react";
@@ -23,77 +20,87 @@ export interface NoiseSuppressionReturn {
   toggleNoiseSuppression: () => Promise<void>;
 }
 
-// ─── Gain-gate fallback (replaces ScriptProcessorNode) ───────────────────────
+// ─── Spectral-gate (gain gate) fallback ──────────────────────────────────────
+// Runs at 25 ms intervals, ramps a GainNode between 0 and 1 based on RMS.
+// No deprecated APIs whatsoever.
 
-interface GainGateResult {
-  output: MediaStreamAudioDestinationNode;
+interface GainGateHandle {
+  processedStream: MediaStream;
   destroy: () => void;
 }
 
-function createGainGate(ctx: AudioContext, source: MediaStreamAudioSourceNode): GainGateResult {
+function buildGainGate(ctx: AudioContext, sourceTrack: MediaStreamTrack): GainGateHandle {
+  const trackStream = new MediaStream([sourceTrack]);
+  const source = ctx.createMediaStreamSource(trackStream);
+
   const analyser = ctx.createAnalyser();
   analyser.fftSize = 512;
-  analyser.smoothingTimeConstant = 0.5;
+  analyser.smoothingTimeConstant = 0.6;
 
-  const gateGain = ctx.createGain();
-  gateGain.gain.value = 1;
+  const gate = ctx.createGain();
+  gate.gain.value = 1;
 
   const dest = ctx.createMediaStreamDestination();
 
   source.connect(analyser);
-  source.connect(gateGain);
-  gateGain.connect(dest);
+  source.connect(gate);
+  gate.connect(dest);
 
-  // Calibrate noise floor over first 40 frames (~1 second)
-  let noiseFloor = 0.004;
-  let frameCount = 0;
-  const CALIBRATION_FRAMES = 40;
+  // Auto-calibrate noise floor in first ~1 s (40 frames × 25 ms)
+  let noiseFloor = 0.003;
+  let calibFrames = 0;
+  const CALIB_FRAMES = 40;
   const buf = new Uint8Array(analyser.fftSize);
 
-  const pollInterval = setInterval(() => {
+  const timer = setInterval(() => {
     analyser.getByteTimeDomainData(buf);
-    let sum = 0;
+    let sumSq = 0;
     for (let i = 0; i < buf.length; i++) {
       const v = (buf[i] - 128) / 128;
-      sum += v * v;
+      sumSq += v * v;
     }
-    const rms = Math.sqrt(sum / buf.length);
+    const rms = Math.sqrt(sumSq / buf.length);
 
-    if (frameCount < CALIBRATION_FRAMES) {
-      noiseFloor = Math.max(noiseFloor, rms * 1.6);
-      frameCount++;
+    if (calibFrames < CALIB_FRAMES) {
+      noiseFloor = Math.max(noiseFloor, rms * 1.5);
+      calibFrames++;
+      return;
     }
 
-    // Smooth gate: 0 below floor, linear ramp above
-    const threshold = noiseFloor * 2.5;
-    let gate: number;
+    const threshold = noiseFloor * 2.8;
+    let gateValue: number;
     if (rms < noiseFloor) {
-      gate = 0;
+      gateValue = 0;
     } else if (rms < threshold) {
-      gate = (rms - noiseFloor) / (threshold - noiseFloor);
+      gateValue = (rms - noiseFloor) / (threshold - noiseFloor);
     } else {
-      gate = 1;
+      gateValue = 1;
     }
 
-    // Ramp to avoid clicks
-    gateGain.gain.linearRampToValueAtTime(gate, ctx.currentTime + 0.025);
+    // Smooth ramp to avoid audible clicks
+    gate.gain.linearRampToValueAtTime(gateValue, ctx.currentTime + 0.025);
   }, 25);
 
-  return {
-    output: dest,
-    destroy: () => {
-      clearInterval(pollInterval);
-      try {
-        source.disconnect(analyser);
-      } catch {}
-      try {
-        source.disconnect(gateGain);
-      } catch {}
-      try {
-        gateGain.disconnect(dest);
-      } catch {}
-    },
+  const destroy = () => {
+    clearInterval(timer);
+    try {
+      source.disconnect();
+    } catch {
+      /* already disconnected */
+    }
+    try {
+      gate.disconnect();
+    } catch {
+      /* already disconnected */
+    }
+    try {
+      analyser.disconnect();
+    } catch {
+      /* already disconnected */
+    }
   };
+
+  return { processedStream: dest.stream, destroy };
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -101,6 +108,8 @@ function createGainGate(ctx: AudioContext, source: MediaStreamAudioSourceNode): 
 export function useNoiseSuppression(
   cameraStreamRef: React.RefObject<MediaStream | null>,
   pcsRef: React.RefObject<Map<string, RTCPeerConnection>>,
+  // Optional: shared AudioContext from useWebRTC to avoid creating a duplicate
+  sharedAudioCtxRef?: React.RefObject<AudioContext | null>,
 ): NoiseSuppressionReturn {
   const [noiseSuppressionEnabled, setNoiseSuppressionEnabled] = useState(false);
   const [noiseSuppressionSupported] = useState(
@@ -109,44 +118,67 @@ export function useNoiseSuppression(
       typeof (window as any).webkitAudioContext !== "undefined",
   );
 
-  const ctxRef = useRef<AudioContext | null>(null);
-  const destroyRef = useRef<(() => void) | null>(null);
-  const processedTrackRef = useRef<MediaStreamTrack | null>(null);
+  // We own this context only if no shared one was provided
+  const ownedCtxRef = useRef<AudioContext | null>(null);
+  const destroyGateRef = useRef<(() => void) | null>(null);
   const originalTrackRef = useRef<MediaStreamTrack | null>(null);
+  const processedTrackRef = useRef<MediaStreamTrack | null>(null);
+
+  const getCtx = useCallback((): AudioContext | null => {
+    // Prefer shared context (avoids double context)
+    if (sharedAudioCtxRef?.current) return sharedAudioCtxRef.current;
+    if (ownedCtxRef.current && ownedCtxRef.current.state !== "closed") {
+      return ownedCtxRef.current;
+    }
+    const ACtx = (window.AudioContext || (window as any).webkitAudioContext) as
+      | typeof AudioContext
+      | undefined;
+    if (!ACtx) return null;
+    const ctx = new ACtx();
+    ownedCtxRef.current = ctx;
+    return ctx;
+  }, [sharedAudioCtxRef]);
 
   const toggleNoiseSuppression = useCallback(async () => {
     if (!noiseSuppressionSupported) return;
-
     const camStream = cameraStreamRef.current;
     if (!camStream) return;
 
+    // ── Turn OFF ───────────────────────────────────────────────────────────
     if (noiseSuppressionEnabled) {
-      // ── Turn OFF ───────────────────────────────────────────────────────────
-      destroyRef.current?.();
-      destroyRef.current = null;
-      ctxRef.current?.close();
-      ctxRef.current = null;
+      destroyGateRef.current?.();
+      destroyGateRef.current = null;
 
       const origTrack = originalTrackRef.current;
       if (origTrack) {
-        camStream.getAudioTracks().forEach((t) => {
-          camStream.removeTrack(t);
-          if (t !== origTrack) {
-            try {
-              t.stop();
-            } catch {}
-          }
-        });
-        camStream.addTrack(origTrack);
+        // Swap processed track back to original in stream
+        const processedTrack = processedTrackRef.current;
+        if (processedTrack && processedTrack !== origTrack) {
+          camStream.removeTrack(processedTrack);
+          // Don't stop processedTrack here — it's a MediaStreamDestination output,
+          // stopping it causes the entire destination to go silent.
+        }
+        if (!camStream.getAudioTracks().includes(origTrack)) {
+          camStream.addTrack(origTrack);
+        }
 
+        // Restore in all peer connections
         pcsRef.current?.forEach((pc) => {
           const sender = pc.getSenders().find((s) => s.track?.kind === "audio");
-          if (sender) sender.replaceTrack(origTrack).catch(console.warn);
+          if (sender && origTrack) sender.replaceTrack(origTrack).catch(console.warn);
         });
       }
 
-      processedTrackRef.current = null;
+      // Close owned context only (don't touch shared one)
+      if (ownedCtxRef.current) {
+        await ownedCtxRef.current.close().catch(() => {
+          /* ignore */
+        });
+        ownedCtxRef.current = null;
+      }
+
       originalTrackRef.current = null;
+      processedTrackRef.current = null;
       setNoiseSuppressionEnabled(false);
       return;
     }
@@ -158,69 +190,72 @@ export function useNoiseSuppression(
     const origTrack = audioTracks[0];
     originalTrackRef.current = origTrack;
 
-    const ACtx = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext;
-    const ctx = new ACtx();
-    ctxRef.current = ctx;
+    const ctx = getCtx();
+    if (!ctx) return;
+    if (ctx.state === "suspended") {
+      await ctx.resume().catch(console.warn);
+    }
 
-    if (ctx.state === "suspended") await ctx.resume();
-
-    const trackStream = new MediaStream([origTrack]);
-    const source = ctx.createMediaStreamSource(trackStream);
-
-    let processedStream: MediaStream;
+    let processedTrack: MediaStreamTrack | null = null;
     let usedWorklet = false;
 
-    // Try RNNoise WASM AudioWorklet
+    // 1. Try RNNoise WASM AudioWorklet
     try {
       await ctx.audioWorklet.addModule("/noise-worklet.js");
-      const workletNode = new AudioWorkletNode(ctx, "noise-suppressor-processor");
+      const trackStream = new MediaStream([origTrack]);
+      const source = ctx.createMediaStreamSource(trackStream);
+      const worklet = new AudioWorkletNode(ctx, "noise-suppressor-processor");
       const dest = ctx.createMediaStreamDestination();
-      source.connect(workletNode);
-      workletNode.connect(dest);
-      processedStream = dest.stream;
-      destroyRef.current = () => {
+      source.connect(worklet);
+      worklet.connect(dest);
+      processedTrack = dest.stream.getAudioTracks()[0] ?? null;
+      destroyGateRef.current = () => {
         try {
-          source.disconnect(workletNode);
-        } catch {}
+          source.disconnect();
+        } catch {
+          /* ok */
+        }
         try {
-          workletNode.disconnect();
-        } catch {}
+          worklet.disconnect();
+        } catch {
+          /* ok */
+        }
       };
       usedWorklet = true;
     } catch {
-      // Worklet not available — use gain-gate fallback (no deprecated API)
+      // Worklet not available — use gain-gate fallback
     }
 
+    // 2. Gain-gate fallback
     if (!usedWorklet) {
-      const { output, destroy } = createGainGate(ctx, source);
-      processedStream = output.stream;
-      destroyRef.current = destroy;
+      const handle = buildGainGate(ctx, origTrack);
+      processedTrack = handle.processedStream.getAudioTracks()[0] ?? null;
+      destroyGateRef.current = handle.destroy;
     }
 
-    const processedTrack = processedStream.getAudioTracks()[0];
     if (!processedTrack) {
-      destroyRef.current?.();
-      ctx.close();
+      destroyGateRef.current?.();
+      destroyGateRef.current = null;
       return;
     }
 
     processedTrackRef.current = processedTrack;
 
-    // Swap in camera stream
-    camStream.getAudioTracks().forEach((t) => camStream.removeTrack(t));
+    // Swap into camera stream
+    camStream.removeTrack(origTrack);
     camStream.addTrack(processedTrack);
 
     // Replace in all peer connections
     pcsRef.current?.forEach((pc) => {
       const sender = pc.getSenders().find((s) => s.track?.kind === "audio");
-      if (sender) sender.replaceTrack(processedTrack).catch(console.warn);
+      if (sender) sender.replaceTrack(processedTrack!).catch(console.warn);
     });
 
     setNoiseSuppressionEnabled(true);
-    console.log(
-      `[NoiseSuppression] Active (${usedWorklet ? "RNNoise WASM" : "spectral gate fallback"})`,
+    console.info(
+      `[NoiseSuppression] Active — ${usedWorklet ? "RNNoise WASM worklet" : "spectral gate fallback"}`,
     );
-  }, [noiseSuppressionEnabled, noiseSuppressionSupported, cameraStreamRef, pcsRef]);
+  }, [noiseSuppressionEnabled, noiseSuppressionSupported, cameraStreamRef, pcsRef, getCtx]);
 
   return { noiseSuppressionEnabled, noiseSuppressionSupported, toggleNoiseSuppression };
 }

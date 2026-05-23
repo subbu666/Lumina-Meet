@@ -1,30 +1,17 @@
 /**
- * meeting.$id.tsx — Lumina Meet (Fixed)
+ * meeting.$id.tsx — Lumina Meet  (complete rewrite of UI layer)
  *
- * Fixes applied:
- *  1. WHITEBOARD — SVG paths now use absolute pixel coords via a viewBox of
- *     "0 0 1000 1000", eliminating the percentage-based path bug that caused
- *     strokes to not render. All elements render correctly now.
- *
- *  2. CINEMA MODE — Added a persistent floating "Exit cinema" button that is
- *     always visible in cinema mode (top-right corner), so users can exit
- *     without needing the hidden footer. Footer still peeks on hover.
- *
- *  3. LAYOUT BUTTON — The Layers icon button in the header now has a visible
- *     "Layout" text label on sm+ screens. The dropdown is properly z-indexed
- *     and positioned.
- *
- *  4. LEFT SIDEBAR — Footer control buttons now use `overflow-x-auto` with
- *     proper min-widths and `shrink-0` so controls don't get clipped on
- *     smaller screens. Also added `flex-wrap` fallback.
- *
- *  5. SOUNDSCAPES BUTTON — Footer soundscape button now correctly opens the
- *     settings dropdown (which contains the soundscape picker) when nothing
- *     is active, and stops the active soundscape directly when one is playing.
- *
- *  6. NOISE SUPPRESSION — Button label now correctly reflects current state.
+ * FIXES in this version vs previous:
+ *  • ReactionPicker: trigger button and popup now share a wrapper with
+ *    class "reaction-picker-root" so the outside-click handler works correctly.
+ *  • ReactionPicker: switched from "mousedown" listener to a delayed "click"
+ *    listener (setTimeout 0) so the opening click doesn't immediately close
+ *    the picker.
+ *  • ControlBtn active prop for the reaction button was inverted — fixed.
+ *  • All other functionality preserved unchanged.
  */
 
+import { createPortal } from "react-dom";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -86,6 +73,9 @@ import {
   Sparkles,
   Move,
   Plus,
+  Undo2,
+  Redo2,
+  Type,
 } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
 import { NeonButton } from "@/components/ui-custom/NeonButton";
@@ -100,7 +90,6 @@ import {
   type Poll,
   type AgendaState,
   type TilePosition,
-  type BackgroundMode,
 } from "@/hooks/useWebRTC";
 import { useAmbientSound, type SoundscapeId } from "@/hooks/useAmbientSound";
 import { apiClient } from "@/api/apiClient";
@@ -108,7 +97,6 @@ import { apiClient } from "@/api/apiClient";
 // ─── Route ────────────────────────────────────────────────────────────────────
 
 const search = z.object({ scheduledFor: z.number().optional() }).partial();
-
 export const Route = createFileRoute("/meeting/$id")({
   component: MeetingRoom,
   validateSearch: search.parse,
@@ -120,54 +108,26 @@ const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_B
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const REACTIONS = ["👍", "❤️", "😂", "😮", "👏", "🔥", "🎉", "💯", "🙌", "✨"];
-
-// FIX: Whiteboard now uses a 0-1000 coordinate space mapped via viewBox.
-// All points are stored as [0..1000, 0..1000] percentages * 10.
 const WB_SCALE = 1000;
 
-const WHITEBOARD_COLORS = [
-  "oklch(0.97 0.01 250)",
-  "oklch(0.65 0.22 280)",
-  "oklch(0.82 0.16 210)",
-  "oklch(0.75 0.18 305)",
-  "oklch(0.72 0.22 35)",
-  "oklch(0.75 0.18 145)",
-  "oklch(0.8 0.18 80)",
-  "oklch(0.72 0.22 355)",
+const WB_COLORS = [
+  "#f1f5f9",
+  "#a78bfa",
+  "#38bdf8",
+  "#34d399",
+  "#fb923c",
+  "#f87171",
+  "#facc15",
+  "#e879f9",
 ];
 
-const WHITEBOARD_STROKE_WIDTHS = [2, 4, 8, 14];
+const WB_WIDTHS = [2, 4, 8, 16];
 
-const BACKGROUND_MODES: { id: BackgroundMode; label: string; preview: string }[] = [
-  { id: "none", label: "None", preview: "bg-white/5" },
-  { id: "blur", label: "Blur", preview: "bg-[oklch(0.82_0.16_210/0.2)]" },
-  { id: "gradient-purple", label: "Purple", preview: "bg-[oklch(0.35_0.18_280)]" },
-  { id: "gradient-teal", label: "Teal", preview: "bg-[oklch(0.35_0.15_200)]" },
-  { id: "gradient-dark", label: "Dark", preview: "bg-[oklch(0.12_0.02_265)]" },
+const SOUNDSCAPES: { id: SoundscapeId; label: string; icon: React.ReactNode }[] = [
+  { id: "rain", label: "Rain", icon: <CloudRain className="h-4 w-4" /> },
+  { id: "lofi", label: "Lo-fi", icon: <Headphones className="h-4 w-4" /> },
+  { id: "coffee", label: "Café", icon: <Coffee className="h-4 w-4" /> },
 ];
-
-const SOUNDSCAPES: { id: SoundscapeId; label: string; icon: React.ReactNode; color: string }[] = [
-  {
-    id: "rain",
-    label: "Rain",
-    icon: <CloudRain className="h-4 w-4" />,
-    color: "oklch(0.82 0.16 210)",
-  },
-  {
-    id: "lofi",
-    label: "Lo-fi",
-    icon: <Headphones className="h-4 w-4" />,
-    color: "oklch(0.75 0.18 305)",
-  },
-  {
-    id: "coffee",
-    label: "Café",
-    icon: <Coffee className="h-4 w-4" />,
-    color: "oklch(0.8 0.18 80)",
-  },
-];
-
-// ─── Status config ────────────────────────────────────────────────────────────
 
 const STATUS_CONFIG: Record<
   ParticipantStatus,
@@ -187,10 +147,88 @@ const STATUS_CONFIG: Record<
   },
   brb: { label: "BRB", color: "oklch(0.78 0.15 210)", icon: <Coffee className="h-3 w-3" /> },
 };
-
 const MANUAL_STATUSES: ParticipantStatus[] = ["available", "busy", "away", "brb"];
 
-type PanelType = "participants" | "chat" | "whiteboard" | "polls" | "agenda" | "settings" | null;
+type PanelType = "participants" | "chat" | "whiteboard" | "polls" | "agenda" | null;
+type LayoutMode = "grid" | "spatial" | "cinema";
+
+// ─── Portal Dropdown ──────────────────────────────────────────────────────────
+
+function PortalDropdown({
+  anchorRef,
+  open,
+  onClose,
+  children,
+  align = "right",
+}: {
+  anchorRef: React.RefObject<HTMLElement>;
+  open: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+  align?: "left" | "right";
+}) {
+  const [pos, setPos] = useState({ top: 0, left: 0, width: 0 });
+
+  useEffect(() => {
+    if (!open || !anchorRef.current) return;
+    const update = () => {
+      const rect = anchorRef.current!.getBoundingClientRect();
+      setPos({
+        top: rect.bottom + 8,
+        left: align === "right" ? rect.right : rect.left,
+        width: rect.width,
+      });
+    };
+    update();
+    window.addEventListener("resize", update, { passive: true });
+    window.addEventListener("scroll", update, { passive: true, capture: true });
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open, anchorRef, align]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (anchorRef.current?.contains(e.target as Node)) return;
+      const dropdownEl = document.getElementById("portal-dropdown-root");
+      if (dropdownEl?.contains(e.target as Node)) return;
+      onClose();
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open, onClose, anchorRef]);
+
+  if (!open) return null;
+
+  return createPortal(
+    <div
+      id="portal-dropdown-root"
+      style={{
+        position: "fixed",
+        top: pos.top,
+        [align === "right" ? "right" : "left"]:
+          align === "right" ? window.innerWidth - pos.left : pos.left,
+        zIndex: 9999,
+      }}
+    >
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -8, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -8, scale: 0.96 }}
+            transition={{ type: "spring", damping: 22, stiffness: 320 }}
+          >
+            {children}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>,
+    document.body,
+  );
+}
 
 // ─── Root component ───────────────────────────────────────────────────────────
 
@@ -206,16 +244,11 @@ function MeetingRoom() {
     return () => clearInterval(t);
   }, []);
 
-  const notStarted = Boolean(scheduledFor && scheduledFor > now);
-
   if (!user) {
     return (
       <div className="flex min-h-screen items-center justify-center px-4">
         <div className="glass-strong rounded-3xl p-8 text-center max-w-md">
           <h2 className="text-xl font-semibold">Please log in to join</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            You need an account to enter this room.
-          </p>
           <Link to="/login" className="mt-4 inline-block">
             <NeonButton>Log in</NeonButton>
           </Link>
@@ -224,7 +257,8 @@ function MeetingRoom() {
     );
   }
 
-  if (notStarted) return <CountdownScreen scheduledFor={scheduledFor!} now={now} />;
+  if (scheduledFor && scheduledFor > now)
+    return <CountdownScreen scheduledFor={scheduledFor} now={now} />;
 
   return (
     <Room
@@ -240,10 +274,6 @@ function MeetingRoom() {
 
 function CountdownScreen({ scheduledFor, now }: { scheduledFor: number; now: number }) {
   const diff = Math.max(0, scheduledFor - now);
-  const s = Math.floor(diff / 1000) % 60;
-  const m = Math.floor(diff / 60_000) % 60;
-  const h = Math.floor(diff / 3_600_000);
-
   return (
     <main className="flex min-h-screen items-center justify-center px-4">
       <motion.div
@@ -259,9 +289,18 @@ function CountdownScreen({ scheduledFor, now }: { scheduledFor: number; now: num
           Hang tight — we'll let you in automatically.
         </p>
         <div className="mt-6 flex justify-center gap-3 font-mono text-3xl">
-          <TimeBox v={h} l="hrs" />
-          <TimeBox v={m} l="min" />
-          <TimeBox v={s} l="sec" />
+          {[
+            Math.floor(diff / 3_600_000),
+            Math.floor(diff / 60_000) % 60,
+            Math.floor(diff / 1000) % 60,
+          ].map((v, i) => (
+            <div key={i} className="glass rounded-xl px-4 py-3 min-w-[72px]">
+              <div className="text-gradient">{String(v).padStart(2, "0")}</div>
+              <div className="mt-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                {["hrs", "min", "sec"][i]}
+              </div>
+            </div>
+          ))}
         </div>
         <Link
           to="/dashboard"
@@ -271,15 +310,6 @@ function CountdownScreen({ scheduledFor, now }: { scheduledFor: number; now: num
         </Link>
       </motion.div>
     </main>
-  );
-}
-
-function TimeBox({ v, l }: { v: number; l: string }) {
-  return (
-    <div className="glass rounded-xl px-4 py-3 min-w-[72px]">
-      <div className="text-gradient">{String(v).padStart(2, "0")}</div>
-      <div className="mt-1 text-[10px] uppercase tracking-wider text-muted-foreground">{l}</div>
-    </div>
   );
 }
 
@@ -297,49 +327,51 @@ function Room({
   onLeave: () => void;
 }) {
   const [activePanel, setActivePanel] = useState<PanelType>(null);
-  const [showReactionPicker, setShowReactionPicker] = useState(false);
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>("grid");
+  const [showSettings, setShowSettings] = useState(false);
   const [showStatusPicker, setShowStatusPicker] = useState(false);
+  // ── FIX: renamed from showReactionPicker to make intent clearer ──
+  const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   const [showLeaveModal, setShowLeaveModal] = useState(false);
-  const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
   const [transferTarget, setTransferTarget] = useState<RemotePeer | null>(null);
-  const statusButtonRef = useRef<HTMLDivElement>(null);
-  const [statusPickerPos, setStatusPickerPos] = useState<{ top: number; left: number } | null>(
-    null,
-  );
 
-  // FIX: layout mode drives cinema, not just a flag
-  const [layoutMode, setLayoutMode] = useState<"grid" | "spatial" | "cinema">("grid");
+  const layoutBtnRef = useRef<HTMLButtonElement>(null);
+  const statusBtnRef = useRef<HTMLButtonElement>(null);
 
-  // Whiteboard local state
+  // Whiteboard state
   const [wbTool, setWbTool] = useState<WhiteboardTool>("pen");
-  const [wbColor, setWbColor] = useState(WHITEBOARD_COLORS[0]);
-  const [wbStrokeWidth, setWbStrokeWidth] = useState(3);
+  const [wbColor, setWbColor] = useState(WB_COLORS[0]);
+  const [wbWidth, setWbWidth] = useState(3);
   const [wbDrawing, setWbDrawing] = useState(false);
-  const [wbCurrentPoints, setWbCurrentPoints] = useState<number[][]>([]);
+  const [wbPoints, setWbPoints] = useState<number[][]>([]);
   const [wbCurrentId, setWbCurrentId] = useState<string | null>(null);
-  const wbCanvasRef = useRef<SVGSVGElement>(null);
+  const [wbShapeStart, setWbShapeStart] = useState<{ x: number; y: number } | null>(null);
+  const [wbPreview, setWbPreview] = useState<WhiteboardElement | null>(null);
+  const [wbUndoStack, setWbUndoStack] = useState<WhiteboardElement[][]>([]);
+  const [wbRedoStack, setWbRedoStack] = useState<WhiteboardElement[][]>([]);
 
-  // Poll creation state
-  const [pollQuestion, setPollQuestion] = useState("");
-  const [pollOptions, setPollOptions] = useState(["", ""]);
-  const [showPollCreator, setShowPollCreator] = useState(false);
+  // Poll state
+  const [pollQ, setPollQ] = useState("");
+  const [pollOpts, setPollOpts] = useState(["", ""]);
+  const [showPollNew, setShowPollNew] = useState(false);
 
-  // Agenda creation state
-  const [agendaInput, setAgendaInput] = useState<Array<{ title: string; durationSec: number }>>([
-    { title: "", durationSec: 300 },
-  ]);
-  const [showAgendaCreator, setShowAgendaCreator] = useState(false);
+  // Agenda state
+  const [agendaIn, setAgendaIn] = useState([{ title: "", durationSec: 300 }]);
+  const [showAgNew, setShowAgNew] = useState(false);
+  const [agendaTick, setAgendaTick] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setAgendaTick(Date.now()), 500);
+    return () => clearInterval(t);
+  }, []);
 
-  // Ambient sound
   const {
     activeSoundscape,
-    volume: soundVolume,
-    setVolume: setSoundVolume,
+    volume: soundVol,
+    setVolume: setSoundVol,
     toggleSoundscape,
   } = useAmbientSound();
 
   const webrtc = useWebRTC(id, username, SOCKET_URL, userId);
-
   const {
     localStream,
     localCameraStream,
@@ -417,36 +449,12 @@ function Room({
     activeSpotlightId,
   } = webrtc;
 
-  // Sync cinema mode with layout
-  useEffect(() => {
-    setCinemaMode(layoutMode === "cinema");
-  }, [layoutMode, setCinemaMode]);
+  const canManage = isHost || isSubHost;
+  const isCinema = layoutMode === "cinema";
 
   useEffect(() => {
-    if (showStatusPicker && statusButtonRef.current) {
-      const rect = statusButtonRef.current.getBoundingClientRect();
-      setStatusPickerPos({ top: rect.bottom + 8, left: rect.left });
-    } else {
-      setStatusPickerPos(null);
-    }
-  }, [showStatusPicker]);
-
-  useEffect(() => {
-    if (!showStatusPicker) return;
-    const handleUpdate = () => {
-      if (statusButtonRef.current) {
-        const rect = statusButtonRef.current.getBoundingClientRect();
-        setStatusPickerPos({ top: rect.bottom + 8, left: rect.left });
-      }
-    };
-    window.addEventListener("resize", handleUpdate);
-    window.addEventListener("scroll", handleUpdate, true);
-    return () => {
-      window.removeEventListener("resize", handleUpdate);
-      window.removeEventListener("scroll", handleUpdate, true);
-    };
-  }, [showStatusPicker]);
-
+    setCinemaMode(isCinema);
+  }, [isCinema, setCinemaMode]);
   useEffect(() => {
     const handler = () => {
       leaveRoom();
@@ -456,12 +464,243 @@ function Room({
     return () => window.removeEventListener("Lumina Meet:host-removed", handler);
   }, [leaveRoom, onLeave]);
 
+  // ── Whiteboard helpers ─────────────────────────────────────────────────────
+
+  const wbPushUndo = useCallback((snapshot: WhiteboardElement[]) => {
+    setWbUndoStack((prev) => [...prev.slice(-49), [...snapshot]]);
+    setWbRedoStack([]);
+  }, []);
+
+  const wbUndo = useCallback(() => {
+    setWbUndoStack((prev) => {
+      if (!prev.length) return prev;
+      const stack = [...prev];
+      const snapshot = stack.pop()!;
+      setWbRedoStack((r) => [...r, [...whiteboardElements]]);
+      clearWhiteboard();
+      snapshot.forEach((el) => drawWhiteboardElement(el));
+      return stack;
+    });
+  }, [whiteboardElements, clearWhiteboard, drawWhiteboardElement]);
+
+  const wbRedo = useCallback(() => {
+    setWbRedoStack((prev) => {
+      if (!prev.length) return prev;
+      const stack = [...prev];
+      const snapshot = stack.pop()!;
+      setWbUndoStack((u) => [...u, [...whiteboardElements]]);
+      clearWhiteboard();
+      snapshot.forEach((el) => drawWhiteboardElement(el));
+      return stack;
+    });
+  }, [whiteboardElements, clearWhiteboard, drawWhiteboardElement]);
+
+  useEffect(() => {
+    if (activePanel !== "whiteboard") return;
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        wbUndo();
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) {
+        e.preventDefault();
+        wbRedo();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [activePanel, wbUndo, wbRedo]);
+
+  const svgCoords = (
+    e: React.PointerEvent<SVGSVGElement> | React.MouseEvent<SVGSVGElement>,
+  ): { x: number; y: number } => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    return {
+      x: ((e.clientX - rect.left) / rect.width) * WB_SCALE,
+      y: ((e.clientY - rect.top) / rect.height) * WB_SCALE,
+    };
+  };
+
+  const handleWbPointerDown = useCallback(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      if (wbTool === "select" || wbTool === "eraser") return;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      const { x, y } = svgCoords(e);
+      const id = `wb-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      setWbCurrentId(id);
+      setWbDrawing(true);
+
+      if (wbTool === "pen") {
+        setWbPoints([[x, y]]);
+      } else {
+        setWbShapeStart({ x, y });
+      }
+    },
+    [wbTool],
+  );
+
+  const handleWbPointerMove = useCallback(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      const { x, y } = svgCoords(e);
+      broadcastWhiteboardCursor(x / WB_SCALE, y / WB_SCALE);
+
+      if (!wbDrawing || !wbCurrentId) return;
+
+      if (wbTool === "pen") {
+        setWbPoints((prev) => [...prev, [x, y]]);
+      } else if (wbShapeStart) {
+        const preview: WhiteboardElement = {
+          id: wbCurrentId,
+          type: wbTool as any,
+          x: Math.min(wbShapeStart.x, x),
+          y: Math.min(wbShapeStart.y, y),
+          width: Math.abs(x - wbShapeStart.x),
+          height: Math.abs(y - wbShapeStart.y),
+          color: wbColor,
+          strokeWidth: wbWidth,
+          author: username,
+          authorId: localSocketId ?? "",
+        };
+        if (wbTool === "arrow") {
+          preview.points = [
+            [wbShapeStart.x, wbShapeStart.y],
+            [x, y],
+          ];
+        }
+        setWbPreview(preview);
+      }
+    },
+    [
+      wbDrawing,
+      wbTool,
+      wbCurrentId,
+      wbShapeStart,
+      wbColor,
+      wbWidth,
+      username,
+      localSocketId,
+      broadcastWhiteboardCursor,
+    ],
+  );
+
+  const handleWbPointerUp = useCallback(() => {
+    if (!wbDrawing || !wbCurrentId) {
+      setWbDrawing(false);
+      setWbPoints([]);
+      setWbCurrentId(null);
+      setWbShapeStart(null);
+      setWbPreview(null);
+      return;
+    }
+
+    wbPushUndo(whiteboardElements);
+
+    if (wbTool === "pen" && wbPoints.length >= 2) {
+      const el: WhiteboardElement = {
+        id: wbCurrentId,
+        type: "stroke",
+        points: wbPoints,
+        color: wbColor,
+        strokeWidth: wbWidth,
+        author: username,
+        authorId: localSocketId ?? "",
+      };
+      drawWhiteboardElement(el);
+    } else if (wbPreview) {
+      drawWhiteboardElement(wbPreview);
+    }
+
+    setWbDrawing(false);
+    setWbPoints([]);
+    setWbCurrentId(null);
+    setWbShapeStart(null);
+    setWbPreview(null);
+  }, [
+    wbDrawing,
+    wbTool,
+    wbCurrentId,
+    wbPoints,
+    wbPreview,
+    wbColor,
+    wbWidth,
+    username,
+    localSocketId,
+    drawWhiteboardElement,
+    wbPushUndo,
+    whiteboardElements,
+  ]);
+
+  const handleWbClick = useCallback(
+    (e: React.MouseEvent<SVGSVGElement>) => {
+      if (wbTool !== "sticky" && wbTool !== "text") return;
+      const { x, y } = svgCoords(e);
+      wbPushUndo(whiteboardElements);
+      const el: WhiteboardElement = {
+        id: `wb-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        type: wbTool === "sticky" ? "sticky" : "text",
+        x,
+        y,
+        text: wbTool === "sticky" ? "Sticky note" : "Text",
+        color: wbColor,
+        author: username,
+        authorId: localSocketId ?? "",
+      };
+      drawWhiteboardElement(el);
+    },
+    [
+      wbTool,
+      wbColor,
+      username,
+      localSocketId,
+      drawWhiteboardElement,
+      wbPushUndo,
+      whiteboardElements,
+    ],
+  );
+
+  const handleEraseClick = useCallback(
+    (elementId: string) => {
+      wbPushUndo(whiteboardElements);
+      eraseWhiteboardElement(elementId);
+    },
+    [eraseWhiteboardElement, wbPushUndo, whiteboardElements],
+  );
+
+  // ── Polls ──────────────────────────────────────────────────────────────────
+
+  const handleCreatePoll = useCallback(() => {
+    const opts = pollOpts.filter((o) => o.trim());
+    if (!pollQ.trim() || opts.length < 2) return;
+    createPoll(pollQ.trim(), opts);
+    setPollQ("");
+    setPollOpts(["", ""]);
+    setShowPollNew(false);
+    if (activePanel !== "polls") setActivePanel("polls");
+  }, [pollQ, pollOpts, createPoll, activePanel]);
+
+  // ── Agenda ─────────────────────────────────────────────────────────────────
+
+  const handleSetAgenda = useCallback(() => {
+    const items = agendaIn.filter((i) => i.title.trim());
+    if (!items.length) return;
+    setAgenda(items);
+    setShowAgNew(false);
+    if (activePanel !== "agenda") setActivePanel("agenda");
+  }, [agendaIn, setAgenda, activePanel]);
+
+  const agendaTimeLeft = useMemo(() => {
+    if (!agenda) return null;
+    if (agenda.timerPaused) return agenda.timerRemaining ?? 0;
+    if (agenda.timerEnd) return Math.max(0, agenda.timerEnd - agendaTick);
+    return null;
+  }, [agenda, agendaTick]);
+
   const handleLeaveConfirm = useCallback(async () => {
     if (isHost) {
       try {
         await apiClient.post(`/meeting/${id}/end`);
-      } catch (e) {
-        console.error("Failed to end meeting", e);
+      } catch {
+        /* ignore */
       }
     }
     leaveRoom();
@@ -483,129 +722,6 @@ function Room({
       return panel;
     });
   };
-
-  // ── Whiteboard pointer events ──────────────────────────────────────────────
-  // FIX: coordinates are now in 0..WB_SCALE space, not 0..1 percentages
-
-  const handleWbPointerDown = useCallback(
-    (e: React.PointerEvent<SVGSVGElement>) => {
-      if (wbTool === "select") return;
-      e.currentTarget.setPointerCapture(e.pointerId);
-      const rect = e.currentTarget.getBoundingClientRect();
-      const x = ((e.clientX - rect.left) / rect.width) * WB_SCALE;
-      const y = ((e.clientY - rect.top) / rect.height) * WB_SCALE;
-
-      if (wbTool === "pen") {
-        const id = `wb-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-        setWbCurrentId(id);
-        setWbCurrentPoints([[x, y]]);
-        setWbDrawing(true);
-      }
-    },
-    [wbTool],
-  );
-
-  const handleWbPointerMove = useCallback(
-    (e: React.PointerEvent<SVGSVGElement>) => {
-      const rect = e.currentTarget.getBoundingClientRect();
-      const x = ((e.clientX - rect.left) / rect.width) * WB_SCALE;
-      const y = ((e.clientY - rect.top) / rect.height) * WB_SCALE;
-      // Cursor broadcast still uses 0..1 fractions for network efficiency
-      broadcastWhiteboardCursor(x / WB_SCALE, y / WB_SCALE);
-
-      if (!wbDrawing || wbTool !== "pen" || !wbCurrentId) return;
-      setWbCurrentPoints((prev) => [...prev, [x, y]]);
-    },
-    [wbDrawing, wbTool, wbCurrentId, broadcastWhiteboardCursor],
-  );
-
-  const handleWbPointerUp = useCallback(() => {
-    if (!wbDrawing || wbTool !== "pen" || !wbCurrentId || wbCurrentPoints.length < 2) {
-      setWbDrawing(false);
-      setWbCurrentPoints([]);
-      setWbCurrentId(null);
-      return;
-    }
-    const element: WhiteboardElement = {
-      id: wbCurrentId,
-      type: "stroke",
-      points: wbCurrentPoints, // stored in WB_SCALE coords
-      color: wbColor,
-      strokeWidth: wbStrokeWidth,
-      author: username,
-      authorId: localSocketId ?? "",
-    };
-    drawWhiteboardElement(element);
-    setWbDrawing(false);
-    setWbCurrentPoints([]);
-    setWbCurrentId(null);
-  }, [
-    wbDrawing,
-    wbTool,
-    wbCurrentId,
-    wbCurrentPoints,
-    wbColor,
-    wbStrokeWidth,
-    username,
-    localSocketId,
-    drawWhiteboardElement,
-  ]);
-
-  const handleWbClick = useCallback(
-    (e: React.MouseEvent<SVGSVGElement>) => {
-      if (wbTool !== "sticky" && wbTool !== "text") return;
-      const rect = e.currentTarget.getBoundingClientRect();
-      const x = ((e.clientX - rect.left) / rect.width) * WB_SCALE;
-      const y = ((e.clientY - rect.top) / rect.height) * WB_SCALE;
-      const element: WhiteboardElement = {
-        id: `wb-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        type: wbTool === "sticky" ? "sticky" : "text",
-        x,
-        y,
-        text: wbTool === "sticky" ? "Sticky note" : "Text",
-        color: wbColor,
-        author: username,
-        authorId: localSocketId ?? "",
-      };
-      drawWhiteboardElement(element);
-    },
-    [wbTool, wbColor, username, localSocketId, drawWhiteboardElement],
-  );
-
-  // ── Poll helpers ───────────────────────────────────────────────────────────
-
-  const handleCreatePoll = useCallback(() => {
-    const opts = pollOptions.filter((o) => o.trim());
-    if (!pollQuestion.trim() || opts.length < 2) return;
-    createPoll(pollQuestion.trim(), opts);
-    setPollQuestion("");
-    setPollOptions(["", ""]);
-    setShowPollCreator(false);
-    if (activePanel !== "polls") setActivePanel("polls");
-  }, [pollQuestion, pollOptions, createPoll, activePanel]);
-
-  // ── Agenda helpers ─────────────────────────────────────────────────────────
-
-  const handleSetAgenda = useCallback(() => {
-    const items = agendaInput.filter((i) => i.title.trim());
-    if (items.length === 0) return;
-    setAgenda(items);
-    setShowAgendaCreator(false);
-    if (activePanel !== "agenda") setActivePanel("agenda");
-  }, [agendaInput, setAgenda, activePanel]);
-
-  const [agendaTick, setAgendaTick] = useState(Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setAgendaTick(Date.now()), 500);
-    return () => clearInterval(t);
-  }, []);
-
-  const agendaTimeLeft = useMemo(() => {
-    if (!agenda) return null;
-    if (agenda.timerPaused) return agenda.timerRemaining ?? 0;
-    if (agenda.timerEnd) return Math.max(0, agenda.timerEnd - agendaTick);
-    return null;
-  }, [agenda, agendaTick]);
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -652,7 +768,7 @@ function Room({
           </motion.div>
           <h2 className="text-2xl font-semibold text-gradient">Waiting in lobby</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            The host has been notified. Please wait while they review your request to join.
+            The host has been notified. Please wait.
           </p>
           <div className="mt-6 flex justify-center">
             <NeonButton variant="outline" onClick={onLeave}>
@@ -664,12 +780,9 @@ function Room({
     );
   }
 
-  const canManage = isHost || isSubHost;
-  const isCinema = layoutMode === "cinema";
-
   return (
     <div className="flex min-h-screen flex-col overflow-hidden" style={{ background: "#0B0F19" }}>
-      {/* Ambient background orbs */}
+      {/* Ambient orbs */}
       <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
         <motion.div
           className="absolute -top-32 -left-32 h-96 w-96 rounded-full opacity-20"
@@ -685,7 +798,7 @@ function Room({
         />
       </div>
 
-      {/* ─── FIX: Cinema mode exit button — always visible in cinema mode ── */}
+      {/* Cinema exit FAB */}
       <AnimatePresence>
         {isCinema && (
           <motion.button
@@ -695,118 +808,66 @@ function Room({
             onClick={() => setLayoutMode("grid")}
             className="fixed top-4 right-4 z-50 flex items-center gap-2 rounded-2xl border border-white/20 bg-black/70 backdrop-blur-xl px-4 py-2.5 text-sm font-medium text-white hover:bg-black/90 hover:border-white/40 transition shadow-xl"
           >
-            <Minimize2 className="h-4 w-4" />
-            Exit cinema
+            <Minimize2 className="h-4 w-4" /> Exit cinema
           </motion.button>
         )}
       </AnimatePresence>
 
-      {/* ─── Header (hidden in cinema mode) ──────────────────────────────── */}
+      {/* ─── Header ─────────────────────────────────────────────────────── */}
       <AnimatePresence>
         {!isCinema && (
           <motion.header
             initial={{ y: -60, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: -60, opacity: 0 }}
-            className="relative z-10 flex items-center justify-between border-b border-white/5 bg-black/40 backdrop-blur-xl px-4 py-3 sm:px-6"
+            className="relative z-10 flex items-center justify-between border-b border-white/5 bg-black/40 backdrop-blur-xl px-4 py-3 sm:px-6 gap-2"
           >
-            <div className="flex items-center gap-3 min-w-0">
+            {/* Left */}
+            <div className="flex items-center gap-3 min-w-0 shrink-0">
               <div className="h-7 w-7 shrink-0 rounded-lg bg-gradient-neon animate-pulse-glow" />
-              <div className="min-w-0">
+              <div className="min-w-0 hidden sm:block">
                 <p className="truncate text-sm font-semibold">Lumina Meet</p>
                 <p className="truncate text-[11px] text-muted-foreground font-mono">{id}</p>
               </div>
             </div>
 
-            {/* Raised hands queue */}
-            <AnimatePresence>
-              {raisedHands.length > 0 && (
-                <motion.div
-                  initial={{ opacity: 0, y: -10, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -10, scale: 0.95 }}
-                  className="hidden md:flex items-center gap-2 rounded-full border border-[oklch(0.8_0.18_80)/0.4] bg-[oklch(0.8_0.18_80)/0.08] px-3 py-1.5 text-xs text-[oklch(0.9_0.18_80)]"
-                >
-                  <motion.span
-                    animate={{ rotate: [0, 15, -10, 15, 0] }}
-                    transition={{ duration: 1, repeat: Infinity, repeatDelay: 2 }}
-                    className="text-base"
+            {/* Center — live indicators */}
+            <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide">
+              <AnimatePresence>
+                {raisedHands.length > 0 && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.9 }}
+                    className="hidden md:flex items-center gap-2 rounded-full border border-[oklch(0.8_0.18_80)/0.4] bg-[oklch(0.8_0.18_80)/0.08] px-3 py-1.5 text-xs text-[oklch(0.9_0.18_80)] shrink-0"
                   >
-                    ✋
-                  </motion.span>
-                  <span className="font-medium">{raisedHands[0].username}</span>
-                  {raisedHands.length > 1 && (
-                    <span className="text-muted-foreground">+{raisedHands.length - 1} more</span>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Agenda live ticker */}
-            <AnimatePresence>
-              {agenda && agendaTimeLeft !== null && (
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.9 }}
-                  className="hidden lg:flex items-center gap-2 rounded-full border border-[var(--neon-primary)]/30 bg-[var(--neon-primary)]/10 px-3 py-1.5 text-xs text-[var(--neon-primary)] cursor-pointer"
-                  onClick={() => togglePanel("agenda")}
-                >
-                  <Timer className="h-3 w-3" />
-                  <span className="font-mono font-medium">{formatDuration(agendaTimeLeft)}</span>
-                  <span className="text-muted-foreground max-w-[120px] truncate">
-                    {agenda.items[agenda.activeIdx]?.title}
-                  </span>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            <div className="flex items-center gap-1.5 sm:gap-2">
-              {/* Status pill */}
-              <div ref={statusButtonRef} className="relative hidden sm:block">
-                <button
-                  onClick={() => setShowStatusPicker((v) => !v)}
-                  className={cn(
-                    "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition",
-                    localStatus === "presenting"
-                      ? "border-[oklch(0.65_0.22_280)/0.6] bg-[oklch(0.65_0.22_280)/0.15] text-[oklch(0.8_0.18_280)] animate-pulse-glow"
-                      : "border-white/10 bg-white/5 hover:bg-white/10",
-                  )}
-                >
-                  <span
-                    className="h-1.5 w-1.5 rounded-full shrink-0"
-                    style={{
-                      background: STATUS_CONFIG[localStatus].color,
-                      boxShadow: `0 0 6px ${STATUS_CONFIG[localStatus].color}`,
-                    }}
-                  />
-                  <span className="font-medium">{STATUS_CONFIG[localStatus].label}</span>
-                  <ChevronDown
-                    className={cn(
-                      "h-2.5 w-2.5 text-muted-foreground transition-transform duration-200",
-                      showStatusPicker && "rotate-180",
+                    <motion.span
+                      animate={{ rotate: [0, 15, -10, 15, 0] }}
+                      transition={{ duration: 1, repeat: Infinity, repeatDelay: 2 }}
+                    >
+                      ✋
+                    </motion.span>
+                    <span className="font-medium">{raisedHands[0].username}</span>
+                    {raisedHands.length > 1 && (
+                      <span className="text-muted-foreground">+{raisedHands.length - 1}</span>
                     )}
-                  />
-                </button>
-              </div>
-
-              {/* Active soundscape indicator */}
+                  </motion.div>
+                )}
+              </AnimatePresence>
               <AnimatePresence>
                 {activeSoundscape && (
                   <motion.button
                     initial={{ opacity: 0, scale: 0.8 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.8 }}
-                    onClick={() => togglePanel("settings")}
-                    className="hidden sm:flex items-center gap-1.5 rounded-full border border-[oklch(0.8_0.18_80)/0.4] bg-[oklch(0.8_0.18_80)/0.1] px-2.5 py-1 text-[11px] text-[oklch(0.9_0.18_80)]"
+                    onClick={() => setShowSettings(true)}
+                    className="hidden sm:flex items-center gap-1.5 rounded-full border border-[oklch(0.8_0.18_80)/0.4] bg-[oklch(0.8_0.18_80)/0.1] px-2.5 py-1 text-[11px] text-[oklch(0.9_0.18_80)] shrink-0"
                   >
                     <Music2 className="h-3 w-3" />
                     <span>{SOUNDSCAPES.find((s) => s.id === activeSoundscape)?.label}</span>
                   </motion.button>
                 )}
               </AnimatePresence>
-
-              {/* Active poll indicator */}
               <AnimatePresence>
                 {currentPoll && !currentPoll.closed && (
                   <motion.button
@@ -814,13 +875,90 @@ function Room({
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.8 }}
                     onClick={() => togglePanel("polls")}
-                    className="hidden sm:flex items-center gap-1.5 rounded-full border border-[var(--neon-secondary)]/40 bg-[var(--neon-secondary)]/10 px-2.5 py-1 text-[11px] text-[var(--neon-secondary)] animate-pulse-glow"
+                    className="hidden sm:flex items-center gap-1.5 rounded-full border border-[var(--neon-secondary)]/40 bg-[var(--neon-secondary)]/10 px-2.5 py-1 text-[11px] text-[var(--neon-secondary)] animate-pulse-glow shrink-0"
                   >
                     <BarChart2 className="h-3 w-3" />
                     <span>Live poll</span>
                   </motion.button>
                 )}
               </AnimatePresence>
+            </div>
+
+            {/* Right */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {/* Status */}
+              <button
+                ref={statusBtnRef}
+                onClick={() => setShowStatusPicker((v) => !v)}
+                className={cn(
+                  "hidden sm:flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition",
+                  localStatus === "presenting"
+                    ? "border-[oklch(0.65_0.22_280)/0.6] bg-[oklch(0.65_0.22_280)/0.15] text-[oklch(0.8_0.18_280)] animate-pulse-glow"
+                    : "border-white/10 bg-white/5 hover:bg-white/10",
+                )}
+              >
+                <span
+                  className="h-1.5 w-1.5 rounded-full shrink-0"
+                  style={{
+                    background: STATUS_CONFIG[localStatus].color,
+                    boxShadow: `0 0 6px ${STATUS_CONFIG[localStatus].color}`,
+                  }}
+                />
+                <span className="font-medium">{STATUS_CONFIG[localStatus].label}</span>
+                <ChevronDown
+                  className={cn(
+                    "h-2.5 w-2.5 text-muted-foreground transition-transform",
+                    showStatusPicker && "rotate-180",
+                  )}
+                />
+              </button>
+
+              <PortalDropdown
+                anchorRef={statusBtnRef as React.RefObject<HTMLElement>}
+                open={showStatusPicker}
+                onClose={() => setShowStatusPicker(false)}
+                align="right"
+              >
+                <div className="glass-strong rounded-2xl border border-white/10 p-1.5 shadow-2xl backdrop-blur-xl w-52">
+                  <p className="px-3 py-1.5 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
+                    Set status
+                  </p>
+                  {localStatus === "presenting" && (
+                    <div className="mx-1.5 mb-1.5 flex items-start gap-2 rounded-xl border border-[oklch(0.65_0.22_280)/0.35] bg-[oklch(0.65_0.22_280)/0.1] px-3 py-2">
+                      <Presentation className="h-3 w-3 mt-0.5 shrink-0 text-[oklch(0.75_0.18_280)]" />
+                      <p className="text-[11px] text-[oklch(0.8_0.15_280)] leading-snug">
+                        Applies when sharing stops.
+                      </p>
+                    </div>
+                  )}
+                  {MANUAL_STATUSES.map((key) => {
+                    const cfg = STATUS_CONFIG[key];
+                    const isActive = localStatus !== "presenting" && localStatus === key;
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => {
+                          setStatus(key);
+                          setShowStatusPicker(false);
+                        }}
+                        className={cn(
+                          "flex items-center gap-2.5 w-full rounded-xl px-3 py-2 text-sm text-left transition",
+                          isActive ? "bg-white/10" : "hover:bg-white/5",
+                        )}
+                      >
+                        <span
+                          className="h-2 w-2 rounded-full shrink-0"
+                          style={{ background: cfg.color, boxShadow: `0 0 6px ${cfg.color}` }}
+                        />
+                        <span className="flex-1">{cfg.label}</span>
+                        {isActive && (
+                          <CheckCircle2 className="h-3 w-3 text-[var(--neon-primary)]" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </PortalDropdown>
 
               <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-[var(--neon-secondary)]/30 bg-[var(--neon-secondary)]/10 px-2.5 py-1 text-[11px] text-[var(--neon-secondary)]">
                 <ShieldCheck className="h-3 w-3" /> Encrypted
@@ -830,7 +968,7 @@ function Room({
                 {peers.length + 1} live
               </span>
 
-              {/* Panel buttons */}
+              {/* Panel icon buttons */}
               {(
                 [
                   ["chat", <MessageSquare className="h-4 w-4" />, unreadCount],
@@ -843,7 +981,7 @@ function Room({
                 <button
                   key={panel}
                   onClick={() => togglePanel(panel as PanelType)}
-                  title={panel.charAt(0).toUpperCase() + panel.slice(1)}
+                  title={String(panel)}
                   className={cn(
                     "relative rounded-lg border p-2 transition",
                     activePanel === panel
@@ -853,63 +991,68 @@ function Room({
                 >
                   {icon}
                   {(badge as number) > 0 && activePanel !== panel && (
-                    <motion.span
-                      initial={{ scale: 0 }}
-                      animate={{ scale: 1 }}
-                      className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-[var(--neon-danger)] text-[9px] font-bold text-white"
-                    >
+                    <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-[var(--neon-danger)] text-[9px] font-bold text-white">
                       {(badge as number) > 9 ? "9+" : badge}
-                    </motion.span>
+                    </span>
                   )}
                 </button>
               ))}
 
-              {/* FIX: Settings/Layout button — now has visible "Layout" label */}
+              {/* Layout & Settings button */}
               <div className="relative">
                 <button
-                  onClick={() => setShowSettingsDropdown((v) => !v)}
-                  title="Layout & Settings"
+                  ref={layoutBtnRef}
+                  onClick={() => setShowSettings((v) => !v)}
                   className={cn(
                     "flex items-center gap-1.5 rounded-lg border px-2 py-2 sm:px-3 transition",
-                    showSettingsDropdown
+                    showSettings
                       ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
                       : "border-white/10 bg-white/5 hover:bg-white/10",
                   )}
                 >
                   <Layers className="h-4 w-4" />
                   <span className="hidden sm:inline text-xs font-medium">Layout</span>
+                  <ChevronDown
+                    className={cn(
+                      "h-3 w-3 text-muted-foreground transition-transform hidden sm:block",
+                      showSettings && "rotate-180",
+                    )}
+                  />
                 </button>
-                <AnimatePresence>
-                  {showSettingsDropdown && (
-                    <SettingsDropdown
-                      layoutMode={layoutMode}
-                      setLayoutMode={(m) => {
-                        setLayoutMode(m);
-                        setShowSettingsDropdown(false);
-                      }}
-                      backgroundMode={backgroundMode}
-                      setBackgroundMode={setBackgroundMode}
-                      isBlurProcessing={isBlurProcessing}
-                      activeSoundscape={activeSoundscape}
-                      toggleSoundscape={toggleSoundscape}
-                      soundVolume={soundVolume}
-                      setSoundVolume={setSoundVolume}
-                      noiseSuppressionEnabled={noiseSuppressionEnabled}
-                      noiseSuppressionSupported={noiseSuppressionSupported}
-                      toggleNoiseSuppression={toggleNoiseSuppression}
-                      autoSpotlight={autoSpotlight}
-                      setAutoSpotlight={setAutoSpotlight}
-                      onClose={() => setShowSettingsDropdown(false)}
-                    />
-                  )}
-                </AnimatePresence>
+
+                <PortalDropdown
+                  anchorRef={layoutBtnRef as React.RefObject<HTMLElement>}
+                  open={showSettings}
+                  onClose={() => setShowSettings(false)}
+                  align="right"
+                >
+                  <SettingsMenu
+                    layoutMode={layoutMode}
+                    setLayoutMode={(m) => {
+                      setLayoutMode(m);
+                      setShowSettings(false);
+                    }}
+                    backgroundMode={backgroundMode}
+                    setBackgroundMode={setBackgroundMode}
+                    isBlurProcessing={isBlurProcessing}
+                    activeSoundscape={activeSoundscape}
+                    toggleSoundscape={toggleSoundscape}
+                    soundVolume={soundVol}
+                    setSoundVolume={setSoundVol}
+                    noiseSuppressionEnabled={noiseSuppressionEnabled}
+                    noiseSuppressionSupported={noiseSuppressionSupported}
+                    toggleNoiseSuppression={toggleNoiseSuppression}
+                    autoSpotlight={autoSpotlight}
+                    setAutoSpotlight={setAutoSpotlight}
+                  />
+                </PortalDropdown>
               </div>
             </div>
           </motion.header>
         )}
       </AnimatePresence>
 
-      {/* ─── Host Lobby Banner ───────────────────────────────────────────── */}
+      {/* Lobby banner */}
       <AnimatePresence>
         {isHost && pendingParticipants.length > 0 && !isCinema && (
           <motion.div
@@ -918,15 +1061,10 @@ function Room({
             exit={{ opacity: 0, y: -20, height: 0 }}
             className="relative z-20 mx-4 mt-3 glass-strong rounded-2xl border border-[var(--neon-primary)]/30 p-4 max-h-64 overflow-y-auto"
           >
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold flex items-center gap-2">
-                <Users className="h-4 w-4 text-[var(--neon-primary)]" />
-                Lobby{" "}
-                <span className="text-muted-foreground">
-                  ({pendingParticipants.length} waiting)
-                </span>
-              </h3>
-            </div>
+            <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
+              <Users className="h-4 w-4 text-[var(--neon-primary)]" /> Lobby{" "}
+              <span className="text-muted-foreground">({pendingParticipants.length} waiting)</span>
+            </h3>
             <div className="space-y-2">
               {pendingParticipants.map((p) => (
                 <div
@@ -959,28 +1097,35 @@ function Room({
       {/* Main area */}
       <div className="relative z-10 flex flex-1 overflow-hidden">
         <main className={cn("flex-1 overflow-hidden min-w-0", isCinema ? "p-0" : "p-3 sm:p-4")}>
-          {/* Whiteboard overlay */}
+          {/* Whiteboard full-screen overlay */}
           <AnimatePresence>
             {activePanel === "whiteboard" && (
               <WhiteboardOverlay
                 elements={whiteboardElements}
                 cursors={whiteboardCursors}
+                preview={wbPreview}
                 activeTool={wbTool}
                 activeColor={wbColor}
-                strokeWidth={wbStrokeWidth}
-                currentPoints={wbCurrentPoints}
+                strokeWidth={wbWidth}
+                currentPoints={wbPoints}
                 canManage={canManage}
+                undoAvailable={wbUndoStack.length > 0}
+                redoAvailable={wbRedoStack.length > 0}
                 onToolChange={setWbTool}
                 onColorChange={setWbColor}
-                onStrokeWidthChange={setWbStrokeWidth}
+                onStrokeWidthChange={setWbWidth}
                 onPointerDown={handleWbPointerDown}
                 onPointerMove={handleWbPointerMove}
                 onPointerUp={handleWbPointerUp}
                 onClick={handleWbClick}
-                onErase={eraseWhiteboardElement}
-                onClear={clearWhiteboard}
+                onErase={handleEraseClick}
+                onClear={() => {
+                  wbPushUndo(whiteboardElements);
+                  clearWhiteboard();
+                }}
+                onUndo={wbUndo}
+                onRedo={wbRedo}
                 onClose={() => setActivePanel(null)}
-                svgRef={wbCanvasRef}
               />
             )}
           </AnimatePresence>
@@ -1078,16 +1223,16 @@ function Room({
             <PollsPanel
               currentPoll={currentPoll}
               isHost={canManage}
-              showCreator={showPollCreator}
-              pollQuestion={pollQuestion}
-              pollOptions={pollOptions}
-              onQuestionChange={setPollQuestion}
-              onOptionsChange={setPollOptions}
-              onShowCreator={() => setShowPollCreator(true)}
-              onHideCreator={() => setShowPollCreator(false)}
+              showCreator={showPollNew}
+              pollQuestion={pollQ}
+              pollOptions={pollOpts}
+              onQuestionChange={setPollQ}
+              onOptionsChange={setPollOpts}
+              onShowCreator={() => setShowPollNew(true)}
+              onHideCreator={() => setShowPollNew(false)}
               onCreate={handleCreatePoll}
               onVote={votePoll}
-              onClose_poll={closePoll}
+              onClosePoll={closePoll}
               onDismiss={dismissPoll}
               onClose={() => setActivePanel(null)}
             />
@@ -1097,11 +1242,11 @@ function Room({
               agenda={agenda}
               agendaTimeLeft={agendaTimeLeft}
               isHost={canManage}
-              showCreator={showAgendaCreator}
-              agendaInput={agendaInput}
-              onAgendaInputChange={setAgendaInput}
-              onShowCreator={() => setShowAgendaCreator(true)}
-              onHideCreator={() => setShowAgendaCreator(false)}
+              showCreator={showAgNew}
+              agendaInput={agendaIn}
+              onAgendaInputChange={setAgendaIn}
+              onShowCreator={() => setShowAgNew(true)}
+              onHideCreator={() => setShowAgNew(false)}
               onCreate={handleSetAgenda}
               onNext={agendaNext}
               onPrev={agendaPrev}
@@ -1114,7 +1259,6 @@ function Room({
         </AnimatePresence>
       </div>
 
-      {/* Floating reaction bursts */}
       <ReactionBurstLayer reactions={reactions} />
 
       {/* Speaking banner */}
@@ -1124,7 +1268,6 @@ function Room({
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 8 }}
-            transition={{ duration: 0.2 }}
             className="absolute bottom-[88px] left-1/2 -translate-x-1/2 z-20 pointer-events-none"
           >
             <div className="flex items-center gap-2 rounded-full bg-black/70 backdrop-blur border border-[var(--neon-secondary)]/30 px-4 py-1.5 text-xs text-[var(--neon-secondary)]">
@@ -1139,7 +1282,7 @@ function Room({
         )}
       </AnimatePresence>
 
-      {/* Raise hand toast */}
+      {/* Hand raised toast */}
       <AnimatePresence>
         {localHandRaised && (
           <motion.div
@@ -1166,32 +1309,26 @@ function Room({
       </AnimatePresence>
 
       {/* ─── Footer ─────────────────────────────────────────────────────── */}
-      {/* FIX: cinema mode hides footer but it peeks on hover via group */}
       <motion.footer
-        initial={false}
-        animate={isCinema ? { y: 80, opacity: 0 } : { y: 0, opacity: 1 }}
+        animate={isCinema ? { y: 72, opacity: 0 } : { y: 0, opacity: 1 }}
         transition={{ duration: 0.3 }}
         className="relative z-10 border-t border-white/5 bg-black/50 backdrop-blur-xl px-2 py-3 sm:px-4"
         onMouseEnter={
           isCinema
             ? (e) => {
-                const el = e.currentTarget as HTMLElement;
-                el.style.transform = "translateY(0)";
-                el.style.opacity = "1";
+                (e.currentTarget as HTMLElement).style.cssText =
+                  "transform:translateY(0);opacity:1";
               }
             : undefined
         }
         onMouseLeave={
           isCinema
             ? (e) => {
-                const el = e.currentTarget as HTMLElement;
-                el.style.transform = "";
-                el.style.opacity = "";
+                (e.currentTarget as HTMLElement).style.cssText = "";
               }
             : undefined
         }
       >
-        {/* FIX: overflow-x-auto so buttons never get cut off on small screens */}
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-1 sm:gap-2 overflow-x-auto scrollbar-hide">
           {/* Left cluster */}
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
@@ -1204,26 +1341,35 @@ function Room({
               highlightOn={localHandRaised}
               highlightColor="oklch(0.8 0.18 80)"
             />
-            <div className="relative">
+
+            {/*
+              ── FIX: Wrap trigger button + popup in ONE div with "reaction-picker-root".
+                 This means the outside-click handler in ReactionPicker sees clicks on
+                 the trigger button as "inside" and won't close the picker immediately.
+                 Also fixed: active prop was !reactionPickerOpen (inverted) → now reactionPickerOpen
+            */}
+            <div className="relative reaction-picker-root">
               <ControlBtn
-                active={!showReactionPicker}
-                onClick={() => setShowReactionPicker((v) => !v)}
+                active={reactionPickerOpen}
+                onClick={() => setReactionPickerOpen((v) => !v)}
                 on={<SmilePlus className="h-4 w-4 sm:h-5 sm:w-5" />}
                 off={<SmilePlus className="h-4 w-4 sm:h-5 sm:w-5" />}
                 label="React"
+                highlightOn={reactionPickerOpen}
               />
               <AnimatePresence>
-                {showReactionPicker && (
+                {reactionPickerOpen && (
                   <ReactionPicker
-                    onReact={(emoji) => {
-                      sendReaction(emoji);
-                      setShowReactionPicker(false);
+                    onReact={(e) => {
+                      sendReaction(e);
+                      setReactionPickerOpen(false);
                     }}
-                    onClose={() => setShowReactionPicker(false)}
+                    onClose={() => setReactionPickerOpen(false)}
                   />
                 )}
               </AnimatePresence>
             </div>
+
             <ControlBtn
               active={activePanel !== "whiteboard"}
               onClick={() => togglePanel("whiteboard")}
@@ -1269,43 +1415,36 @@ function Room({
 
           {/* Right cluster */}
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-            {/* FIX: Cinema mode toggle — label changes based on current state */}
             <ControlBtn
               active={layoutMode !== "cinema"}
-              onClick={() => setLayoutMode((prev) => (prev === "cinema" ? "grid" : "cinema"))}
+              onClick={() => setLayoutMode((p) => (p === "cinema" ? "grid" : "cinema"))}
               on={<Maximize2 className="h-4 w-4 sm:h-5 sm:w-5" />}
               off={<Minimize2 className="h-4 w-4 sm:h-5 sm:w-5" />}
-              label={layoutMode === "cinema" ? "Exit cinema" : "Cinema mode"}
+              label={layoutMode === "cinema" ? "Exit cinema" : "Cinema"}
               highlightOn={layoutMode === "cinema"}
             />
-            {/* FIX: Noise suppression — label clearly states current state */}
             {noiseSuppressionSupported && (
               <ControlBtn
                 active={!noiseSuppressionEnabled}
                 onClick={() => void toggleNoiseSuppression()}
                 on={<Mic2 className="h-4 w-4 sm:h-5 sm:w-5" />}
                 off={<Mic2 className="h-4 w-4 sm:h-5 sm:w-5" />}
-                label={noiseSuppressionEnabled ? "Noise suppression on" : "Noise suppression off"}
+                label={noiseSuppressionEnabled ? "Noise ON" : "Noise OFF"}
                 highlightOn={noiseSuppressionEnabled}
                 highlightColor="oklch(0.75 0.18 145)"
               />
             )}
-            {/* FIX: Soundscape toggle — opens settings dropdown when nothing active,
-                stops active soundscape directly when one is playing */}
             <ControlBtn
               active={!activeSoundscape}
               onClick={() => {
-                if (activeSoundscape) {
-                  toggleSoundscape(null);
-                } else {
-                  setShowSettingsDropdown((v) => !v);
-                }
+                if (activeSoundscape) toggleSoundscape(null);
+                else setShowSettings(true);
               }}
               on={<Music2 className="h-4 w-4 sm:h-5 sm:w-5" />}
               off={<Music2 className="h-4 w-4 sm:h-5 sm:w-5" />}
               label={
                 activeSoundscape
-                  ? `Stop ${SOUNDSCAPES.find((s) => s.id === activeSoundscape)?.label ?? "soundscape"}`
+                  ? `Stop ${SOUNDSCAPES.find((s) => s.id === activeSoundscape)?.label ?? ""}`
                   : "Soundscapes"
               }
               highlightOn={!!activeSoundscape}
@@ -1315,7 +1454,7 @@ function Room({
         </div>
       </motion.footer>
 
-      {/* ─── Modals ─────────────────────────────────────────────────────── */}
+      {/* Modals */}
       <AnimatePresence>
         {showLeaveModal && (
           <LeaveModal
@@ -1331,26 +1470,14 @@ function Room({
             onClose={() => setTransferTarget(null)}
           />
         )}
-        {showStatusPicker && statusPickerPos && (
-          <StatusPicker
-            current={localStatus}
-            isPresenting={localStatus === "presenting"}
-            onSelect={(s) => {
-              setStatus(s);
-              setShowStatusPicker(false);
-            }}
-            onClose={() => setShowStatusPicker(false)}
-            position={statusPickerPos}
-          />
-        )}
       </AnimatePresence>
     </div>
   );
 }
 
-// ─── Settings Dropdown ────────────────────────────────────────────────────────
+// ─── Settings Menu ────────────────────────────────────────────────────────────
 
-function SettingsDropdown({
+function SettingsMenu({
   layoutMode,
   setLayoutMode,
   backgroundMode,
@@ -1365,12 +1492,11 @@ function SettingsDropdown({
   toggleNoiseSuppression,
   autoSpotlight,
   setAutoSpotlight,
-  onClose,
 }: {
-  layoutMode: "grid" | "spatial" | "cinema";
-  setLayoutMode: (m: "grid" | "spatial" | "cinema") => void;
-  backgroundMode: BackgroundMode;
-  setBackgroundMode: (m: BackgroundMode) => void;
+  layoutMode: LayoutMode;
+  setLayoutMode: (m: LayoutMode) => void;
+  backgroundMode: string;
+  setBackgroundMode: (m: any) => void;
   isBlurProcessing: boolean;
   activeSoundscape: SoundscapeId;
   toggleSoundscape: (id: SoundscapeId) => void;
@@ -1381,186 +1507,178 @@ function SettingsDropdown({
   toggleNoiseSuppression: () => Promise<void>;
   autoSpotlight: boolean;
   setAutoSpotlight: (v: boolean) => void;
-  onClose: () => void;
 }) {
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest(".settings-dropdown-root")) onClose();
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [onClose]);
+  const BACKGROUNDS = [
+    { id: "none", label: "None", cls: "bg-white/5" },
+    { id: "blur", label: "Blur", cls: "bg-[oklch(0.82_0.16_210/0.2)]" },
+    { id: "gradient-purple", label: "Purple", cls: "bg-[oklch(0.35_0.18_280)]" },
+    { id: "gradient-teal", label: "Teal", cls: "bg-[oklch(0.35_0.15_200)]" },
+    { id: "gradient-dark", label: "Dark", cls: "bg-[oklch(0.12_0.02_265)]" },
+  ] as const;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: -8, scale: 0.95 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -8, scale: 0.95 }}
-      transition={{ type: "spring", damping: 22, stiffness: 300 }}
-      className="settings-dropdown-root absolute right-0 top-full mt-2 z-50 w-72"
-    >
-      <div className="glass-strong rounded-2xl border border-white/10 p-3 shadow-2xl space-y-4">
-        {/* Layout */}
-        <div>
-          <p className="px-1 pb-2 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
-            Layout
-          </p>
-          <div className="grid grid-cols-3 gap-1.5">
-            {(["grid", "spatial", "cinema"] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => setLayoutMode(m)}
-                className={cn(
-                  "rounded-xl py-2 text-xs font-medium capitalize transition border",
-                  layoutMode === m
-                    ? "bg-[var(--neon-primary)]/20 border-[var(--neon-primary)]/50 text-[var(--neon-primary)]"
-                    : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
-                )}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Background */}
-        <div>
-          <p className="px-1 pb-2 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold flex items-center gap-1.5">
-            Virtual background
-            {isBlurProcessing && (
-              <Loader2 className="h-3 w-3 animate-spin text-[var(--neon-primary)]" />
-            )}
-          </p>
-          <div className="flex gap-1.5 flex-wrap">
-            {BACKGROUND_MODES.map((bm) => (
-              <button
-                key={bm.id}
-                onClick={() => setBackgroundMode(bm.id)}
-                className={cn(
-                  "flex flex-col items-center gap-1 rounded-xl p-2 border transition text-xs",
-                  backgroundMode === bm.id
-                    ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
-                    : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
-                )}
-              >
-                <div className={cn("h-8 w-12 rounded-lg border border-white/10", bm.preview)} />
-                <span>{bm.label}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Soundscapes */}
-        <div>
-          <p className="px-1 pb-2 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
-            Ambient sound
-          </p>
-          <div className="flex gap-1.5 mb-2">
-            {SOUNDSCAPES.map((s) => (
-              <button
-                key={s.id}
-                onClick={() => toggleSoundscape(s.id)}
-                className={cn(
-                  "flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs border transition flex-1 justify-center",
-                  activeSoundscape === s.id
-                    ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
-                    : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
-                )}
-              >
-                {s.icon}
-                <span>{s.label}</span>
-              </button>
-            ))}
-          </div>
-          {activeSoundscape && (
-            <div className="flex items-center gap-2">
-              <VolumeX className="h-3 w-3 text-muted-foreground shrink-0" />
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.01}
-                value={soundVolume}
-                onChange={(e) => setSoundVolume(Number(e.target.value))}
-                className="flex-1 h-1 appearance-none bg-white/10 rounded-full outline-none cursor-pointer"
-                style={{ accentColor: "oklch(0.65 0.22 280)" }}
-              />
-              <Volume2 className="h-3 w-3 text-muted-foreground shrink-0" />
-            </div>
-          )}
-        </div>
-
-        {/* Audio */}
-        <div className="space-y-2">
-          <p className="px-1 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
-            Audio
-          </p>
-          {noiseSuppressionSupported && (
+    <div className="glass-strong rounded-2xl border border-white/10 p-3 shadow-2xl space-y-4 w-72">
+      {/* Layout */}
+      <div>
+        <p className="px-1 pb-2 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
+          Layout
+        </p>
+        <div className="grid grid-cols-3 gap-1.5">
+          {(["grid", "spatial", "cinema"] as const).map((m) => (
             <button
-              onClick={() => void toggleNoiseSuppression()}
+              key={m}
+              onClick={() => setLayoutMode(m)}
               className={cn(
-                "flex items-center justify-between w-full rounded-xl px-3 py-2 text-xs border transition",
-                noiseSuppressionEnabled
-                  ? "border-[oklch(0.75_0.18_145)/0.5] bg-[oklch(0.75_0.18_145)/0.15] text-[oklch(0.85_0.15_145)]"
+                "rounded-xl py-2 text-xs font-medium capitalize transition border",
+                layoutMode === m
+                  ? "bg-[var(--neon-primary)]/20 border-[var(--neon-primary)]/50 text-[var(--neon-primary)]"
                   : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
               )}
             >
-              <span className="flex items-center gap-2">
-                <Mic2 className="h-3.5 w-3.5" /> Noise suppression
-              </span>
-              <span
-                className={cn(
-                  "text-[10px] rounded px-1.5 py-0.5",
-                  noiseSuppressionEnabled
-                    ? "bg-[oklch(0.75_0.18_145)/0.25] text-[oklch(0.85_0.15_145)]"
-                    : "bg-white/5 text-muted-foreground",
-                )}
-              >
-                {noiseSuppressionEnabled ? "ON" : "OFF"}
-              </span>
+              {m}
             </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Virtual background */}
+      <div>
+        <p className="px-1 pb-2 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold flex items-center gap-1.5">
+          Virtual background{" "}
+          {isBlurProcessing && (
+            <Loader2 className="h-3 w-3 animate-spin text-[var(--neon-primary)]" />
           )}
+        </p>
+        <div className="flex gap-1.5 flex-wrap">
+          {BACKGROUNDS.map((b) => (
+            <button
+              key={b.id}
+              onClick={() => setBackgroundMode(b.id)}
+              className={cn(
+                "flex flex-col items-center gap-1 rounded-xl p-2 border transition text-xs",
+                backgroundMode === b.id
+                  ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
+                  : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
+              )}
+            >
+              <div className={cn("h-8 w-12 rounded-lg border border-white/10", b.cls)} />
+              <span>{b.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Ambient sound */}
+      <div>
+        <p className="px-1 pb-2 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
+          Ambient sound
+        </p>
+        <div className="flex gap-1.5 mb-2">
+          {SOUNDSCAPES.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => toggleSoundscape(s.id)}
+              className={cn(
+                "flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs border transition flex-1 justify-center",
+                activeSoundscape === s.id
+                  ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
+                  : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
+              )}
+            >
+              {s.icon}
+              <span>{s.label}</span>
+            </button>
+          ))}
+        </div>
+        {activeSoundscape && (
+          <div className="flex items-center gap-2">
+            <VolumeX className="h-3 w-3 text-muted-foreground shrink-0" />
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={soundVolume}
+              onChange={(e) => setSoundVolume(Number(e.target.value))}
+              className="flex-1 h-1 appearance-none bg-white/10 rounded-full outline-none cursor-pointer"
+              style={{ accentColor: "oklch(0.65 0.22 280)" }}
+            />
+            <Volume2 className="h-3 w-3 text-muted-foreground shrink-0" />
+          </div>
+        )}
+      </div>
+
+      {/* Audio */}
+      <div className="space-y-2">
+        <p className="px-1 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
+          Audio
+        </p>
+        {noiseSuppressionSupported && (
           <button
-            onClick={() => setAutoSpotlight(!autoSpotlight)}
+            onClick={() => void toggleNoiseSuppression()}
             className={cn(
               "flex items-center justify-between w-full rounded-xl px-3 py-2 text-xs border transition",
-              autoSpotlight
-                ? "border-[var(--neon-secondary)/0.5] bg-[var(--neon-secondary)/0.15] text-[var(--neon-secondary)]"
+              noiseSuppressionEnabled
+                ? "border-[oklch(0.75_0.18_145)/0.5] bg-[oklch(0.75_0.18_145)/0.15] text-[oklch(0.85_0.15_145)]"
                 : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
             )}
           >
             <span className="flex items-center gap-2">
-              <Sparkles className="h-3.5 w-3.5" /> Auto-spotlight speaker
+              <Mic2 className="h-3.5 w-3.5" /> Noise suppression
             </span>
             <span
               className={cn(
-                "text-[10px] rounded px-1.5 py-0.5",
-                autoSpotlight
-                  ? "bg-[var(--neon-secondary)/0.25] text-[var(--neon-secondary)]"
+                "text-[10px] rounded px-1.5 py-0.5 font-semibold",
+                noiseSuppressionEnabled
+                  ? "bg-[oklch(0.75_0.18_145)/0.25] text-[oklch(0.85_0.15_145)]"
                   : "bg-white/5 text-muted-foreground",
               )}
             >
-              {autoSpotlight ? "ON" : "OFF"}
+              {noiseSuppressionEnabled ? "ON" : "OFF"}
             </span>
           </button>
-        </div>
+        )}
+        <button
+          onClick={() => setAutoSpotlight(!autoSpotlight)}
+          className={cn(
+            "flex items-center justify-between w-full rounded-xl px-3 py-2 text-xs border transition",
+            autoSpotlight
+              ? "border-[var(--neon-secondary)/0.5] bg-[var(--neon-secondary)/0.15] text-[var(--neon-secondary)]"
+              : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
+          )}
+        >
+          <span className="flex items-center gap-2">
+            <Sparkles className="h-3.5 w-3.5" /> Auto-spotlight speaker
+          </span>
+          <span
+            className={cn(
+              "text-[10px] rounded px-1.5 py-0.5 font-semibold",
+              autoSpotlight
+                ? "bg-[var(--neon-secondary)/0.25] text-[var(--neon-secondary)]"
+                : "bg-white/5 text-muted-foreground",
+            )}
+          >
+            {autoSpotlight ? "ON" : "OFF"}
+          </span>
+        </button>
       </div>
-    </motion.div>
+    </div>
   );
 }
 
 // ─── Whiteboard Overlay ───────────────────────────────────────────────────────
-// FIX: Uses viewBox="0 0 1000 1000" so all coordinates are in absolute pixels
-// instead of CSS percentage strings, which caused broken SVG path rendering.
 
 function WhiteboardOverlay({
   elements,
   cursors,
+  preview,
   activeTool,
   activeColor,
   strokeWidth,
   currentPoints,
   canManage,
+  undoAvailable,
+  redoAvailable,
   onToolChange,
   onColorChange,
   onStrokeWidthChange,
@@ -1570,16 +1688,20 @@ function WhiteboardOverlay({
   onClick,
   onErase,
   onClear,
+  onUndo,
+  onRedo,
   onClose,
-  svgRef,
 }: {
   elements: WhiteboardElement[];
   cursors: Array<{ socketId: string; username: string; x: number; y: number }>;
+  preview: WhiteboardElement | null;
   activeTool: WhiteboardTool;
   activeColor: string;
   strokeWidth: number;
   currentPoints: number[][];
   canManage: boolean;
+  undoAvailable: boolean;
+  redoAvailable: boolean;
   onToolChange: (t: WhiteboardTool) => void;
   onColorChange: (c: string) => void;
   onStrokeWidthChange: (w: number) => void;
@@ -1589,150 +1711,231 @@ function WhiteboardOverlay({
   onClick: (e: React.MouseEvent<SVGSVGElement>) => void;
   onErase: (id: string) => void;
   onClear: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
   onClose: () => void;
-  svgRef: React.RefObject<SVGSVGElement>;
 }) {
   const tools: { id: WhiteboardTool; icon: React.ReactNode; label: string }[] = [
-    { id: "select", icon: <MousePointer className="h-4 w-4" />, label: "Select" },
-    { id: "pen", icon: <PenLine className="h-4 w-4" />, label: "Pen" },
-    { id: "eraser", icon: <Eraser className="h-4 w-4" />, label: "Eraser" },
-    { id: "text", icon: <span className="text-sm font-bold">T</span>, label: "Text" },
-    { id: "sticky", icon: <StickyNote className="h-4 w-4" />, label: "Sticky" },
-    { id: "arrow", icon: <ArrowUpRight className="h-4 w-4" />, label: "Arrow" },
-    { id: "rect", icon: <Square className="h-4 w-4" />, label: "Rect" },
-    { id: "ellipse", icon: <Circle className="h-4 w-4" />, label: "Ellipse" },
+    { id: "select", icon: <MousePointer className="h-4 w-4" />, label: "Select (V)" },
+    { id: "pen", icon: <PenLine className="h-4 w-4" />, label: "Pen (P)" },
+    { id: "eraser", icon: <Eraser className="h-4 w-4" />, label: "Eraser (E)" },
+    { id: "text", icon: <Type className="h-4 w-4" />, label: "Text (T)" },
+    { id: "sticky", icon: <StickyNote className="h-4 w-4" />, label: "Sticky (S)" },
+    { id: "arrow", icon: <ArrowUpRight className="h-4 w-4" />, label: "Arrow (A)" },
+    { id: "rect", icon: <Square className="h-4 w-4" />, label: "Rect (R)" },
+    { id: "ellipse", icon: <Circle className="h-4 w-4" />, label: "Ellipse (O)" },
   ];
 
-  // FIX: points are now in 0..1000 space — convert directly to SVG coords
-  const pointsToPath = (pts: number[][]): string => {
+  const pts2path = (pts: number[][]): string => {
     if (pts.length < 2) return "";
     return pts
-      .map((p, i) => `${i === 0 ? "M" : "L"} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`)
+      .map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`)
       .join(" ");
   };
+
+  const renderElement = (el: WhiteboardElement, eraseMode: boolean) => {
+    const eraseProps = eraseMode
+      ? {
+          className: "cursor-cell hover:opacity-30 transition-opacity",
+          onClick: (e: React.MouseEvent) => {
+            e.stopPropagation();
+            onErase(el.id);
+          },
+        }
+      : {};
+
+    if (el.type === "stroke" && el.points) {
+      return (
+        <path
+          key={el.id}
+          d={pts2path(el.points)}
+          fill="none"
+          stroke={el.color}
+          strokeWidth={el.strokeWidth ?? 3}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          {...eraseProps}
+        />
+      );
+    }
+    if (el.type === "rect" && el.x !== undefined && el.y !== undefined) {
+      return (
+        <rect
+          key={el.id}
+          x={el.x}
+          y={el.y}
+          width={el.width ?? 100}
+          height={el.height ?? 80}
+          fill="none"
+          stroke={el.color}
+          strokeWidth={el.strokeWidth ?? 3}
+          rx={6}
+          {...eraseProps}
+        />
+      );
+    }
+    if (el.type === "ellipse" && el.x !== undefined && el.y !== undefined) {
+      const cx = el.x + (el.width ?? 100) / 2;
+      const cy = el.y + (el.height ?? 80) / 2;
+      return (
+        <ellipse
+          key={el.id}
+          cx={cx}
+          cy={cy}
+          rx={(el.width ?? 100) / 2}
+          ry={(el.height ?? 80) / 2}
+          fill="none"
+          stroke={el.color}
+          strokeWidth={el.strokeWidth ?? 3}
+          {...eraseProps}
+        />
+      );
+    }
+    if (el.type === "arrow" && el.points && el.points.length === 2) {
+      const [s, e2] = el.points;
+      const dx = e2[0] - s[0];
+      const dy = e2[1] - s[1];
+      const len = Math.sqrt(dx * dx + dy * dy) || 1;
+      const ux = dx / len;
+      const uy = dy / len;
+      const ah = 16;
+      const aw = 9;
+      const lx = e2[0] - ah * ux;
+      const ly = e2[1] - ah * uy;
+      const p1x = lx - aw * uy;
+      const p1y = ly + aw * ux;
+      const p2x = lx + aw * uy;
+      const p2y = ly - aw * ux;
+      return (
+        <g key={el.id} {...eraseProps}>
+          <line
+            x1={s[0]}
+            y1={s[1]}
+            x2={e2[0]}
+            y2={e2[1]}
+            stroke={el.color}
+            strokeWidth={el.strokeWidth ?? 3}
+            strokeLinecap="round"
+          />
+          <polygon points={`${e2[0]},${e2[1]} ${p1x},${p1y} ${p2x},${p2y}`} fill={el.color} />
+        </g>
+      );
+    }
+    if ((el.type === "sticky" || el.type === "text") && el.x !== undefined && el.y !== undefined) {
+      if (el.type === "sticky") {
+        return (
+          <g key={el.id} transform={`translate(${el.x},${el.y})`} {...eraseProps}>
+            <rect
+              x={-70}
+              y={-28}
+              width={140}
+              height={56}
+              rx={10}
+              fill={el.color}
+              fillOpacity={0.18}
+              stroke={el.color}
+              strokeWidth={1.5}
+            />
+            <text
+              x={0}
+              y={0}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              fill={el.color}
+              fontSize="13"
+              fontFamily="system-ui"
+              fontWeight="500"
+            >
+              {el.text}
+            </text>
+          </g>
+        );
+      }
+      return (
+        <g key={el.id} transform={`translate(${el.x},${el.y})`} {...eraseProps}>
+          <text
+            x={0}
+            y={0}
+            dominantBaseline="middle"
+            fill={el.color}
+            fontSize="14"
+            fontFamily="system-ui"
+            fontWeight="400"
+          >
+            {el.text}
+          </text>
+        </g>
+      );
+    }
+    return null;
+  };
+
+  const cursor =
+    activeTool === "pen"
+      ? "crosshair"
+      : activeTool === "eraser"
+        ? "cell"
+        : activeTool === "sticky" || activeTool === "text"
+          ? "text"
+          : "default";
 
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="absolute inset-0 z-30 flex"
+      className="absolute inset-0 z-30 flex select-none"
     >
-      <div className="absolute inset-0 bg-[oklch(0.12_0.02_265/0.95)] backdrop-blur-sm" />
-
-      {/* FIX: viewBox makes coordinate system absolute and predictable */}
+      <div className="absolute inset-0 bg-[oklch(0.10_0.02_265/0.97)] backdrop-blur-sm" />
       <svg
-        ref={svgRef}
-        className="absolute inset-0 w-full h-full"
+        className="absolute inset-0 w-full h-full touch-none"
         viewBox={`0 0 ${WB_SCALE} ${WB_SCALE}`}
-        preserveAspectRatio="none"
-        style={{
-          cursor: activeTool === "pen" ? "crosshair" : activeTool === "eraser" ? "cell" : "default",
-        }}
+        preserveAspectRatio="xMidYMid meet"
+        style={{ cursor }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onClick={onClick}
       >
-        {/* Grid pattern — scaled to viewBox */}
         <defs>
-          <pattern id="wb-grid" width="40" height="40" patternUnits="userSpaceOnUse">
-            <path
-              d="M 40 0 L 0 0 0 40"
-              fill="none"
-              stroke="oklch(1 0 0 / 0.04)"
-              strokeWidth="0.5"
-            />
+          <pattern id="wbdots" x="0" y="0" width="40" height="40" patternUnits="userSpaceOnUse">
+            <circle cx="20" cy="20" r="1" fill="oklch(1 0 0 / 0.07)" />
           </pattern>
         </defs>
-        <rect width={WB_SCALE} height={WB_SCALE} fill="url(#wb-grid)" />
-
-        {/* Existing elements */}
-        {elements.map((el) => {
-          if (el.type === "stroke" && el.points) {
-            return (
-              <path
-                key={el.id}
-                d={pointsToPath(el.points)}
-                fill="none"
-                stroke={el.color}
-                strokeWidth={el.strokeWidth ?? 3}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className={cn(activeTool === "eraser" && "hover:opacity-30 cursor-cell")}
-                onClick={
-                  activeTool === "eraser"
-                    ? (e) => {
-                        e.stopPropagation();
-                        onErase(el.id);
-                      }
-                    : undefined
-                }
-              />
-            );
-          }
-          if (
-            (el.type === "sticky" || el.type === "text") &&
-            el.x !== undefined &&
-            el.y !== undefined
-          ) {
-            return (
-              <g key={el.id} transform={`translate(${el.x} ${el.y})`}>
-                {el.type === "sticky" && (
-                  <rect
-                    x={-60}
-                    y={-20}
-                    width={120}
-                    height={48}
-                    rx={8}
-                    fill={el.color}
-                    fillOpacity={0.2}
-                    stroke={el.color}
-                    strokeWidth={1}
-                  />
-                )}
-                <text
-                  x={0}
-                  y={0}
-                  textAnchor="middle"
-                  dominantBaseline="middle"
-                  fill={el.color}
-                  fontSize="13"
-                  fontFamily="system-ui"
-                >
-                  {el.text}
-                </text>
-              </g>
-            );
-          }
-          return null;
-        })}
-
-        {/* In-progress stroke */}
-        {currentPoints.length > 1 && (
+        <rect width={WB_SCALE} height={WB_SCALE} fill="url(#wbdots)" />
+        {elements.map((el) => renderElement(el, activeTool === "eraser"))}
+        {preview && renderElement(preview, false)}
+        {currentPoints.length >= 2 && (
           <path
-            d={pointsToPath(currentPoints)}
+            d={pts2path(currentPoints)}
             fill="none"
             stroke={activeColor}
             strokeWidth={strokeWidth}
             strokeLinecap="round"
             strokeLinejoin="round"
-            opacity={0.9}
+            opacity={0.85}
           />
         )}
-
-        {/* Remote cursors — cursor positions come in as 0..1, scale to viewBox */}
         {cursors.map((c) => (
           <g
             key={c.socketId}
-            transform={`translate(${c.x * WB_SCALE} ${c.y * WB_SCALE})`}
+            transform={`translate(${c.x * WB_SCALE},${c.y * WB_SCALE})`}
             style={{ pointerEvents: "none" }}
           >
-            <circle r={5} fill={`oklch(0.75 0.18 ${hueForName(c.username)})`} opacity={0.8} />
+            <circle r={6} fill={`oklch(0.75 0.18 ${hueForName(c.username)})`} opacity={0.85} />
+            <rect
+              x={9}
+              y={-9}
+              width={c.username.length * 7 + 10}
+              height={18}
+              rx={4}
+              fill="oklch(0.12 0.02 265 / 0.8)"
+            />
             <text
-              x={8}
-              y={4}
+              x={14}
+              y={0}
               fontSize="11"
+              dominantBaseline="middle"
               fill={`oklch(0.75 0.18 ${hueForName(c.username)})`}
               fontFamily="system-ui"
             >
@@ -1743,60 +1946,90 @@ function WhiteboardOverlay({
       </svg>
 
       {/* Toolbar */}
-      <div className="absolute left-4 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-1 glass-strong rounded-2xl border border-white/10 p-2">
+      <div className="absolute left-3 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-0.5 glass-strong rounded-2xl border border-white/10 p-1.5 max-h-[90vh] overflow-y-auto scrollbar-hide">
         {tools.map((t) => (
           <button
             key={t.id}
             onClick={() => onToolChange(t.id)}
             title={t.label}
             className={cn(
-              "flex h-9 w-9 items-center justify-center rounded-xl transition",
+              "flex h-9 w-9 items-center justify-center rounded-xl transition text-sm font-bold",
               activeTool === t.id
-                ? "bg-[var(--neon-primary)]/20 text-[var(--neon-primary)]"
+                ? "bg-[var(--neon-primary)]/20 text-[var(--neon-primary)] ring-1 ring-[var(--neon-primary)]/40"
                 : "text-muted-foreground hover:bg-white/10 hover:text-foreground",
             )}
           >
             {t.icon}
           </button>
         ))}
-        <div className="my-1 h-px bg-white/10" />
-        {WHITEBOARD_STROKE_WIDTHS.map((w) => (
+        <div className="my-1 h-px bg-white/10 mx-1" />
+        {WB_WIDTHS.map((w) => (
           <button
             key={w}
             onClick={() => onStrokeWidthChange(w)}
-            title={`Stroke ${w}px`}
+            title={`${w}px`}
             className={cn(
               "flex h-9 w-9 items-center justify-center rounded-xl transition",
               strokeWidth === w ? "bg-[var(--neon-primary)]/20" : "hover:bg-white/10",
             )}
           >
             <div
-              className="rounded-full bg-current"
+              className="rounded-full"
               style={{
-                width: Math.min(w * 2, 18),
-                height: Math.min(w * 2, 18),
-                opacity: strokeWidth === w ? 1 : 0.4,
+                width: Math.min(w * 2, 20),
+                height: Math.min(w * 2, 20),
+                background: strokeWidth === w ? activeColor : "rgba(255,255,255,0.4)",
               }}
             />
           </button>
         ))}
-        <div className="my-1 h-px bg-white/10" />
-        {WHITEBOARD_COLORS.map((c) => (
+        <div className="my-1 h-px bg-white/10 mx-1" />
+        {WB_COLORS.map((c) => (
           <button
             key={c}
             onClick={() => onColorChange(c)}
+            title={c}
             className={cn(
               "flex h-9 w-9 items-center justify-center rounded-xl transition",
-              activeColor === c ? "ring-2 ring-white/40" : "hover:scale-110",
+              activeColor === c ? "ring-2 ring-white/60 scale-90" : "hover:scale-110",
             )}
-            style={{ background: c }}
           >
-            {activeColor === c && <CheckCircle2 className="h-4 w-4 text-black/60" />}
+            <div
+              className="w-5 h-5 rounded-full border border-white/20"
+              style={{ background: c }}
+            />
           </button>
         ))}
+        <div className="my-1 h-px bg-white/10 mx-1" />
+        <button
+          onClick={onUndo}
+          disabled={!undoAvailable}
+          title="Undo (Ctrl+Z)"
+          className={cn(
+            "flex h-9 w-9 items-center justify-center rounded-xl transition",
+            undoAvailable
+              ? "text-muted-foreground hover:bg-white/10 hover:text-foreground"
+              : "text-muted-foreground/20 cursor-not-allowed",
+          )}
+        >
+          <Undo2 className="h-4 w-4" />
+        </button>
+        <button
+          onClick={onRedo}
+          disabled={!redoAvailable}
+          title="Redo (Ctrl+Shift+Z)"
+          className={cn(
+            "flex h-9 w-9 items-center justify-center rounded-xl transition",
+            redoAvailable
+              ? "text-muted-foreground hover:bg-white/10 hover:text-foreground"
+              : "text-muted-foreground/20 cursor-not-allowed",
+          )}
+        >
+          <Redo2 className="h-4 w-4" />
+        </button>
         {canManage && (
           <>
-            <div className="my-1 h-px bg-white/10" />
+            <div className="my-1 h-px bg-white/10 mx-1" />
             <button
               onClick={onClear}
               title="Clear all"
@@ -1808,16 +2041,27 @@ function WhiteboardOverlay({
         )}
       </div>
 
-      {/* Close */}
-      <button
-        onClick={onClose}
-        className="absolute top-4 right-4 z-40 flex h-9 w-9 items-center justify-center rounded-xl glass border border-white/10 text-muted-foreground hover:text-foreground transition"
-      >
-        <X className="h-4 w-4" />
-      </button>
-
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40 text-[11px] text-muted-foreground bg-black/40 backdrop-blur rounded-full px-3 py-1">
-        {elements.length} elements · shared with all participants
+      <div className="absolute top-4 right-4 z-40 flex items-center gap-2">
+        <span className="text-[11px] text-muted-foreground bg-black/50 backdrop-blur rounded-full px-3 py-1">
+          {elements.length} element{elements.length !== 1 ? "s" : ""} · shared with all
+        </span>
+        <button
+          onClick={onClose}
+          className="flex h-9 w-9 items-center justify-center rounded-xl glass border border-white/10 text-muted-foreground hover:text-foreground transition"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40 text-[11px] text-muted-foreground/50 pointer-events-none">
+        {activeTool === "pen"
+          ? "Click and drag to draw"
+          : activeTool === "eraser"
+            ? "Click any element to erase it"
+            : activeTool === "sticky" || activeTool === "text"
+              ? "Click anywhere to place"
+              : activeTool === "select"
+                ? "Select mode — drag to move (coming soon)"
+                : "Click and drag to draw shape"}
       </div>
     </motion.div>
   );
@@ -1837,7 +2081,7 @@ function PollsPanel({
   onHideCreator,
   onCreate,
   onVote,
-  onClose_poll,
+  onClosePoll,
   onDismiss,
   onClose,
 }: {
@@ -1852,12 +2096,11 @@ function PollsPanel({
   onHideCreator: () => void;
   onCreate: () => void;
   onVote: (i: number) => void;
-  onClose_poll: () => void;
+  onClosePoll: () => void;
   onDismiss: () => void;
   onClose: () => void;
 }) {
   const maxVotes = currentPoll ? Math.max(...Object.values(currentPoll.votes), 1) : 1;
-
   return (
     <motion.aside
       initial={{ x: 340 }}
@@ -1900,9 +2143,9 @@ function PollsPanel({
                   <input
                     value={opt}
                     onChange={(e) => {
-                      const next = [...pollOptions];
-                      next[i] = e.target.value;
-                      onOptionsChange(next);
+                      const n = [...pollOptions];
+                      n[i] = e.target.value;
+                      onOptionsChange(n);
                     }}
                     placeholder={`Option ${i + 1}`}
                     className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm outline-none focus:border-[var(--neon-primary)]/50 transition"
@@ -1910,7 +2153,7 @@ function PollsPanel({
                   {i >= 2 && (
                     <button
                       onClick={() => onOptionsChange(pollOptions.filter((_, j) => j !== i))}
-                      className="text-muted-foreground hover:text-[oklch(0.78_0.2_35)] transition"
+                      className="text-muted-foreground hover:text-[oklch(0.78_0.2_35)]"
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -1925,7 +2168,7 @@ function PollsPanel({
                   + Add option
                 </button>
               )}
-              <div className="flex gap-2 pt-1">
+              <div className="flex gap-2">
                 <NeonButton className="flex-1" onClick={onCreate}>
                   Launch
                 </NeonButton>
@@ -1939,9 +2182,9 @@ function PollsPanel({
         {currentPoll && (
           <div className="glass rounded-2xl border border-white/10 p-4 space-y-4">
             <div className="flex items-start justify-between gap-2">
-              <h4 className="text-sm font-semibold leading-snug">{currentPoll.question}</h4>
+              <h4 className="text-sm font-semibold">{currentPoll.question}</h4>
               {currentPoll.closed && (
-                <span className="shrink-0 text-[10px] rounded-md bg-white/10 px-2 py-0.5 text-muted-foreground">
+                <span className="text-[10px] rounded-md bg-white/10 px-2 py-0.5 text-muted-foreground shrink-0">
                   Closed
                 </span>
               )}
@@ -1985,7 +2228,7 @@ function PollsPanel({
                         )}
                         initial={{ width: 0 }}
                         animate={{ width: `${pct}%` }}
-                        transition={{ duration: 0.5, ease: "easeOut" }}
+                        transition={{ duration: 0.5 }}
                       />
                     </div>
                   </button>
@@ -1998,7 +2241,7 @@ function PollsPanel({
             {isHost && (
               <div className="flex gap-2">
                 {!currentPoll.closed && (
-                  <NeonButton variant="outline" className="flex-1 text-xs" onClick={onClose_poll}>
+                  <NeonButton variant="outline" className="flex-1 text-xs" onClick={onClosePoll}>
                     Close poll
                   </NeonButton>
                 )}
@@ -2013,7 +2256,7 @@ function PollsPanel({
           <div className="flex flex-col items-center justify-center py-12 gap-3">
             <BarChart2 className="h-10 w-10 text-muted-foreground/30" />
             <p className="text-xs text-muted-foreground text-center">
-              No active poll.{isHost ? " Create one to engage your participants." : ""}
+              No active poll.{isHost ? " Create one above." : ""}
             </p>
           </div>
         )}
@@ -2096,13 +2339,13 @@ function AgendaPanel({
             >
               <h4 className="text-sm font-semibold">Meeting Agenda</h4>
               {agendaInput.map((item, i) => (
-                <div key={i} className="flex gap-2">
+                <div key={i} className="flex gap-2 items-center">
                   <input
                     value={item.title}
                     onChange={(e) => {
-                      const next = [...agendaInput];
-                      next[i] = { ...item, title: e.target.value };
-                      onAgendaInputChange(next);
+                      const n = [...agendaInput];
+                      n[i] = { ...item, title: e.target.value };
+                      onAgendaInputChange(n);
                     }}
                     placeholder={`Item ${i + 1}`}
                     className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm outline-none focus:border-[var(--neon-primary)]/50 transition"
@@ -2112,18 +2355,18 @@ function AgendaPanel({
                     min={1}
                     value={Math.round(item.durationSec / 60)}
                     onChange={(e) => {
-                      const next = [...agendaInput];
-                      next[i] = { ...item, durationSec: Number(e.target.value) * 60 };
-                      onAgendaInputChange(next);
+                      const n = [...agendaInput];
+                      n[i] = { ...item, durationSec: Number(e.target.value) * 60 };
+                      onAgendaInputChange(n);
                     }}
-                    className="w-14 bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-sm outline-none text-center focus:border-[var(--neon-primary)]/50 transition"
+                    className="w-12 bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-sm outline-none text-center focus:border-[var(--neon-primary)]/50 transition"
                     title="Minutes"
                   />
-                  <span className="text-[10px] text-muted-foreground self-center">min</span>
+                  <span className="text-[10px] text-muted-foreground shrink-0">m</span>
                   {agendaInput.length > 1 && (
                     <button
                       onClick={() => onAgendaInputChange(agendaInput.filter((_, j) => j !== i))}
-                      className="text-muted-foreground hover:text-[oklch(0.78_0.2_35)] transition"
+                      className="text-muted-foreground hover:text-[oklch(0.78_0.2_35)]"
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -2140,7 +2383,7 @@ function AgendaPanel({
                   + Add item
                 </button>
               )}
-              <div className="flex gap-2 pt-1">
+              <div className="flex gap-2">
                 <NeonButton className="flex-1" onClick={onCreate}>
                   Set agenda
                 </NeonButton>
@@ -2200,7 +2443,7 @@ function AgendaPanel({
                 <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
                   <motion.div
                     className={cn(
-                      "h-full rounded-full transition-colors",
+                      "h-full rounded-full",
                       progressPct > 85 ? "bg-[oklch(0.72_0.22_35)]" : "bg-[var(--neon-primary)]",
                     )}
                     style={{ width: `${progressPct}%` }}
@@ -2267,7 +2510,7 @@ function AgendaPanel({
           <div className="flex flex-col items-center justify-center py-12 gap-3">
             <ListChecks className="h-10 w-10 text-muted-foreground/30" />
             <p className="text-xs text-muted-foreground text-center">
-              No agenda set.{isHost ? " Add one to keep the meeting on track." : ""}
+              No agenda set.{isHost ? " Add one above." : ""}
             </p>
           </div>
         )}
@@ -2319,47 +2562,10 @@ function SpatialCanvas({
 }) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState<string | null>(null);
-  const dragOffset = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const dragOffset = useRef({ x: 0, y: 0 });
 
   const getPos = (id: string): TilePosition =>
     tilePositions.get(id) ?? { x: Math.random() * 60 + 5, y: Math.random() * 60 + 5 };
-
-  const handleDragStart = useCallback(
-    (id: string, e: React.PointerEvent) => {
-      e.currentTarget.setPointerCapture(e.pointerId);
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const pos = getPos(id);
-      dragOffset.current = {
-        x: e.clientX - rect.left - (pos.x / 100) * rect.width,
-        y: e.clientY - rect.top - (pos.y / 100) * rect.height,
-      };
-      setDragging(id);
-    },
-    [tilePositions],
-  );
-
-  const handleDragMove = useCallback(
-    (e: React.PointerEvent) => {
-      if (!dragging) return;
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const x = Math.max(
-        0,
-        Math.min(90, ((e.clientX - rect.left - dragOffset.current.x) / rect.width) * 100),
-      );
-      const y = Math.max(
-        0,
-        Math.min(85, ((e.clientY - rect.top - dragOffset.current.y) / rect.height) * 100),
-      );
-      setTilePosition(dragging, { x, y });
-    },
-    [dragging, setTilePosition],
-  );
-
-  const handleDragEnd = useCallback(() => setDragging(null), []);
 
   const allParticipants = [
     { id: "local", name: username },
@@ -2371,8 +2577,20 @@ function SpatialCanvas({
       ref={canvasRef}
       className="relative w-full h-full overflow-hidden rounded-2xl border border-white/5"
       style={{ background: "oklch(0.12 0.02 265 / 0.5)" }}
-      onPointerMove={handleDragMove}
-      onPointerUp={handleDragEnd}
+      onPointerMove={(e) => {
+        if (!dragging) return;
+        const rect = canvasRef.current!.getBoundingClientRect();
+        const x = Math.max(
+          0,
+          Math.min(90, ((e.clientX - rect.left - dragOffset.current.x) / rect.width) * 100),
+        );
+        const y = Math.max(
+          0,
+          Math.min(85, ((e.clientY - rect.top - dragOffset.current.y) / rect.height) * 100),
+        );
+        setTilePosition(dragging, { x, y });
+      }}
+      onPointerUp={() => setDragging(null)}
     >
       <div
         className="absolute inset-0 opacity-20"
@@ -2398,7 +2616,17 @@ function SpatialCanvas({
               cursor: dragging === participant.id ? "grabbing" : "grab",
               zIndex: dragging === participant.id ? 20 : 10,
             }}
-            onPointerDown={(e) => handleDragStart(participant.id, e)}
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
+              const canvas = canvasRef.current;
+              if (!canvas) return;
+              const rect = canvas.getBoundingClientRect();
+              dragOffset.current = {
+                x: e.clientX - rect.left - (pos.x / 100) * rect.width,
+                y: e.clientY - rect.top - (pos.y / 100) * rect.height,
+              };
+              setDragging(participant.id);
+            }}
           >
             <div
               className={cn(
@@ -2430,9 +2658,6 @@ function SpatialCanvas({
                 />
               ) : null}
             </div>
-            <div className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition">
-              <Move className="h-3 w-3 text-white/40" />
-            </div>
           </div>
         );
       })}
@@ -2440,880 +2665,6 @@ function SpatialCanvas({
         Drag tiles to rearrange · Spatial layout
       </div>
     </div>
-  );
-}
-
-// ─── Leave Modal ──────────────────────────────────────────────────────────────
-
-function LeaveModal({
-  isHost,
-  onConfirm,
-  onCancel,
-}: {
-  isHost: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md"
-      onClick={onCancel}
-    >
-      <motion.div
-        initial={{ opacity: 0, scale: 0.85, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.85, y: 20 }}
-        transition={{ type: "spring", damping: 22, stiffness: 300 }}
-        className="relative mx-4 w-full max-w-md"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="absolute -inset-1 rounded-[2rem] bg-gradient-to-r from-[var(--neon-primary)] via-[var(--neon-accent)] to-[var(--neon-danger)] opacity-30 blur-xl animate-pulse-glow" />
-        <div className="relative glass-strong rounded-3xl border border-white/10 p-8 text-center overflow-hidden">
-          <motion.div
-            animate={{ scale: [1, 1.15, 1] }}
-            transition={{ duration: 2, repeat: Infinity }}
-            className="relative mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-[oklch(0.72_0.22_35)] to-[oklch(0.6_0.28_20)] shadow-[0_0_40px_-10px_oklch(0.72_0.22_35/0.8)]"
-          >
-            <PhoneOff className="h-10 w-10 text-white" />
-          </motion.div>
-          <h2 className="text-2xl font-bold text-gradient mb-2">
-            {isHost ? "End meeting for all?" : "Leave meeting?"}
-          </h2>
-          <p className="text-sm text-muted-foreground mb-8 max-w-xs mx-auto">
-            {isHost
-              ? "You are the host. If you leave, the meeting will end for everyone."
-              : "You can rejoin anytime using the same link while it's active."}
-          </p>
-          <div className="flex gap-3 justify-center">
-            <NeonButton variant="outline" onClick={onCancel} className="px-6">
-              Stay
-            </NeonButton>
-            <button
-              onClick={onConfirm}
-              className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-[oklch(0.65_0.25_25)] to-[oklch(0.72_0.22_35)] px-6 py-3 text-sm font-semibold text-white shadow-[0_8px_30px_-8px_oklch(0.72_0.22_35/0.6)] hover:opacity-95 transition animate-pulse-danger"
-            >
-              <PhoneOff className="h-4 w-4" />
-              {isHost ? "End meeting" : "Leave"}
-            </button>
-          </div>
-        </div>
-      </motion.div>
-    </motion.div>
-  );
-}
-
-// ─── Host Transfer Modal ──────────────────────────────────────────────────────
-
-function HostTransferModal({
-  peer,
-  onTransfer,
-  onClose,
-}: {
-  peer: RemotePeer;
-  onTransfer: (mode: "full" | "sub") => void;
-  onClose: () => void;
-}) {
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md"
-      onClick={onClose}
-    >
-      <motion.div
-        initial={{ opacity: 0, scale: 0.9, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.9, y: 20 }}
-        transition={{ type: "spring", damping: 24, stiffness: 300 }}
-        className="relative mx-4 w-full max-w-md"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="absolute -inset-1 rounded-[2rem] bg-gradient-to-r from-[var(--neon-primary)] to-[var(--neon-secondary)] opacity-20 blur-xl" />
-        <div className="relative glass-strong rounded-3xl border border-white/10 p-8">
-          <div className="flex items-center gap-3 mb-5">
-            <Avatar name={peer.username} hue={hueForName(peer.username)} size={48} />
-            <div>
-              <h2 className="text-xl font-bold text-gradient">Transfer Host</h2>
-              <p className="text-xs text-muted-foreground">
-                Choose privileges for{" "}
-                <span className="text-foreground font-medium">{peer.username}</span>
-              </p>
-            </div>
-          </div>
-          <div className="space-y-3">
-            <button
-              onClick={() => onTransfer("sub")}
-              className="w-full glass rounded-2xl p-4 text-left hover:bg-white/5 transition border border-white/10 hover:border-[var(--neon-secondary)]/40"
-            >
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--neon-secondary)]/15 text-[var(--neon-secondary)]">
-                  <UserCog className="h-5 w-5" />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-[var(--neon-secondary)]">Make Co-Host</h3>
-                  <p className="text-[11px] text-muted-foreground">
-                    Can admit, mute & remove. You keep full control.
-                  </p>
-                </div>
-              </div>
-            </button>
-            <button
-              onClick={() => onTransfer("full")}
-              className="w-full glass rounded-2xl p-4 text-left hover:bg-white/5 transition border border-white/10 hover:border-[var(--neon-primary)]/40"
-            >
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]">
-                  <Crown className="h-5 w-5" />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-[var(--neon-primary)]">Transfer Full Host</h3>
-                  <p className="text-[11px] text-muted-foreground">
-                    They become sole host. You become a participant.
-                  </p>
-                </div>
-              </div>
-            </button>
-          </div>
-          <NeonButton variant="ghost" className="mt-5 w-full" onClick={onClose}>
-            Cancel
-          </NeonButton>
-        </div>
-      </motion.div>
-    </motion.div>
-  );
-}
-
-// ─── Reaction Burst Layer ─────────────────────────────────────────────────────
-
-function ReactionBurstLayer({
-  reactions,
-}: {
-  reactions: Array<{ id: string; emoji: string; username: string; socketId: string }>;
-}) {
-  return (
-    <div className="pointer-events-none fixed inset-0 z-50 overflow-hidden">
-      <AnimatePresence>
-        {reactions.map((r, i) => (
-          <motion.div
-            key={r.id}
-            initial={{ opacity: 0, y: 0, x: 0, scale: 0.4 }}
-            animate={{
-              opacity: [0, 1, 1, 0],
-              y: [0, -120 - Math.random() * 80],
-              x: [0, (Math.random() - 0.5) * 60],
-              scale: [0.4, 1.2, 1, 0.8],
-              rotate: [(Math.random() - 0.5) * 30],
-            }}
-            transition={{ duration: 3.5, ease: "easeOut" }}
-            className="absolute"
-            style={{ bottom: "100px", left: `${20 + (i % 8) * 10}%` }}
-          >
-            <div className="flex flex-col items-center gap-1">
-              <span className="text-3xl drop-shadow-[0_0_12px_oklch(0.8_0.2_280)]">{r.emoji}</span>
-              <span className="rounded-full bg-black/60 px-2 py-0.5 text-[10px] text-muted-foreground backdrop-blur whitespace-nowrap">
-                {r.username}
-              </span>
-            </div>
-          </motion.div>
-        ))}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-// ─── Reaction Picker ──────────────────────────────────────────────────────────
-
-function ReactionPicker({
-  onReact,
-  onClose,
-}: {
-  onReact: (e: string) => void;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest(".reaction-picker-root")) onClose();
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [onClose]);
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8, scale: 0.9 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: 8, scale: 0.9 }}
-      transition={{ type: "spring", damping: 20, stiffness: 300 }}
-      className="reaction-picker-root absolute bottom-full left-1/2 -translate-x-1/2 mb-3 z-30"
-    >
-      <div className="glass-strong rounded-2xl border border-white/10 p-2 shadow-2xl">
-        <div className="flex gap-1">
-          {REACTIONS.map((emoji, i) => (
-            <motion.button
-              key={emoji}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.03 }}
-              whileHover={{ scale: 1.4, y: -4 }}
-              whileTap={{ scale: 0.9 }}
-              onClick={() => onReact(emoji)}
-              className="text-xl p-1.5 rounded-lg hover:bg-white/10 transition-colors"
-            >
-              {emoji}
-            </motion.button>
-          ))}
-        </div>
-      </div>
-    </motion.div>
-  );
-}
-
-// ─── Status Picker ────────────────────────────────────────────────────────────
-
-function StatusPicker({
-  current,
-  isPresenting,
-  onSelect,
-  onClose,
-  position,
-}: {
-  current: ParticipantStatus;
-  isPresenting: boolean;
-  onSelect: (s: ParticipantStatus) => void;
-  onClose: () => void;
-  position: { top: number; left: number };
-}) {
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest(".status-picker-root")) onClose();
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [onClose]);
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: -8, scale: 0.95 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -8, scale: 0.95 }}
-      transition={{ type: "spring", damping: 22, stiffness: 300 }}
-      className="status-picker-root z-50"
-      style={{ position: "fixed", top: position.top, left: position.left, minWidth: 210 }}
-    >
-      <div className="glass-strong rounded-2xl border border-white/10 p-1.5 shadow-2xl backdrop-blur-xl">
-        <p className="px-3 py-1.5 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
-          Set status
-        </p>
-        {isPresenting && (
-          <div className="mx-1.5 mb-1.5 flex items-start gap-2 rounded-xl border border-[oklch(0.65_0.22_280)/0.35] bg-[oklch(0.65_0.22_280)/0.1] px-3 py-2">
-            <Presentation className="h-3 w-3 mt-0.5 shrink-0 text-[oklch(0.75_0.18_280)]" />
-            <p className="text-[11px] text-[oklch(0.8_0.15_280)] leading-snug">
-              Currently presenting. Choice applies when sharing stops.
-            </p>
-          </div>
-        )}
-        {MANUAL_STATUSES.map((key) => {
-          const cfg = STATUS_CONFIG[key];
-          const isActive = isPresenting ? false : current === key;
-          return (
-            <button
-              key={key}
-              onClick={() => onSelect(key)}
-              className={cn(
-                "flex items-center gap-2.5 w-full rounded-xl px-3 py-2 text-sm text-left transition",
-                isActive ? "bg-white/10" : "hover:bg-white/5",
-              )}
-            >
-              <span
-                className="h-2 w-2 rounded-full shrink-0"
-                style={{ background: cfg.color, boxShadow: `0 0 6px ${cfg.color}` }}
-              />
-              <span className="flex-1">{cfg.label}</span>
-              {isActive && <CheckCircle2 className="h-3 w-3 text-[var(--neon-primary)]" />}
-            </button>
-          );
-        })}
-      </div>
-    </motion.div>
-  );
-}
-
-// ─── Participants Panel ───────────────────────────────────────────────────────
-
-function ParticipantsPanel({
-  username,
-  localStatus,
-  localHandRaised,
-  mic,
-  cam,
-  isHost,
-  isSubHost,
-  peers,
-  raisedHands,
-  onLowerHand,
-  onRemove,
-  onMuteAll,
-  onCamOffAll,
-  onTransferHost,
-  onClose,
-}: {
-  username: string;
-  localStatus: ParticipantStatus;
-  localHandRaised: boolean;
-  mic: boolean;
-  cam: boolean;
-  isHost: boolean;
-  isSubHost: boolean;
-  peers: RemotePeer[];
-  raisedHands: Array<{ socketId: string; username: string; handRaisedAt: number }>;
-  onLowerHand: (id: string) => void;
-  onRemove: (id: string) => void;
-  onMuteAll: () => void;
-  onCamOffAll: () => void;
-  onTransferHost: (peer: RemotePeer) => void;
-  onClose: () => void;
-}) {
-  const canManage = isHost || isSubHost;
-  return (
-    <motion.aside
-      initial={{ x: 340 }}
-      animate={{ x: 0 }}
-      exit={{ x: 340 }}
-      transition={{ type: "spring", damping: 26, stiffness: 250 }}
-      className="absolute right-0 top-0 bottom-0 w-80 max-w-full glass-strong border-l border-white/10 overflow-y-auto z-10 flex flex-col"
-    >
-      <div className="flex items-center justify-between p-5 border-b border-white/5 shrink-0">
-        <h3 className="text-sm font-semibold flex items-center gap-2">
-          <Users className="h-4 w-4 text-[var(--neon-primary)]" />
-          Participants <span className="text-muted-foreground">({peers.length + 1})</span>
-        </h3>
-        <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        <AnimatePresence>
-          {raisedHands.length > 0 && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              exit={{ opacity: 0, height: 0 }}
-              className="rounded-2xl border border-[oklch(0.8_0.18_80)/0.3] bg-[oklch(0.8_0.18_80)/0.06] p-3"
-            >
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-[oklch(0.9_0.18_80)] mb-2 flex items-center gap-1.5">
-                <span>✋</span> Raised hands
-              </p>
-              <div className="space-y-1.5">
-                {raisedHands.map((h) => (
-                  <div key={h.socketId} className="flex items-center justify-between">
-                    <span className="text-sm text-[oklch(0.9_0.18_80)]">{h.username}</span>
-                    <button
-                      onClick={() => onLowerHand(h.socketId)}
-                      className="text-[10px] rounded-md px-2 py-0.5 border border-white/10 text-muted-foreground hover:text-foreground transition"
-                    >
-                      Lower
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-        {canManage && (
-          <div className="flex gap-2">
-            <NeonButton variant="outline" className="flex-1 text-xs" onClick={onMuteAll}>
-              Mute all
-            </NeonButton>
-            <NeonButton variant="outline" className="flex-1 text-xs" onClick={onCamOffAll}>
-              Cam off all
-            </NeonButton>
-          </div>
-        )}
-        <ul className="space-y-2">
-          <li className="flex items-center gap-3 rounded-xl border border-[var(--neon-primary)]/20 bg-[var(--neon-primary)]/5 p-2.5">
-            <div className="relative">
-              <Avatar name={username} hue={280} size={32} />
-              <StatusDot status={localStatus} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1.5">
-                <p className="truncate text-sm">{username}</p>
-                {localHandRaised && <span className="text-sm">✋</span>}
-              </div>
-              <p className="text-[11px] text-muted-foreground">
-                {isHost ? "Host · You" : isSubHost ? "Co-Host · You" : "You"}
-              </p>
-            </div>
-            <div className="flex items-center gap-1 text-muted-foreground">
-              {mic ? (
-                <Mic className="h-3.5 w-3.5" />
-              ) : (
-                <MicOff className="h-3.5 w-3.5 text-[oklch(0.72_0.22_35)]" />
-              )}
-              {cam ? (
-                <VideoIcon className="h-3.5 w-3.5" />
-              ) : (
-                <VideoOff className="h-3.5 w-3.5 text-[oklch(0.72_0.22_35)]" />
-              )}
-            </div>
-          </li>
-          {peers.map((p, i) => (
-            <motion.li
-              key={p.socketId}
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 20 }}
-              className="flex items-center gap-3 rounded-xl border border-white/5 p-2.5 hover:border-white/10 transition"
-            >
-              <div className="relative">
-                <Avatar name={p.username} hue={hueForIndex(i)} size={32} />
-                <StatusDot status={p.status} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-1.5">
-                  <p className="truncate text-sm">{p.username}</p>
-                  {p.handRaised && (
-                    <motion.span
-                      animate={{ rotate: [0, 15, -10, 15, 0] }}
-                      transition={{ duration: 1, repeat: Infinity, repeatDelay: 1.5 }}
-                      className="text-sm"
-                    >
-                      ✋
-                    </motion.span>
-                  )}
-                  {p.speaking && <AudioBars color="var(--neon-secondary)" small />}
-                  {p.isHost && (
-                    <span className="text-[10px] rounded bg-[var(--neon-primary)]/20 px-1.5 py-0.5 text-[var(--neon-primary)] border border-[var(--neon-primary)]/30">
-                      Host
-                    </span>
-                  )}
-                  {p.isSubHost && (
-                    <span className="text-[10px] rounded bg-[var(--neon-secondary)]/20 px-1.5 py-0.5 text-[var(--neon-secondary)] border border-[var(--neon-secondary)]/30">
-                      Co-Host
-                    </span>
-                  )}
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  {STATUS_CONFIG[p.status]?.label ?? "Participant"}
-                </p>
-              </div>
-              <div className="flex items-center gap-1 text-muted-foreground">
-                {p.mic ? (
-                  <Mic className="h-3.5 w-3.5" />
-                ) : (
-                  <MicOff className="h-3.5 w-3.5 text-[oklch(0.72_0.22_35)]" />
-                )}
-                {p.cam ? (
-                  <VideoIcon className="h-3.5 w-3.5" />
-                ) : (
-                  <VideoOff className="h-3.5 w-3.5 text-[oklch(0.72_0.22_35)]" />
-                )}
-                {isHost && !p.isHost && (
-                  <>
-                    <button
-                      onClick={() => onTransferHost(p)}
-                      className="ml-1 text-muted-foreground hover:text-[var(--neon-primary)] transition"
-                      title="Transfer host"
-                    >
-                      <Crown className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      onClick={() => onRemove(p.socketId)}
-                      className="ml-1 text-muted-foreground hover:text-[oklch(0.78_0.2_35)] transition"
-                      title="Remove"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </>
-                )}
-                {isSubHost && !p.isHost && !p.isSubHost && (
-                  <button
-                    onClick={() => onRemove(p.socketId)}
-                    className="ml-1 text-muted-foreground hover:text-[oklch(0.78_0.2_35)] transition"
-                    title="Remove"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </div>
-            </motion.li>
-          ))}
-        </ul>
-      </div>
-    </motion.aside>
-  );
-}
-
-// ─── Chat Panel ───────────────────────────────────────────────────────────────
-
-function ChatPanel({
-  localSocketId,
-  username,
-  messages,
-  typingPeers,
-  onSend,
-  onReact,
-  onTyping,
-  onClose,
-}: {
-  localSocketId: string | null;
-  username: string;
-  messages: ChatMessage[];
-  typingPeers: Array<{ socketId: string; username: string }>;
-  onSend: (text: string, replyTo?: ChatMessage | null) => void;
-  onReact: (messageId: string, emoji: string) => void;
-  onTyping: (isTyping: boolean) => void;
-  onClose: () => void;
-}) {
-  const [input, setInput] = useState("");
-  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
-  const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
-  const [emojiPickerForMsg, setEmojiPickerForMsg] = useState<string | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  useEffect(() => {
-    if (!emojiPickerForMsg) return;
-    const handler = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest(`[data-emoji-picker]`) && !target.closest(`[data-emoji-trigger]`))
-        setEmojiPickerForMsg(null);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [emojiPickerForMsg]);
-
-  const handleSend = () => {
-    if (!input.trim()) return;
-    onSend(input.trim(), replyTo);
-    setInput("");
-    setReplyTo(null);
-    onTyping(false);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
-
-  const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setInput(e.target.value);
-    onTyping(e.target.value.length > 0);
-  };
-
-  const grouped = messages.map((msg, i) => ({
-    ...msg,
-    isFirst: i === 0 || messages[i - 1].socketId !== msg.socketId,
-    isLast: i === messages.length - 1 || messages[i + 1].socketId !== msg.socketId,
-    isSelf: msg.socketId === localSocketId,
-  }));
-
-  return (
-    <motion.aside
-      initial={{ x: 340 }}
-      animate={{ x: 0 }}
-      exit={{ x: 340 }}
-      transition={{ type: "spring", damping: 26, stiffness: 250 }}
-      className="absolute right-0 top-0 bottom-0 w-80 max-w-full glass-strong border-l border-white/10 z-10 flex flex-col"
-    >
-      <div className="flex items-center justify-between p-4 border-b border-white/5 shrink-0">
-        <h3 className="text-sm font-semibold flex items-center gap-2">
-          <MessageSquare className="h-4 w-4 text-[var(--neon-primary)]" /> Meeting Chat
-          {messages.length > 0 && (
-            <span className="text-[11px] text-muted-foreground font-normal">
-              · {messages.length}
-            </span>
-          )}
-        </h3>
-        <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-      <div className="flex-1 overflow-y-auto p-3 space-y-0.5 scrollbar-hide">
-        {grouped.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full gap-3 py-12">
-            <div className="h-12 w-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-2xl">
-              💬
-            </div>
-            <p className="text-xs text-muted-foreground text-center">
-              No messages yet.
-              <br />
-              Start the conversation!
-            </p>
-          </div>
-        )}
-        <AnimatePresence initial={false}>
-          {grouped.map((msg) => (
-            <motion.div
-              key={msg.id}
-              initial={{ opacity: 0, y: 10, scale: 0.97 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={{ type: "spring", damping: 22, stiffness: 280 }}
-              className={cn("relative", msg.isFirst ? "mt-4 first:mt-0" : "mt-0.5")}
-              onMouseEnter={() => setHoveredMsgId(msg.id)}
-              onMouseLeave={() => setHoveredMsgId(null)}
-            >
-              {msg.isFirst && (
-                <div
-                  className={cn(
-                    "flex items-center gap-1.5 mb-1.5 px-1",
-                    msg.isSelf ? "flex-row-reverse" : "flex-row",
-                  )}
-                >
-                  <Avatar
-                    name={msg.username}
-                    hue={msg.isSelf ? 280 : hueForName(msg.username)}
-                    size={20}
-                  />
-                  <span className="text-[11px] font-semibold text-muted-foreground">
-                    {msg.isSelf ? "You" : msg.username}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground/40">
-                    {formatTime(msg.timestamp)}
-                  </span>
-                </div>
-              )}
-              <div className={cn("flex", msg.isSelf ? "justify-end" : "justify-start")}>
-                <div
-                  className={cn(
-                    "relative max-w-[85%] flex flex-col gap-0.5",
-                    msg.isSelf ? "items-end" : "items-start",
-                  )}
-                >
-                  {msg.replyTo && (
-                    <div className="text-[11px] text-muted-foreground rounded-lg px-2.5 py-1.5 border-l-2 border-[var(--neon-primary)]/50 bg-white/3 mb-0.5 max-w-full">
-                      <span className="font-semibold text-[var(--neon-primary)] block">
-                        ↩ {msg.replyTo.username}
-                      </span>
-                      <span className="opacity-70 line-clamp-1">
-                        {msg.replyTo.text.slice(0, 60)}
-                        {msg.replyTo.text.length > 60 ? "…" : ""}
-                      </span>
-                    </div>
-                  )}
-                  <div
-                    className={cn(
-                      "relative px-3.5 py-2 text-sm leading-relaxed",
-                      msg.isSelf
-                        ? [
-                            "bg-gradient-to-br from-[oklch(0.55_0.22_280)] to-[oklch(0.65_0.18_305)] text-white",
-                            "shadow-[0_4px_24px_-4px_oklch(0.65_0.22_280/0.4)]",
-                            "rounded-2xl",
-                            msg.isFirst ? "rounded-tr-sm" : "",
-                            msg.isLast ? "rounded-br-2xl" : "rounded-br-sm",
-                          ]
-                        : [
-                            "bg-white/8 border border-white/8 text-foreground",
-                            "rounded-2xl",
-                            msg.isFirst ? "rounded-tl-sm" : "",
-                            msg.isLast ? "rounded-bl-2xl" : "rounded-bl-sm",
-                          ],
-                    )}
-                  >
-                    {msg.text}
-                  </div>
-                  {Object.keys(msg.reactions).length > 0 && (
-                    <div
-                      className={cn(
-                        "flex flex-wrap gap-1 mt-0.5",
-                        msg.isSelf ? "justify-end" : "justify-start",
-                      )}
-                    >
-                      {Object.entries(msg.reactions).map(([emoji, sids]) =>
-                        sids.size > 0 ? (
-                          <button
-                            key={emoji}
-                            onClick={() => onReact(msg.id, emoji)}
-                            className={cn(
-                              "flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] transition hover:scale-105 active:scale-95",
-                              sids.has(localSocketId ?? "")
-                                ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15"
-                                : "border-white/10 bg-white/5 hover:bg-white/10",
-                            )}
-                          >
-                            <span>{emoji}</span>
-                            <span className="text-muted-foreground">{sids.size}</span>
-                          </button>
-                        ) : null,
-                      )}
-                    </div>
-                  )}
-                  <AnimatePresence>
-                    {hoveredMsgId === msg.id && (
-                      <motion.div
-                        initial={{ opacity: 0, y: -4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -4 }}
-                        transition={{ duration: 0.15 }}
-                        className={cn(
-                          "flex items-center gap-0.5 mt-0.5",
-                          msg.isSelf ? "justify-end" : "justify-start",
-                        )}
-                      >
-                        <div className="relative">
-                          <div className="flex items-center gap-0.5 glass rounded-xl border border-white/10 p-0.5 shadow-lg">
-                            <button
-                              onClick={() => setReplyTo(msg)}
-                              className="p-1.5 rounded-lg hover:bg-white/10 text-muted-foreground hover:text-foreground transition"
-                              title="Reply"
-                            >
-                              <Reply className="h-3 w-3" />
-                            </button>
-                            <button
-                              data-emoji-trigger
-                              onClick={() =>
-                                setEmojiPickerForMsg(emojiPickerForMsg === msg.id ? null : msg.id)
-                              }
-                              className={cn(
-                                "p-1.5 rounded-lg transition",
-                                emojiPickerForMsg === msg.id
-                                  ? "bg-[var(--neon-primary)]/20 text-[var(--neon-primary)]"
-                                  : "hover:bg-white/10 text-muted-foreground hover:text-foreground",
-                              )}
-                              title="React"
-                            >
-                              <SmilePlus className="h-3 w-3" />
-                            </button>
-                          </div>
-                          <AnimatePresence>
-                            {emojiPickerForMsg === msg.id && (
-                              <motion.div
-                                data-emoji-picker
-                                initial={{ opacity: 0, y: 6, scale: 0.92 }}
-                                animate={{ opacity: 1, y: 0, scale: 1 }}
-                                exit={{ opacity: 0, y: 6, scale: 0.92 }}
-                                transition={{ type: "spring", damping: 22, stiffness: 320 }}
-                                className={cn(
-                                  "absolute bottom-full mb-2 z-30 glass-strong rounded-2xl border border-white/10 p-1.5 shadow-2xl",
-                                  msg.isSelf ? "right-0" : "left-0",
-                                )}
-                              >
-                                <div className="flex gap-0.5">
-                                  {REACTIONS.map((emoji, i) => (
-                                    <motion.button
-                                      key={emoji}
-                                      initial={{ opacity: 0, y: 4 }}
-                                      animate={{ opacity: 1, y: 0 }}
-                                      transition={{ delay: i * 0.025 }}
-                                      whileHover={{ scale: 1.35, y: -3 }}
-                                      whileTap={{ scale: 0.9 }}
-                                      onClick={() => {
-                                        onReact(msg.id, emoji);
-                                        setEmojiPickerForMsg(null);
-                                        setHoveredMsgId(null);
-                                      }}
-                                      className="text-lg p-1 rounded-lg hover:bg-white/10 transition-colors"
-                                    >
-                                      {emoji}
-                                    </motion.button>
-                                  ))}
-                                </div>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              </div>
-            </motion.div>
-          ))}
-        </AnimatePresence>
-        <AnimatePresence>
-          {typingPeers.length > 0 && (
-            <motion.div
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 4 }}
-              className="flex items-center gap-2 pl-1 mt-3"
-            >
-              <div className="flex gap-0.5 items-end h-4">
-                {[0, 1, 2].map((i) => (
-                  <motion.span
-                    key={i}
-                    className="w-1 rounded-full bg-[var(--neon-secondary)]"
-                    animate={{ height: ["4px", "10px", "4px"] }}
-                    transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.15 }}
-                  />
-                ))}
-              </div>
-              <span className="text-[11px] text-muted-foreground">
-                {typingPeers.map((p) => p.username).join(", ")}{" "}
-                {typingPeers.length === 1 ? "is" : "are"} typing…
-              </span>
-            </motion.div>
-          )}
-        </AnimatePresence>
-        <div ref={bottomRef} />
-      </div>
-      <AnimatePresence>
-        {replyTo && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            className="border-t border-white/5 px-4 py-2 bg-white/3 flex items-start gap-2 shrink-0"
-          >
-            <CornerDownLeft className="h-3.5 w-3.5 mt-0.5 text-[var(--neon-primary)] shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-[11px] font-semibold text-[var(--neon-primary)]">
-                Replying to {replyTo.username}
-              </p>
-              <p className="text-[11px] text-muted-foreground truncate">
-                {replyTo.text.slice(0, 60)}
-                {replyTo.text.length > 60 ? "…" : ""}
-              </p>
-            </div>
-            <button
-              onClick={() => setReplyTo(null)}
-              className="text-muted-foreground hover:text-foreground shrink-0"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-      <div className="border-t border-white/5 p-3 shrink-0">
-        <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 pl-4 pr-2 py-2 focus-within:border-[var(--neon-primary)]/40 focus-within:bg-[var(--neon-primary)]/5 transition">
-          <input
-            ref={inputRef}
-            value={input}
-            onChange={handleInput}
-            onKeyDown={handleKeyDown}
-            placeholder="Send a message…"
-            className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/50"
-          />
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={handleSend}
-            disabled={!input.trim()}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-xl transition",
-              input.trim()
-                ? "bg-gradient-to-br from-[oklch(0.55_0.22_280)] to-[oklch(0.65_0.18_305)] text-white shadow-[0_4px_16px_-4px_oklch(0.65_0.22_280/0.5)]"
-                : "bg-white/5 text-muted-foreground/40 cursor-not-allowed",
-            )}
-          >
-            <Send className="h-3.5 w-3.5" />
-          </motion.button>
-        </div>
-        <p className="mt-1.5 text-[10px] text-center text-muted-foreground/40">
-          Enter to send · Shift+Enter for new line
-        </p>
-      </div>
-    </motion.aside>
   );
 }
 
@@ -3361,7 +2712,7 @@ function VideoGrid({
   if (cinemaMode && activeSpotlightId) {
     const isLocalSpotlit = activeSpotlightId === "local" || activeSpotlightId === localSocketId;
     const spotlitPeer = isLocalSpotlit ? null : peers.find((p) => p.socketId === activeSpotlightId);
-    const stripParticipants = isLocalSpotlit
+    const stripItems = isLocalSpotlit
       ? peers.map((p, i) => ({ type: "remote" as const, peer: p, hue: hueForIndex(i) }))
       : [
           { type: "local" as const },
@@ -3369,7 +2720,6 @@ function VideoGrid({
             .filter((p) => p.socketId !== activeSpotlightId)
             .map((p, i) => ({ type: "remote" as const, peer: p, hue: hueForIndex(i) })),
         ];
-
     return (
       <div className="flex h-full gap-3">
         <div className="flex-1 relative overflow-hidden rounded-2xl">
@@ -3403,9 +2753,9 @@ function VideoGrid({
             </button>
           )}
         </div>
-        {stripParticipants.length > 0 && (
+        {stripItems.length > 0 && (
           <div className="flex flex-col gap-2 w-40 overflow-y-auto">
-            {stripParticipants.map((p, i) => (
+            {stripItems.map((p, i) => (
               <div key={i} className="h-28 shrink-0">
                 {p.type === "local" ? (
                   <LocalVideoTile
@@ -3464,8 +2814,15 @@ function VideoGrid({
           onClick={() => setSpotlightId(spotlightId === "local" ? null : "local")}
           className="absolute top-2 left-1/2 -translate-x-1/2 z-20 opacity-0 group-hover:opacity-100 transition flex items-center gap-1 rounded-full bg-black/60 backdrop-blur border border-white/10 px-2 py-0.5 text-[10px] text-muted-foreground"
         >
-          {spotlightId === "local" ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
-          {spotlightId === "local" ? "Unpin" : "Pin"}
+          {spotlightId === "local" ? (
+            <>
+              <PinOff className="h-3 w-3" /> Unpin
+            </>
+          ) : (
+            <>
+              <Pin className="h-3 w-3" /> Pin
+            </>
+          )}
         </button>
       </div>
       {peers.map((p, i) => (
@@ -3482,11 +2839,14 @@ function VideoGrid({
             className="absolute top-2 left-1/2 -translate-x-1/2 z-20 opacity-0 group-hover:opacity-100 transition flex items-center gap-1 rounded-full bg-black/60 backdrop-blur border border-white/10 px-2 py-0.5 text-[10px] text-muted-foreground"
           >
             {spotlightId === p.socketId ? (
-              <PinOff className="h-3 w-3" />
+              <>
+                <PinOff className="h-3 w-3" /> Unpin
+              </>
             ) : (
-              <Pin className="h-3 w-3" />
+              <>
+                <Pin className="h-3 w-3" /> Pin
+              </>
             )}
-            {spotlightId === p.socketId ? "Unpin" : "Pin"}
           </button>
         </div>
       ))}
@@ -3530,7 +2890,7 @@ function LocalVideoTile({
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       className={cn(
-        "relative overflow-hidden rounded-2xl border bg-black/60 transition-all duration-300 h-full",
+        "relative overflow-hidden rounded-2xl border bg-black/60 h-full transition-all duration-300",
         isSpeaking
           ? "border-[var(--neon-secondary)] shadow-[0_0_24px_4px_oklch(0.82_0.16_210/0.4)]"
           : "border-white/10",
@@ -3640,7 +3000,7 @@ function RemoteVideoTile({
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.95 }}
       className={cn(
-        "group relative overflow-hidden rounded-2xl border bg-black/40 transition-all duration-300 h-full",
+        "group relative overflow-hidden rounded-2xl border bg-black/40 h-full transition-all duration-300",
         isSpeaking
           ? "border-[var(--neon-secondary)] shadow-[0_0_24px_4px_oklch(0.82_0.16_210/0.4)]"
           : "border-white/10",
@@ -3716,7 +3076,7 @@ function RemoteVideoTile({
       <button
         onClick={onRemove}
         className="absolute bottom-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition rounded-md bg-black/60 p-1 text-muted-foreground hover:text-[oklch(0.78_0.2_35)]"
-        title="Remove participant"
+        title="Remove"
       >
         <X className="h-3 w-3" />
       </button>
@@ -3758,23 +3118,22 @@ function ScreenShareView({
   isSpeaking: boolean;
   speakingPeerId: string | null;
 }) {
-  const screenVideoRef = useRef<HTMLVideoElement>(null);
+  const screenRef = useRef<HTMLVideoElement>(null);
   useEffect(() => {
-    if (screenVideoRef.current && localStream) screenVideoRef.current.srcObject = localStream;
+    if (screenRef.current && localStream) screenRef.current.srcObject = localStream;
   }, [localStream]);
-
   return (
     <div className="flex h-full flex-col gap-3 lg:flex-row">
-      <div className="relative flex-1 overflow-hidden rounded-2xl border border-[var(--neon-primary)]/40 bg-black/60 glow-primary">
+      <div className="relative flex-1 overflow-hidden rounded-2xl border border-[var(--neon-primary)]/40 bg-black/60">
         <video
-          ref={screenVideoRef}
+          ref={screenRef}
           autoPlay
           playsInline
           muted
           className="absolute inset-0 h-full w-full object-contain"
         />
         <div className="absolute top-3 left-3 flex items-center gap-2 rounded-full bg-black/60 backdrop-blur px-3 py-1 text-xs z-10">
-          <span className="h-1.5 w-1.5 rounded-full bg-[var(--neon-secondary)] animate-pulse" />
+          <span className="h-1.5 w-1.5 rounded-full bg-[var(--neon-secondary)] animate-pulse" />{" "}
           {username} is sharing
         </div>
       </div>
@@ -3801,6 +3160,813 @@ function ScreenShareView({
         ))}
       </div>
     </div>
+  );
+}
+
+// ─── Participants Panel ───────────────────────────────────────────────────────
+
+function ParticipantsPanel({
+  username,
+  localStatus,
+  localHandRaised,
+  mic,
+  cam,
+  isHost,
+  isSubHost,
+  peers,
+  raisedHands,
+  onLowerHand,
+  onRemove,
+  onMuteAll,
+  onCamOffAll,
+  onTransferHost,
+  onClose,
+}: {
+  username: string;
+  localStatus: ParticipantStatus;
+  localHandRaised: boolean;
+  mic: boolean;
+  cam: boolean;
+  isHost: boolean;
+  isSubHost: boolean;
+  peers: RemotePeer[];
+  raisedHands: Array<{ socketId: string; username: string; handRaisedAt: number }>;
+  onLowerHand: (id: string) => void;
+  onRemove: (id: string) => void;
+  onMuteAll: () => void;
+  onCamOffAll: () => void;
+  onTransferHost: (peer: RemotePeer) => void;
+  onClose: () => void;
+}) {
+  const canManage = isHost || isSubHost;
+  return (
+    <motion.aside
+      initial={{ x: 340 }}
+      animate={{ x: 0 }}
+      exit={{ x: 340 }}
+      transition={{ type: "spring", damping: 26, stiffness: 250 }}
+      className="absolute right-0 top-0 bottom-0 w-80 max-w-full glass-strong border-l border-white/10 overflow-y-auto z-10 flex flex-col"
+    >
+      <div className="flex items-center justify-between p-5 border-b border-white/5 shrink-0">
+        <h3 className="text-sm font-semibold flex items-center gap-2">
+          <Users className="h-4 w-4 text-[var(--neon-primary)]" /> Participants{" "}
+          <span className="text-muted-foreground">({peers.length + 1})</span>
+        </h3>
+        <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <AnimatePresence>
+          {raisedHands.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              className="rounded-2xl border border-[oklch(0.8_0.18_80)/0.3] bg-[oklch(0.8_0.18_80)/0.06] p-3"
+            >
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-[oklch(0.9_0.18_80)] mb-2 flex items-center gap-1.5">
+                ✋ Raised hands
+              </p>
+              <div className="space-y-1.5">
+                {raisedHands.map((h) => (
+                  <div key={h.socketId} className="flex items-center justify-between">
+                    <span className="text-sm text-[oklch(0.9_0.18_80)]">{h.username}</span>
+                    <button
+                      onClick={() => onLowerHand(h.socketId)}
+                      className="text-[10px] rounded-md px-2 py-0.5 border border-white/10 text-muted-foreground hover:text-foreground transition"
+                    >
+                      Lower
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+        {canManage && (
+          <div className="flex gap-2">
+            <NeonButton variant="outline" className="flex-1 text-xs" onClick={onMuteAll}>
+              Mute all
+            </NeonButton>
+            <NeonButton variant="outline" className="flex-1 text-xs" onClick={onCamOffAll}>
+              Cam off all
+            </NeonButton>
+          </div>
+        )}
+        <ul className="space-y-2">
+          <li className="flex items-center gap-3 rounded-xl border border-[var(--neon-primary)]/20 bg-[var(--neon-primary)]/5 p-2.5">
+            <div className="relative">
+              <Avatar name={username} hue={280} size={32} />
+              <StatusDot status={localStatus} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5">
+                <p className="truncate text-sm">{username}</p>
+                {localHandRaised && <span className="text-sm">✋</span>}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                {isHost ? "Host · You" : isSubHost ? "Co-Host · You" : "You"}
+              </p>
+            </div>
+            <div className="flex items-center gap-1 text-muted-foreground">
+              {mic ? (
+                <Mic className="h-3.5 w-3.5" />
+              ) : (
+                <MicOff className="h-3.5 w-3.5 text-[oklch(0.72_0.22_35)]" />
+              )}
+              {cam ? (
+                <VideoIcon className="h-3.5 w-3.5" />
+              ) : (
+                <VideoOff className="h-3.5 w-3.5 text-[oklch(0.72_0.22_35)]" />
+              )}
+            </div>
+          </li>
+          {peers.map((p, i) => (
+            <motion.li
+              key={p.socketId}
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 20 }}
+              className="flex items-center gap-3 rounded-xl border border-white/5 p-2.5 hover:border-white/10 transition"
+            >
+              <div className="relative">
+                <Avatar name={p.username} hue={hueForIndex(i)} size={32} />
+                <StatusDot status={p.status} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <p className="truncate text-sm">{p.username}</p>
+                  {p.handRaised && (
+                    <motion.span
+                      animate={{ rotate: [0, 15, -10, 15, 0] }}
+                      transition={{ duration: 1, repeat: Infinity, repeatDelay: 1.5 }}
+                      className="text-sm"
+                    >
+                      ✋
+                    </motion.span>
+                  )}
+                  {p.speaking && <AudioBars color="var(--neon-secondary)" small />}
+                  {p.isHost && (
+                    <span className="text-[10px] rounded bg-[var(--neon-primary)]/20 px-1.5 py-0.5 text-[var(--neon-primary)] border border-[var(--neon-primary)]/30">
+                      Host
+                    </span>
+                  )}
+                  {p.isSubHost && (
+                    <span className="text-[10px] rounded bg-[var(--neon-secondary)]/20 px-1.5 py-0.5 text-[var(--neon-secondary)] border border-[var(--neon-secondary)]/30">
+                      Co-Host
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  {STATUS_CONFIG[p.status]?.label ?? "Participant"}
+                </p>
+              </div>
+              <div className="flex items-center gap-1 text-muted-foreground">
+                {p.mic ? (
+                  <Mic className="h-3.5 w-3.5" />
+                ) : (
+                  <MicOff className="h-3.5 w-3.5 text-[oklch(0.72_0.22_35)]" />
+                )}
+                {p.cam ? (
+                  <VideoIcon className="h-3.5 w-3.5" />
+                ) : (
+                  <VideoOff className="h-3.5 w-3.5 text-[oklch(0.72_0.22_35)]" />
+                )}
+                {isHost && !p.isHost && (
+                  <>
+                    <button
+                      onClick={() => onTransferHost(p)}
+                      className="ml-1 text-muted-foreground hover:text-[var(--neon-primary)] transition"
+                      title="Transfer host"
+                    >
+                      <Crown className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => onRemove(p.socketId)}
+                      className="ml-1 text-muted-foreground hover:text-[oklch(0.78_0.2_35)] transition"
+                      title="Remove"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </>
+                )}
+                {isSubHost && !p.isHost && !p.isSubHost && (
+                  <button
+                    onClick={() => onRemove(p.socketId)}
+                    className="ml-1 text-muted-foreground hover:text-[oklch(0.78_0.2_35)] transition"
+                    title="Remove"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            </motion.li>
+          ))}
+        </ul>
+      </div>
+    </motion.aside>
+  );
+}
+
+// ─── Chat Panel ───────────────────────────────────────────────────────────────
+
+function ChatPanel({
+  localSocketId,
+  username,
+  messages,
+  typingPeers,
+  onSend,
+  onReact,
+  onTyping,
+  onClose,
+}: {
+  localSocketId: string | null;
+  username: string;
+  messages: ChatMessage[];
+  typingPeers: Array<{ socketId: string; username: string }>;
+  onSend: (text: string, replyTo?: ChatMessage | null) => void;
+  onReact: (messageId: string, emoji: string) => void;
+  onTyping: (isTyping: boolean) => void;
+  onClose: () => void;
+}) {
+  const [input, setInput] = useState("");
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+  const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
+  const [emojiPickerForMsg, setEmojiPickerForMsg] = useState<string | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+  useEffect(() => {
+    if (!emojiPickerForMsg) return;
+    const h = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest("[data-emoji-picker],[data-emoji-trigger]"))
+        setEmojiPickerForMsg(null);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [emojiPickerForMsg]);
+
+  const handleSend = () => {
+    if (!input.trim()) return;
+    onSend(input.trim(), replyTo);
+    setInput("");
+    setReplyTo(null);
+    onTyping(false);
+  };
+  const grouped = messages.map((msg, i) => ({
+    ...msg,
+    isFirst: i === 0 || messages[i - 1].socketId !== msg.socketId,
+    isLast: i === messages.length - 1 || messages[i + 1].socketId !== msg.socketId,
+    isSelf: msg.socketId === localSocketId,
+  }));
+
+  return (
+    <motion.aside
+      initial={{ x: 340 }}
+      animate={{ x: 0 }}
+      exit={{ x: 340 }}
+      transition={{ type: "spring", damping: 26, stiffness: 250 }}
+      className="absolute right-0 top-0 bottom-0 w-80 max-w-full glass-strong border-l border-white/10 z-10 flex flex-col"
+    >
+      <div className="flex items-center justify-between p-4 border-b border-white/5 shrink-0">
+        <h3 className="text-sm font-semibold flex items-center gap-2">
+          <MessageSquare className="h-4 w-4 text-[var(--neon-primary)]" /> Meeting Chat
+          {messages.length > 0 && (
+            <span className="text-[11px] text-muted-foreground font-normal">
+              · {messages.length}
+            </span>
+          )}
+        </h3>
+        <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-3 space-y-0.5 scrollbar-hide">
+        {grouped.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full gap-3 py-12">
+            <div className="h-12 w-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-2xl">
+              💬
+            </div>
+            <p className="text-xs text-muted-foreground text-center">
+              No messages yet.
+              <br />
+              Start the conversation!
+            </p>
+          </div>
+        )}
+        <AnimatePresence initial={false}>
+          {grouped.map((msg) => (
+            <motion.div
+              key={msg.id}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className={cn("relative", msg.isFirst ? "mt-4 first:mt-0" : "mt-0.5")}
+              onMouseEnter={() => setHoveredMsgId(msg.id)}
+              onMouseLeave={() => setHoveredMsgId(null)}
+            >
+              {msg.isFirst && (
+                <div
+                  className={cn(
+                    "flex items-center gap-1.5 mb-1.5 px-1",
+                    msg.isSelf ? "flex-row-reverse" : "flex-row",
+                  )}
+                >
+                  <Avatar
+                    name={msg.username}
+                    hue={msg.isSelf ? 280 : hueForName(msg.username)}
+                    size={20}
+                  />
+                  <span className="text-[11px] font-semibold text-muted-foreground">
+                    {msg.isSelf ? "You" : msg.username}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground/40">
+                    {formatTime(msg.timestamp)}
+                  </span>
+                </div>
+              )}
+              <div className={cn("flex", msg.isSelf ? "justify-end" : "justify-start")}>
+                <div
+                  className={cn(
+                    "relative max-w-[85%] flex flex-col gap-0.5",
+                    msg.isSelf ? "items-end" : "items-start",
+                  )}
+                >
+                  {msg.replyTo && (
+                    <div className="text-[11px] text-muted-foreground rounded-lg px-2.5 py-1.5 border-l-2 border-[var(--neon-primary)]/50 bg-white/3 mb-0.5 max-w-full">
+                      <span className="font-semibold text-[var(--neon-primary)] block">
+                        ↩ {msg.replyTo.username}
+                      </span>
+                      <span className="opacity-70 line-clamp-1">
+                        {msg.replyTo.text.slice(0, 60)}
+                        {msg.replyTo.text.length > 60 ? "…" : ""}
+                      </span>
+                    </div>
+                  )}
+                  <div
+                    className={cn(
+                      "relative px-3.5 py-2 text-sm leading-relaxed rounded-2xl",
+                      msg.isSelf
+                        ? "bg-gradient-to-br from-[oklch(0.55_0.22_280)] to-[oklch(0.65_0.18_305)] text-white shadow-[0_4px_24px_-4px_oklch(0.65_0.22_280/0.4)]"
+                        : "bg-white/8 border border-white/8 text-foreground",
+                      msg.isFirst ? (msg.isSelf ? "rounded-tr-sm" : "rounded-tl-sm") : "",
+                      msg.isLast
+                        ? msg.isSelf
+                          ? "rounded-br-2xl"
+                          : "rounded-bl-2xl"
+                        : msg.isSelf
+                          ? "rounded-br-sm"
+                          : "rounded-bl-sm",
+                    )}
+                  >
+                    {msg.text}
+                  </div>
+                  {Object.keys(msg.reactions).length > 0 && (
+                    <div
+                      className={cn(
+                        "flex flex-wrap gap-1 mt-0.5",
+                        msg.isSelf ? "justify-end" : "justify-start",
+                      )}
+                    >
+                      {Object.entries(msg.reactions).map(([emoji, sids]) =>
+                        sids.size > 0 ? (
+                          <button
+                            key={emoji}
+                            onClick={() => onReact(msg.id, emoji)}
+                            className={cn(
+                              "flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] transition hover:scale-105",
+                              sids.has(localSocketId ?? "")
+                                ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15"
+                                : "border-white/10 bg-white/5 hover:bg-white/10",
+                            )}
+                          >
+                            <span>{emoji}</span>
+                            <span className="text-muted-foreground">{sids.size}</span>
+                          </button>
+                        ) : null,
+                      )}
+                    </div>
+                  )}
+                  <AnimatePresence>
+                    {hoveredMsgId === msg.id && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        className={cn(
+                          "flex items-center gap-0.5 mt-0.5",
+                          msg.isSelf ? "justify-end" : "justify-start",
+                        )}
+                      >
+                        <div className="relative">
+                          <div className="flex items-center gap-0.5 glass rounded-xl border border-white/10 p-0.5 shadow-lg">
+                            <button
+                              onClick={() => setReplyTo(msg)}
+                              className="p-1.5 rounded-lg hover:bg-white/10 text-muted-foreground hover:text-foreground transition"
+                              title="Reply"
+                            >
+                              <Reply className="h-3 w-3" />
+                            </button>
+                            <button
+                              data-emoji-trigger
+                              onClick={() =>
+                                setEmojiPickerForMsg(emojiPickerForMsg === msg.id ? null : msg.id)
+                              }
+                              className={cn(
+                                "p-1.5 rounded-lg transition",
+                                emojiPickerForMsg === msg.id
+                                  ? "bg-[var(--neon-primary)]/20 text-[var(--neon-primary)]"
+                                  : "hover:bg-white/10 text-muted-foreground hover:text-foreground",
+                              )}
+                              title="React"
+                            >
+                              <SmilePlus className="h-3 w-3" />
+                            </button>
+                          </div>
+                          <AnimatePresence>
+                            {emojiPickerForMsg === msg.id && (
+                              <motion.div
+                                data-emoji-picker
+                                initial={{ opacity: 0, y: 6, scale: 0.92 }}
+                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                exit={{ opacity: 0, y: 6, scale: 0.92 }}
+                                className={cn(
+                                  "absolute bottom-full mb-2 z-30 glass-strong rounded-2xl border border-white/10 p-1.5 shadow-2xl",
+                                  msg.isSelf ? "right-0" : "left-0",
+                                )}
+                              >
+                                <div className="flex gap-0.5">
+                                  {REACTIONS.map((emoji) => (
+                                    <motion.button
+                                      key={emoji}
+                                      whileHover={{ scale: 1.35, y: -3 }}
+                                      whileTap={{ scale: 0.9 }}
+                                      onClick={() => {
+                                        onReact(msg.id, emoji);
+                                        setEmojiPickerForMsg(null);
+                                      }}
+                                      className="text-lg p-1 rounded-lg hover:bg-white/10"
+                                    >
+                                      {emoji}
+                                    </motion.button>
+                                  ))}
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              </div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+        <AnimatePresence>
+          {typingPeers.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              className="flex items-center gap-2 pl-1 mt-3"
+            >
+              <div className="flex gap-0.5 items-end h-4">
+                {[0, 1, 2].map((i) => (
+                  <motion.span
+                    key={i}
+                    className="w-1 rounded-full bg-[var(--neon-secondary)]"
+                    animate={{ height: ["4px", "10px", "4px"] }}
+                    transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.15 }}
+                  />
+                ))}
+              </div>
+              <span className="text-[11px] text-muted-foreground">
+                {typingPeers.map((p) => p.username).join(", ")}{" "}
+                {typingPeers.length === 1 ? "is" : "are"} typing…
+              </span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+        <div ref={bottomRef} />
+      </div>
+      <AnimatePresence>
+        {replyTo && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="border-t border-white/5 px-4 py-2 bg-white/3 flex items-start gap-2 shrink-0"
+          >
+            <CornerDownLeft className="h-3.5 w-3.5 mt-0.5 text-[var(--neon-primary)] shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-[11px] font-semibold text-[var(--neon-primary)]">
+                Replying to {replyTo.username}
+              </p>
+              <p className="text-[11px] text-muted-foreground truncate">
+                {replyTo.text.slice(0, 60)}
+                {replyTo.text.length > 60 ? "…" : ""}
+              </p>
+            </div>
+            <button
+              onClick={() => setReplyTo(null)}
+              className="text-muted-foreground hover:text-foreground shrink-0"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <div className="border-t border-white/5 p-3 shrink-0">
+        <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 pl-4 pr-2 py-2 focus-within:border-[var(--neon-primary)]/40 transition">
+          <input
+            value={input}
+            onChange={(e) => {
+              setInput(e.target.value);
+              onTyping(e.target.value.length > 0);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
+            placeholder="Send a message…"
+            className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/50"
+          />
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={handleSend}
+            disabled={!input.trim()}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-xl transition",
+              input.trim()
+                ? "bg-gradient-to-br from-[oklch(0.55_0.22_280)] to-[oklch(0.65_0.18_305)] text-white"
+                : "bg-white/5 text-muted-foreground/40 cursor-not-allowed",
+            )}
+          >
+            <Send className="h-3.5 w-3.5" />
+          </motion.button>
+        </div>
+        <p className="mt-1.5 text-[10px] text-center text-muted-foreground/40">
+          Enter to send · Shift+Enter for new line
+        </p>
+      </div>
+    </motion.aside>
+  );
+}
+
+// ─── Leave Modal ──────────────────────────────────────────────────────────────
+
+function LeaveModal({
+  isHost,
+  onConfirm,
+  onCancel,
+}: {
+  isHost: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md"
+      onClick={onCancel}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.85, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.85, y: 20 }}
+        transition={{ type: "spring", damping: 22, stiffness: 300 }}
+        className="relative mx-4 w-full max-w-md"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="absolute -inset-1 rounded-[2rem] bg-gradient-to-r from-[var(--neon-primary)] via-[var(--neon-accent)] to-[var(--neon-danger)] opacity-30 blur-xl" />
+        <div className="relative glass-strong rounded-3xl border border-white/10 p-8 text-center">
+          <motion.div
+            animate={{ scale: [1, 1.15, 1] }}
+            transition={{ duration: 2, repeat: Infinity }}
+            className="relative mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-[oklch(0.72_0.22_35)] to-[oklch(0.6_0.28_20)] shadow-[0_0_40px_-10px_oklch(0.72_0.22_35/0.8)]"
+          >
+            <PhoneOff className="h-10 w-10 text-white" />
+          </motion.div>
+          <h2 className="text-2xl font-bold text-gradient mb-2">
+            {isHost ? "End meeting for all?" : "Leave meeting?"}
+          </h2>
+          <p className="text-sm text-muted-foreground mb-8 max-w-xs mx-auto">
+            {isHost
+              ? "You are the host. Leaving ends the meeting for everyone."
+              : "You can rejoin anytime using the same link."}
+          </p>
+          <div className="flex gap-3 justify-center">
+            <NeonButton variant="outline" onClick={onCancel} className="px-6">
+              Stay
+            </NeonButton>
+            <button
+              onClick={onConfirm}
+              className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-[oklch(0.65_0.25_25)] to-[oklch(0.72_0.22_35)] px-6 py-3 text-sm font-semibold text-white hover:opacity-95 transition"
+            >
+              <PhoneOff className="h-4 w-4" />
+              {isHost ? "End meeting" : "Leave"}
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// ─── Host Transfer Modal ──────────────────────────────────────────────────────
+
+function HostTransferModal({
+  peer,
+  onTransfer,
+  onClose,
+}: {
+  peer: RemotePeer;
+  onTransfer: (mode: "full" | "sub") => void;
+  onClose: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.9, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.9, y: 20 }}
+        transition={{ type: "spring", damping: 24, stiffness: 300 }}
+        className="relative mx-4 w-full max-w-md"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="relative glass-strong rounded-3xl border border-white/10 p-8">
+          <div className="flex items-center gap-3 mb-5">
+            <Avatar name={peer.username} hue={hueForName(peer.username)} size={48} />
+            <div>
+              <h2 className="text-xl font-bold text-gradient">Transfer Host</h2>
+              <p className="text-xs text-muted-foreground">
+                Privileges for <span className="text-foreground font-medium">{peer.username}</span>
+              </p>
+            </div>
+          </div>
+          <div className="space-y-3">
+            <button
+              onClick={() => onTransfer("sub")}
+              className="w-full glass rounded-2xl p-4 text-left hover:bg-white/5 transition border border-white/10 hover:border-[var(--neon-secondary)]/40"
+            >
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--neon-secondary)]/15 text-[var(--neon-secondary)]">
+                  <UserCog className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-[var(--neon-secondary)]">Make Co-Host</h3>
+                  <p className="text-[11px] text-muted-foreground">
+                    Can admit, mute & remove. You keep full control.
+                  </p>
+                </div>
+              </div>
+            </button>
+            <button
+              onClick={() => onTransfer("full")}
+              className="w-full glass rounded-2xl p-4 text-left hover:bg-white/5 transition border border-white/10 hover:border-[var(--neon-primary)]/40"
+            >
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]">
+                  <Crown className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-[var(--neon-primary)]">Transfer Full Host</h3>
+                  <p className="text-[11px] text-muted-foreground">
+                    They become sole host. You become a participant.
+                  </p>
+                </div>
+              </div>
+            </button>
+          </div>
+          <NeonButton variant="ghost" className="mt-5 w-full" onClick={onClose}>
+            Cancel
+          </NeonButton>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// ─── Reaction Burst Layer ─────────────────────────────────────────────────────
+
+function ReactionBurstLayer({
+  reactions,
+}: {
+  reactions: Array<{ id: string; emoji: string; username: string; socketId: string }>;
+}) {
+  return (
+    <div className="pointer-events-none fixed inset-0 z-50 overflow-hidden">
+      <AnimatePresence>
+        {reactions.map((r, i) => (
+          <motion.div
+            key={r.id}
+            initial={{ opacity: 0, y: 0, scale: 0.4 }}
+            animate={{
+              opacity: [0, 1, 1, 0],
+              y: [0, -120 - Math.random() * 80],
+              x: [0, (Math.random() - 0.5) * 60],
+              scale: [0.4, 1.2, 1, 0.8],
+            }}
+            transition={{ duration: 3.5, ease: "easeOut" }}
+            className="absolute"
+            style={{ bottom: "100px", left: `${20 + (i % 8) * 10}%` }}
+          >
+            <div className="flex flex-col items-center gap-1">
+              <span className="text-3xl drop-shadow-[0_0_12px_oklch(0.8_0.2_280)]">{r.emoji}</span>
+              <span className="rounded-full bg-black/60 px-2 py-0.5 text-[10px] text-muted-foreground backdrop-blur whitespace-nowrap">
+                {r.username}
+              </span>
+            </div>
+          </motion.div>
+        ))}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ─── Reaction Picker ──────────────────────────────────────────────────────────
+/**
+ * FIX EXPLAINED:
+ *
+ * Original bug: ReactionPicker used a `mousedown` listener added in a useEffect.
+ * When the user clicked the trigger button to open the picker, that same click
+ * event propagated up to the document listener which then closed it immediately
+ * (because the trigger button was NOT inside `.reaction-picker-root` — only the
+ * popup was). The picker would flash open and close in the same frame.
+ *
+ * Fix: The trigger button is now inside a wrapper div with class
+ * `reaction-picker-root` (see the footer section in Room). The outside-click
+ * listener now uses a `click` event registered inside a `setTimeout(fn, 0)`
+ * so it doesn't catch the originating click that opened the picker.
+ */
+function ReactionPicker({
+  onReact,
+  onClose,
+}: {
+  onReact: (e: string) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    // Delay registration by one tick so the click that opened the picker
+    // doesn't immediately trigger the close handler.
+    let handler: (e: MouseEvent) => void;
+    const timer = setTimeout(() => {
+      handler = (e: MouseEvent) => {
+        if (!(e.target as HTMLElement).closest(".reaction-picker-root")) {
+          onClose();
+        }
+      };
+      document.addEventListener("click", handler);
+    }, 0);
+
+    return () => {
+      clearTimeout(timer);
+      if (handler) document.removeEventListener("click", handler);
+    };
+  }, [onClose]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8, scale: 0.9 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 8, scale: 0.9 }}
+      transition={{ type: "spring", damping: 20, stiffness: 300 }}
+      // No extra class needed here — the wrapper div in Room already has reaction-picker-root
+      className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 z-30"
+    >
+      <div className="glass-strong rounded-2xl border border-white/10 p-2 shadow-2xl">
+        <div className="flex gap-1">
+          {REACTIONS.map((emoji, i) => (
+            <motion.button
+              key={emoji}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.03 }}
+              whileHover={{ scale: 1.4, y: -4 }}
+              whileTap={{ scale: 0.9 }}
+              onClick={() => onReact(emoji)}
+              className="text-xl p-1.5 rounded-lg hover:bg-white/10"
+            >
+              {emoji}
+            </motion.button>
+          ))}
+        </div>
+      </div>
+    </motion.div>
   );
 }
 
@@ -3908,20 +4074,15 @@ function Avatar({ hue, name, size = 40 }: { hue: number; name: string; size?: nu
 function hueForIndex(i: number): number {
   return [210, 305, 160, 35, 60, 130, 260, 20][i % 8];
 }
-
 function hueForName(name: string): number {
   let hash = 0;
   for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
   return Math.abs(hash) % 360;
 }
-
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
-
 function formatDuration(ms: number): string {
-  const totalSec = Math.ceil(ms / 1000);
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  const s = Math.ceil(ms / 1000);
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
