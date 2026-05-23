@@ -4,6 +4,7 @@ import {
   generateAndInvite,
   scheduleMeeting,
   joinMeeting,
+  recordJoinedMeeting,
   inviteParticipants,
   getMeeting,
   updateMeeting,
@@ -16,6 +17,7 @@ import {
   scheduleMeetingValidation,
   inviteValidation,
   joinMeetingValidation,
+  recordJoinedMeetingValidation,
   historyValidation,
 } from "../controllers/meetingController.js";
 import { authenticate } from "../middlewares/authMiddleware.js";
@@ -27,6 +29,7 @@ import {
 const router = Router();
 
 // ── Instant meeting ───────────────────────────────────────────────────────────
+// Title is now required in the body (collected by the modal before API call).
 router.post(
   "/generate",
   authenticate,
@@ -53,6 +56,17 @@ router.post(
   meetingRateLimiter,
   scheduleMeetingValidation,
   scheduleMeeting,
+);
+
+// ── Record a "joined" meeting link in the user's history ─────────────────────
+// Called by the frontend when the user joins someone else's meeting via a
+// pasted link so it shows up in their history with the "Joined" badge.
+router.post(
+  "/record-joined",
+  authenticate,
+  apiRateLimiter,
+  recordJoinedMeetingValidation,
+  recordJoinedMeeting,
 );
 
 // ── Join meeting (public or authenticated) ────────────────────────────────────

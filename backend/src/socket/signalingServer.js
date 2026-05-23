@@ -1,25 +1,20 @@
 /**
  * WebRTC Signaling Server — Lumina Meet Phase 3
  *
- * Phase 1 (existing):
- *  • join-room / room-peers / user-joined
- *  • offer / answer / ice-candidate
- *  • media-state / host-action / disconnect
- *
- * Phase 2 (existing):
- *  • chat / reactions / status / raise-hand
- *
- * Phase 3 (new):
- *  • Waiting room / lobby   → join-request / admit / reject / waiting / admitted
- *  • Host transfer          → transfer-host / host-transferred / you-are-host / you-are-subhost
+ * Session tracking fixes:
+ *  • join-room now opens a DB session for instant + joined meetings
+ *    (only the first socket in a room opens the session; subsequent
+ *     sockets only increment the participant count)
+ *  • disconnect closes the session when the last socket leaves a room
+ *  • All other Phase 1/2/3 functionality is unchanged
  */
 
 import Meeting from "../models/Meeting.js";
 
 // ─── Room state ───────────────────────────────────────────────────────────────
-const rooms = new Map(); // roomId → Map<<socketId, PeerInfo>
+const rooms = new Map(); // roomId → Map<socketId, PeerInfo>
 const chatHistory = new Map(); // roomId → ChatMessage[]
-const waitingRooms = new Map(); // roomId → Map<<socketId, WaitingPeer>
+const waitingRooms = new Map(); // roomId → Map<socketId, WaitingPeer>
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const MAX_CHAT_HISTORY = 200;
@@ -37,7 +32,7 @@ const ALLOWED_REACTIONS = [
   "✨",
 ];
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getRoom(roomId) {
   if (!rooms.has(roomId)) rooms.set(roomId, new Map());
@@ -70,6 +65,67 @@ function sanitizeText(text) {
     .slice(0, 2000);
 }
 
+// ─── Session tracking helpers ─────────────────────────────────────────────────
+
+/**
+ * Called when the FIRST real participant joins a room (socket enters).
+ * Opens a new DB session for instant + joined meetings only.
+ * Scheduled meetings get their session opened by the HTTP join endpoint.
+ *
+ * Safe to call even if the meeting doesn't exist in DB (joined via external link).
+ */
+async function handleRoomJoin(roomId, userId) {
+  try {
+    const meeting = await Meeting.findOne({ meetingId: roomId });
+    if (!meeting) return;
+
+    // Only instant and joined meetings support multi-session tracking
+    if (meeting.type === "scheduled") return;
+
+    const room = getRoom(roomId);
+    // If there's already at least one peer before this socket arrived,
+    // the session is already open — just bump the participant count.
+    if (room.size > 0) {
+      await meeting.incrementSessionParticipants();
+      return;
+    }
+
+    // First person in the room — open a fresh session
+    await meeting.openSession();
+    await meeting.incrementSessionParticipants();
+  } catch (err) {
+    console.error(
+      `[Session] Failed to open session for ${roomId}:`,
+      err.message,
+    );
+  }
+}
+
+/**
+ * Called when a socket disconnects.
+ * Closes the current open session when the LAST participant leaves.
+ */
+async function handleRoomLeave(roomId) {
+  try {
+    const room = rooms.get(roomId);
+    // room has already had this socket removed before we call this —
+    // so size === 0 means the room is now empty.
+    if (!room || room.size > 0) return;
+
+    const meeting = await Meeting.findOne({ meetingId: roomId });
+    if (!meeting) return;
+    if (meeting.type === "scheduled") return;
+
+    await meeting.closeCurrentSession();
+    console.log(`[Session] Closed session for ${roomId}`);
+  } catch (err) {
+    console.error(
+      `[Session] Failed to close session for ${roomId}:`,
+      err.message,
+    );
+  }
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export function initSignaling(io) {
@@ -91,7 +147,7 @@ export function initSignaling(io) {
         meeting.host.toString() === userId
       );
 
-      // Waiting room gate (active meetings only; instant meetings are active by default)
+      // ── Waiting room gate ──────────────────────────────────────────────────
       if (
         meeting?.settings?.waitingRoom &&
         !isHost &&
@@ -105,7 +161,6 @@ export function initSignaling(io) {
           requestedAt: Date.now(),
         });
 
-        // Notify hosts already in the room
         const room = getRoom(roomId);
         if (room) {
           room.forEach((peer, sid) => {
@@ -124,10 +179,15 @@ export function initSignaling(io) {
         return;
       }
 
-      // Normal join
+      // ── Normal join ────────────────────────────────────────────────────────
       socket.join(roomId);
       const room = getRoom(roomId);
 
+      // ── Open / increment DB session BEFORE adding this socket to the room ─
+      // (room.size here is the count BEFORE this socket, i.e. existing peers)
+      await handleRoomJoin(roomId, userId);
+
+      // Now add to in-memory room
       const existingPeers = [];
       for (const [sid, info] of room.entries()) {
         if (sid !== socket.id) existingPeers.push({ socketId: sid, ...info });
@@ -169,7 +229,7 @@ export function initSignaling(io) {
 
     // ─── LOBBY CONTROLS ──────────────────────────────────────────────────────
 
-    socket.on("admit-participant", ({ targetSocketId }) => {
+    socket.on("admit-participant", async ({ targetSocketId }) => {
       const roomId = socket.data.roomId;
       if (!roomId || !socket.data.isHost) return;
 
@@ -185,6 +245,10 @@ export function initSignaling(io) {
       targetSocket.data.isAdmitted = true;
 
       const room = getRoom(roomId);
+
+      // Track this admitted participant in the DB session
+      await handleRoomJoin(roomId, targetSocket.data.userId);
+
       const peerData = {
         username: targetSocket.data.username,
         mic: true,
@@ -487,15 +551,20 @@ export function initSignaling(io) {
 
     // ─── DISCONNECT ──────────────────────────────────────────────────────────
 
-    socket.on("disconnect", () => {
+    socket.on("disconnect", async () => {
       const roomId = socket.data.roomId;
       if (!roomId) return;
 
       const room = rooms.get(roomId);
       if (room) {
         room.delete(socket.id);
+
+        // ── Close DB session when room becomes empty ────────────────────────
+        await handleRoomLeave(roomId);
+
         if (room.size === 0) {
           rooms.delete(roomId);
+          chatHistory.delete(roomId);
         }
       }
 

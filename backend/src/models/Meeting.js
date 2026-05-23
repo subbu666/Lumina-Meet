@@ -2,7 +2,15 @@ import mongoose from "mongoose";
 
 /**
  * Meeting Model
- * Stores video meeting sessions with scheduling and participant tracking
+ * Stores video meeting sessions with scheduling, participant tracking,
+ * and per-usage session history so the dashboard can show how many
+ * times a link was used and the duration of each use.
+ *
+ * Types:
+ *   "instant"   — created by the host via "Instant meeting" button
+ *   "scheduled" — created via the schedule flow, has a scheduledFor date
+ *   "joined"    — a foreign link the user joined (not hosted by them);
+ *                 recorded in history so they can see it later
  */
 const meetingSchema = new mongoose.Schema(
   {
@@ -17,7 +25,6 @@ const meetingSchema = new mongoose.Schema(
       required: [true, "Meeting ID is required"],
       unique: true,
       index: true,
-      // Format: vm-XXXX-XXXX-XXXX (vm = Lumina Meet)
       match: [/^vm-[a-z0-9-]+$/, "Invalid meeting ID format"],
     },
     title: {
@@ -32,32 +39,28 @@ const meetingSchema = new mongoose.Schema(
       maxlength: [1000, "Description cannot exceed 1000 characters"],
       default: null,
     },
-    // Meeting type
     type: {
       type: String,
-      enum: ["instant", "scheduled"],
+      // "joined" = user joined someone else's meeting; we store it for history
+      enum: ["instant", "scheduled", "joined"],
       required: true,
       default: "instant",
     },
-    // Scheduled time (for scheduled meetings)
     scheduledFor: {
       type: Date,
       default: null,
     },
-    // Meeting duration in minutes
     duration: {
       type: Number,
       default: 60,
       min: [5, "Minimum duration is 5 minutes"],
       max: [480, "Maximum duration is 480 minutes (8 hours)"],
     },
-    // Meeting status
     status: {
       type: String,
       enum: ["pending", "active", "completed", "cancelled"],
       default: "pending",
     },
-    // Password protection
     password: {
       type: String,
       default: null,
@@ -67,7 +70,61 @@ const meetingSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
-    // Participants
+
+    // ─── Per-usage sessions ──────────────────────────────────────────────────
+    /**
+     * Each time someone joins this meeting link a new session document is
+     * pushed here.  When the meeting ends (host clicks "End" or last
+     * participant disconnects) the open session is closed with leftAt and
+     * durationMin computed server-side.
+     *
+     * Enabled for: instant, joined
+     * Disabled for: scheduled (single-use by design)
+     *
+     * This is what powers the hierarchical history in the dashboard:
+     *   Video Lecture – 1   [instant]
+     *     └ 21 May 2026, 9:19 PM  ·  30m
+     *     └ 21 May 2026, 9:16 PM  ·  2h
+     *     └ 21 May 2026, 9:01 PM  ·  45m
+     */
+    sessions: [
+      {
+        /** Unique ID for this usage, used as React key and for lookups */
+        sessionId: {
+          type: String,
+          required: true,
+        },
+        /** When the first participant (usually the host) joined */
+        joinedAt: {
+          type: Date,
+          required: true,
+          default: () => new Date(),
+        },
+        /** When the last participant left / host ended the meeting */
+        leftAt: {
+          type: Date,
+          default: null,
+        },
+        /**
+         * Pre-computed duration in whole minutes so the API response is
+         * cheap to read without arithmetic on the client.
+         * Set to 0 while the session is still open (leftAt is null).
+         */
+        durationMin: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+        /** How many distinct participants joined in this session */
+        participantCount: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+      },
+    ],
+
+    // ─── Participants ────────────────────────────────────────────────────────
     participants: [
       {
         email: {
@@ -100,7 +157,6 @@ const meetingSchema = new mongoose.Schema(
         },
       },
     ],
-    // Invited emails (for tracking invites sent)
     invitedEmails: [
       {
         type: String,
@@ -108,60 +164,19 @@ const meetingSchema = new mongoose.Schema(
         trim: true,
       },
     ],
-    // Meeting settings
     settings: {
-      // Video
-      hostVideo: {
-        type: Boolean,
-        default: true,
-      },
-      participantVideo: {
-        type: Boolean,
-        default: true,
-      },
-      // Audio
-      hostAudio: {
-        type: Boolean,
-        default: true,
-      },
-      participantAudio: {
-        type: Boolean,
-        default: true,
-      },
-      // Security
-      waitingRoom: {
-        type: Boolean,
-        default: false,
-      },
-      allowJoinBeforeHost: {
-        type: Boolean,
-        default: false,
-      },
-      muteParticipantsOnEntry: {
-        type: Boolean,
-        default: false,
-      },
-      // Recording
-      allowRecording: {
-        type: Boolean,
-        default: true,
-      },
-      autoRecord: {
-        type: Boolean,
-        default: false,
-      },
-      // Screen sharing
-      allowScreenSharing: {
-        type: Boolean,
-        default: true,
-      },
-      // Chat
-      enableChat: {
-        type: Boolean,
-        default: true,
-      },
+      hostVideo: { type: Boolean, default: true },
+      participantVideo: { type: Boolean, default: true },
+      hostAudio: { type: Boolean, default: true },
+      participantAudio: { type: Boolean, default: true },
+      waitingRoom: { type: Boolean, default: false },
+      allowJoinBeforeHost: { type: Boolean, default: false },
+      muteParticipantsOnEntry: { type: Boolean, default: false },
+      allowRecording: { type: Boolean, default: true },
+      autoRecord: { type: Boolean, default: false },
+      allowScreenSharing: { type: Boolean, default: true },
+      enableChat: { type: Boolean, default: true },
     },
-    // Meeting started/completed timestamps
     startedAt: {
       type: Date,
       default: null,
@@ -170,19 +185,16 @@ const meetingSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
-    // Recording info
     recordingUrl: {
       type: String,
       default: null,
     },
-    // Maximum participants allowed
     maxParticipants: {
       type: Number,
       default: 100,
       min: 2,
       max: 1000,
     },
-    // Meeting link
     meetingLink: {
       type: String,
       required: true,
@@ -195,65 +207,68 @@ const meetingSchema = new mongoose.Schema(
   },
 );
 
-// Compound indexes for efficient queries
+// ─── Indexes ──────────────────────────────────────────────────────────────────
 meetingSchema.index({ host: 1, status: 1 });
 meetingSchema.index({ meetingId: 1, status: 1 });
 meetingSchema.index({ scheduledFor: 1, status: 1 });
-meetingSchema.index({ createdAt: -1 }); // For recent meetings query
+meetingSchema.index({ createdAt: -1 });
 meetingSchema.index({ type: 1, status: 1 });
 
-// Virtual for participant count
+// ─── Virtuals ─────────────────────────────────────────────────────────────────
 meetingSchema.virtual("participantCount").get(function () {
   return this.participants.filter((p) => p.status === "joined").length;
 });
 
-// Virtual for total invites
 meetingSchema.virtual("totalInvites").get(function () {
   return this.invitedEmails.length;
 });
 
-// Virtual for isActive
 meetingSchema.virtual("isActive").get(function () {
   return this.status === "active";
 });
 
-// Virtual for isScheduled
 meetingSchema.virtual("isScheduled").get(function () {
   return this.type === "scheduled" && this.scheduledFor > new Date();
 });
 
-// Instance method to check if meeting can be joined
-meetingSchema.methods.canJoin = function () {
-  // Instant meetings can be joined anytime
-  if (this.type === "instant") return true;
+/** Total combined duration (minutes) across all closed sessions */
+meetingSchema.virtual("totalDurationMin").get(function () {
+  return this.sessions.reduce((sum, s) => sum + (s.durationMin ?? 0), 0);
+});
 
-  // Scheduled meetings can be joined 15 minutes before scheduled time
+/**
+ * Whether this meeting type supports multiple sessions.
+ * instant and joined links can be reused; scheduled meetings cannot.
+ */
+meetingSchema.virtual("supportsMultipleSessions").get(function () {
+  return this.type === "instant" || this.type === "joined";
+});
+
+// ─── Instance methods ─────────────────────────────────────────────────────────
+
+meetingSchema.methods.canJoin = function () {
+  if (this.type === "instant" || this.type === "joined") return true;
   if (this.type === "scheduled") {
     const now = new Date();
     const joinWindow = new Date(this.scheduledFor);
     joinWindow.setMinutes(joinWindow.getMinutes() - 15);
     return now >= joinWindow;
   }
-
   return false;
 };
 
-// Instance method to check if user is host
 meetingSchema.methods.isHost = function (userId) {
   return this.host.toString() === userId.toString();
 };
 
-// Instance method to check if user is a participant
 meetingSchema.methods.isParticipant = function (email) {
   return this.participants.some(
     (p) => p.email.toLowerCase() === email.toLowerCase(),
   );
 };
 
-// Instance method to add participant
 meetingSchema.methods.addParticipant = async function (email, name = null) {
-  const exists = this.isParticipant(email);
-  if (!exists) {
+  if (!this.isParticipant(email)) {
     this.participants.push({
       email: email.toLowerCase(),
       name,
@@ -268,7 +283,6 @@ meetingSchema.methods.addParticipant = async function (email, name = null) {
   return this;
 };
 
-// Instance method to mark participant as joined
 meetingSchema.methods.markJoined = async function (email) {
   const participant = this.participants.find(
     (p) => p.email.toLowerCase() === email.toLowerCase(),
@@ -281,7 +295,6 @@ meetingSchema.methods.markJoined = async function (email) {
   return this;
 };
 
-// Instance method to start meeting
 meetingSchema.methods.start = async function () {
   this.status = "active";
   this.startedAt = new Date();
@@ -289,11 +302,9 @@ meetingSchema.methods.start = async function () {
   return this;
 };
 
-// Instance method to complete meeting
 meetingSchema.methods.complete = async function () {
   this.status = "completed";
   this.completedAt = new Date();
-  // Mark all active participants as left
   this.participants.forEach((p) => {
     if (p.status === "joined") {
       p.status = "left";
@@ -304,7 +315,78 @@ meetingSchema.methods.complete = async function () {
   return this;
 };
 
-// Instance method to sanitize meeting data for public view
+// ─── Session helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Open a new session when the meeting starts (first participant joins).
+ * For scheduled meetings, only one session is allowed — if one already
+ * exists this is a no-op and the existing session is returned.
+ * Returns the new (or existing) session document.
+ */
+meetingSchema.methods.openSession = async function () {
+  // Scheduled meetings: single-use — don't open a second session
+  if (this.type === "scheduled" && this.sessions.length > 0) {
+    return this.sessions[this.sessions.length - 1];
+  }
+
+  const { v4: uuidv4 } = await import("uuid");
+  const session = {
+    sessionId: uuidv4(),
+    joinedAt: new Date(),
+    leftAt: null,
+    durationMin: 0,
+    participantCount: 0,
+  };
+  this.sessions.push(session);
+
+  if (this.status !== "active") {
+    this.status = "active";
+    this.startedAt = this.startedAt ?? new Date();
+  }
+  await this.save();
+  return this.sessions[this.sessions.length - 1];
+};
+
+/**
+ * Close the most-recent open session (leftAt === null).
+ * Computes durationMin and saves the document.
+ * For instant/joined meetings the meeting stays "active" so the link
+ * can be reused; for scheduled meetings it is marked "completed".
+ */
+meetingSchema.methods.closeCurrentSession = async function () {
+  const open = [...this.sessions].reverse().find((s) => s.leftAt == null);
+  if (!open) return this;
+
+  const now = new Date();
+  open.leftAt = now;
+  open.durationMin = Math.round((now - open.joinedAt) / 60_000);
+
+  // Scheduled meetings are single-use — mark completed
+  if (this.type === "scheduled") {
+    this.status = "completed";
+    this.completedAt = now;
+  }
+  // instant / joined stay active for reuse
+
+  await this.save();
+  return this;
+};
+
+/**
+ * Increment participant count on the current open session.
+ * Call this whenever a new socket joins the room.
+ */
+meetingSchema.methods.incrementSessionParticipants = async function () {
+  const open = [...this.sessions].reverse().find((s) => s.leftAt == null);
+  if (open) {
+    open.participantCount += 1;
+    await this.save();
+  }
+  return this;
+};
+
+// ─── Public view helpers ──────────────────────────────────────────────────────
+
 meetingSchema.methods.toPublicObject = function () {
   return {
     id: this._id,
@@ -321,10 +403,12 @@ meetingSchema.methods.toPublicObject = function () {
     host: this.host,
     participantCount: this.participantCount,
     createdAt: this.createdAt,
+    sessions: this.sessions,
+    totalDurationMin: this.totalDurationMin,
+    supportsMultipleSessions: this.supportsMultipleSessions,
   };
 };
 
-// Instance method to get full meeting data (for host)
 meetingSchema.methods.toHostObject = function () {
   return {
     ...this.toPublicObject(),
@@ -337,7 +421,8 @@ meetingSchema.methods.toHostObject = function () {
   };
 };
 
-// Static method to find by meetingId
+// ─── Static methods ───────────────────────────────────────────────────────────
+
 meetingSchema.statics.findByMeetingId = function (meetingId) {
   return this.findOne({ meetingId }).populate(
     "host",
@@ -345,7 +430,6 @@ meetingSchema.statics.findByMeetingId = function (meetingId) {
   );
 };
 
-// Static method to find active meetings by host
 meetingSchema.statics.findActiveByHost = function (hostId) {
   return this.find({
     host: hostId,
@@ -353,20 +437,10 @@ meetingSchema.statics.findActiveByHost = function (hostId) {
   }).sort({ createdAt: -1 });
 };
 
-// Static method to get meeting history for a user
 meetingSchema.statics.getHistoryForUser = function (userId, options = {}) {
-  const { page = 1, limit = 10, status = null } = options;
-  const query = {
-    $or: [
-      { host: userId },
-      { "participants.email": { $exists: true } }, // Will be refined with actual email
-    ],
-  };
-
-  if (status) {
-    query.status = status;
-  }
-
+  const { page = 1, limit = 20, status = null } = options;
+  const query = { host: userId };
+  if (status) query.status = status;
   return this.find(query)
     .populate("host", "username email firstName lastName")
     .sort({ createdAt: -1 })
