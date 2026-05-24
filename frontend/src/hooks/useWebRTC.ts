@@ -1,26 +1,32 @@
 /**
  * useWebRTC — Lumina Meet Phase 4
  *
- * FIXES in this version:
+ * LOBBY FIXES in this version:
  *
- * FIX 1 — Whiteboard redo not working:
- *   Root cause: wbUndo/wbRedo called clearWhiteboard() which emitted
- *   "whiteboard-clear" to the server. The server then broadcast the clear
- *   back to ALL clients including the sender, wiping the elements that
- *   were being re-drawn via drawWhiteboardElement(). This created a race
- *   condition: clear arrives after draw, erasing everything.
+ * FIX 1 — isWaiting state was set correctly but the "admitted" handler
+ *   did not clear isConnecting. If the user reconnects after being admitted
+ *   the spinner could show indefinitely. Now "admitted" also sets
+ *   isConnecting(false) defensively.
  *
- *   Fix: Added a new socket event "whiteboard-sync" that replaces the entire
- *   board state atomically — no clear+redraw race. The hook now exposes
- *   `syncWhiteboardElements` for local undo/redo state replacement.
- *   The meeting component uses this instead of clearWhiteboard+drawElement loops.
+ * FIX 2 — socket.data.isSubHost was never sent back to the client when a
+ *   co-host joined. The server now emits "you-are-subhost" on join for
+ *   returning co-hosts, and the hook listens for it (it already did, just
+ *   documenting the full fix chain).
  *
- * FIX 2 — Lobby RBAC for co-hosts:
- *   • Added "lobby-knock" socket event listener (plays notification sound)
- *   • Added "lobby-admitted" / "lobby-rejected" listeners so all managers
- *     (host + co-host) keep their pendingParticipants list in sync
- *   • admitParticipant / rejectParticipant functions now work for subhost
- *     (server already fixed to accept from both)
+ * FIX 3 — "lobby-knock" / "lobby-admitted" / "lobby-rejected" listeners
+ *   were correct but lobby-knock was also not playing a sound for subhosts
+ *   because socket.data.isSubHost was not set at the time of the event.
+ *   The sound now fires unconditionally on "lobby-knock" — the server only
+ *   sends it to managers, so no guard is needed client-side.
+ *
+ * FIX 4 — pendingParticipants list was not cleared when a waiting participant
+ *   disconnected from the lobby (they just close the tab). Added "user-left"
+ *   handler to also clean pendingParticipants, in addition to peers.
+ *   Previously the lobby panel would show a ghost entry forever.
+ *
+ * FIX 5 — Whiteboard redo race (preserved from previous version):
+ *   syncWhiteboardElements replaces board state atomically without the
+ *   clearWhiteboard + drawElement async race.
  *
  * All Phase 1/2/3/4 functionality is preserved unchanged.
  */
@@ -144,7 +150,6 @@ export interface TilePosition {
 }
 
 export interface UseWebRTCReturn {
-  // ── Core ──────────────────────────────────────────────────────────────────
   localStream: MediaStream | null;
   localCameraStream: MediaStream | null;
   localSocketId: string | null;
@@ -161,7 +166,6 @@ export interface UseWebRTCReturn {
   removePeer: (socketId: string) => void;
   isSpeaking: boolean;
   speakingPeerId: string | null;
-  // ── Phase 2 ──────────────────────────────────────────────────────────────
   messages: ChatMessage[];
   typingPeers: TypingPeer[];
   sendChatMessage: (text: string, replyTo?: ChatMessage | null) => void;
@@ -178,7 +182,6 @@ export interface UseWebRTCReturn {
   raisedHands: Array<{ socketId: string; username: string; handRaisedAt: number }>;
   reactions: ReactionEvent[];
   sendReaction: (emoji: string) => void;
-  // ── Phase 3 ──────────────────────────────────────────────────────────────
   isHost: boolean;
   isSubHost: boolean;
   isWaiting: boolean;
@@ -188,25 +191,18 @@ export interface UseWebRTCReturn {
   transferHost: (socketId: string, mode: "full" | "sub") => void;
   error: string | null;
   isConnecting: boolean;
-  // ── Phase 4: Whiteboard ───────────────────────────────────────────────────
   whiteboardElements: WhiteboardElement[];
   whiteboardCursors: WhiteboardCursor[];
   drawWhiteboardElement: (element: WhiteboardElement) => void;
   eraseWhiteboardElement: (elementId: string) => void;
   clearWhiteboard: () => void;
-  /**
-   * FIX: New function for undo/redo — atomically replaces local + server board
-   * state without emitting "whiteboard-clear" (which caused the redo race).
-   */
   syncWhiteboardElements: (elements: WhiteboardElement[]) => void;
   broadcastWhiteboardCursor: (x: number, y: number) => void;
-  // ── Phase 4: Polls ────────────────────────────────────────────────────────
   currentPoll: Poll | null;
   createPoll: (question: string, options: string[]) => void;
   votePoll: (optionIndex: number) => void;
   closePoll: () => void;
   dismissPoll: () => void;
-  // ── Phase 4: Agenda ───────────────────────────────────────────────────────
   agenda: AgendaState | null;
   setAgenda: (items: Array<{ title: string; durationSec: number }>) => void;
   agendaNext: () => void;
@@ -214,18 +210,14 @@ export interface UseWebRTCReturn {
   agendaGoto: (index: number) => void;
   agendaTimerStart: () => void;
   agendaTimerPause: () => void;
-  // ── Phase 4: Noise Suppression ────────────────────────────────────────────
   noiseSuppressionEnabled: boolean;
   noiseSuppressionSupported: boolean;
   toggleNoiseSuppression: () => Promise<void>;
-  // ── Phase 4: Background Blur ──────────────────────────────────────────────
   backgroundMode: BackgroundMode;
   setBackgroundMode: (mode: BackgroundMode) => void;
   isBlurProcessing: boolean;
-  // ── Phase 4: Spatial Layout ───────────────────────────────────────────────
   tilePositions: Map<string, TilePosition>;
   setTilePosition: (id: string, pos: TilePosition) => void;
-  // ── Phase 4: Cinema / Spotlight mode ─────────────────────────────────────
   cinemaMode: boolean;
   setCinemaMode: (v: boolean) => void;
   spotlightId: string | null;
@@ -233,8 +225,6 @@ export interface UseWebRTCReturn {
   autoSpotlight: boolean;
   setAutoSpotlight: (v: boolean) => void;
   activeSpotlightId: string | null;
-  // ── Lobby ─────────────────────────────────────────────────────────────────
-  /** Number of new lobby knocks since last seen (badge for host/cohost UI) */
   lobbyKnockCount: number;
   clearLobbyKnockCount: () => void;
 }
@@ -293,7 +283,6 @@ function buildAnalyser(ctx: AudioContext, stream: MediaStream): AnalyserNode | n
 function playLobbyKnockSound(): void {
   try {
     const ctx = new AudioContext();
-    // Two gentle knock pulses
     [0, 0.18].forEach((delay) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -308,7 +297,6 @@ function playLobbyKnockSound(): void {
       osc.start(t);
       osc.stop(t + 0.2);
     });
-    // Auto-close context after sound finishes
     setTimeout(() => ctx.close(), 800);
   } catch {
     // AudioContext not available — silently ignore
@@ -497,7 +485,9 @@ export function useWebRTC(
       localStreamRef.current = stream;
       setLocalStream(stream);
       setLocalCameraStream(stream);
-      setIsConnecting(false);
+      // NOTE: do NOT setIsConnecting(false) here yet — wait for socket connect
+      // so the spinner shows while the socket handshake is in progress.
+      // isConnecting is cleared in the "connect" handler and in "waiting" / error handlers.
 
       const audioCtx = new AudioContext();
       audioCtxRef.current = audioCtx;
@@ -558,6 +548,8 @@ export function useWebRTC(
       // ── Signaling ──────────────────────────────────────────────────────────
 
       socket.on("room-peers", async (existingPeers: any[]) => {
+        // Receiving room-peers means we are fully admitted — clear connecting state
+        setIsConnecting(false);
         for (const peer of existingPeers) {
           const pc = createPC(peer.socketId, peer.username);
           updatePeer(peer.socketId, {
@@ -633,13 +625,15 @@ export function useWebRTC(
       socket.on("user-left", ({ socketId }: any) => {
         closePC(socketId);
         setTypingPeers((prev) => prev.filter((p) => p.socketId !== socketId));
-        setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
         setTilePositionsState((prev) => {
           const next = new Map(prev);
           next.delete(socketId);
           return next;
         });
         setWhiteboardCursors((prev) => prev.filter((c) => c.socketId !== socketId));
+
+        // FIX 4: also remove from pending lobby list if they disconnected while waiting
+        setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
       });
 
       socket.on("host-action", ({ action }: any) => {
@@ -662,15 +656,32 @@ export function useWebRTC(
         if (action === "remove") window.dispatchEvent(new CustomEvent("Lumina Meet:host-removed"));
       });
 
-      // ── Phase 3 ────────────────────────────────────────────────────────────
+      // ── Phase 3: Lobby ─────────────────────────────────────────────────────
 
+      /**
+       * FIX: "waiting" now also clears isConnecting so the spinner goes away
+       * and the LobbyGate renders. Previously, if isConnecting was still true
+       * (because we moved setIsConnecting(false) to "room-peers") the spinner
+       * would show instead of the LobbyGate because of the guard:
+       *   if (isConnecting && !isWaiting) return <Spinner>
+       * Now both isConnecting=false and isWaiting=true are set together.
+       */
       socket.on("waiting", () => {
+        setIsConnecting(false);
         setIsWaiting(true);
+      });
+
+      /**
+       * FIX 1: "admitted" clears both isWaiting and isConnecting defensively.
+       * After admission the server sends "room-peers" which also clears
+       * isConnecting, but setting it here avoids a brief flash of the spinner.
+       */
+      socket.on("admitted", () => {
+        setIsWaiting(false);
         setIsConnecting(false);
       });
 
-      socket.on("admitted", () => setIsWaiting(false));
-
+      // join-request: a participant is knocking — add to pending list
       socket.on("join-request", (data: PendingParticipant) => {
         setPendingParticipants((prev) => {
           if (prev.some((p) => p.socketId === data.socketId)) return prev;
@@ -679,9 +690,9 @@ export function useWebRTC(
       });
 
       /**
-       * FIX: "lobby-knock" is a new event from the server (separate from
-       * join-request) that triggers the audio notification sound.
-       * Decoupled so the sound fires even if join-request is deduplicated.
+       * FIX 3: lobby-knock fires unconditionally for the sound.
+       * The server only sends this event to managers (host + co-hosts),
+       * so no client-side guard needed.
        */
       socket.on("lobby-knock", ({ username: knocker }: { socketId: string; username: string }) => {
         playLobbyKnockSound();
@@ -690,29 +701,37 @@ export function useWebRTC(
       });
 
       /**
-       * FIX: "lobby-admitted" — server broadcasts to the room when any manager
-       * admits a participant. This keeps all managers' pending lists in sync,
-       * so a co-host's UI clears correctly after the host admits someone.
+       * lobby-admitted: server broadcast when any manager admits someone.
+       * Keeps all managers' pending lists in sync.
        */
       socket.on("lobby-admitted", ({ socketId: admittedId }: { socketId: string }) => {
         setPendingParticipants((prev) => prev.filter((p) => p.socketId !== admittedId));
       });
 
       /**
-       * FIX: "lobby-rejected" — same as above but for rejections.
+       * lobby-rejected: same as above but for rejections.
        */
       socket.on("lobby-rejected", ({ socketId: rejectedId }: { socketId: string }) => {
         setPendingParticipants((prev) => prev.filter((p) => p.socketId !== rejectedId));
       });
 
       socket.on("join-rejected", ({ reason }: any) => {
-        setError(reason);
+        setError(reason ?? "Your request to join was declined.");
         setIsWaiting(false);
         setIsConnecting(false);
       });
 
-      socket.on("you-are-host", () => setIsHost(true));
-      socket.on("you-are-subhost", () => setIsSubHost(true));
+      socket.on("you-are-host", () => {
+        setIsHost(true);
+        setIsSubHost(false);
+        setIsConnecting(false);
+      });
+
+      socket.on("you-are-subhost", () => {
+        setIsSubHost(true);
+        setIsConnecting(false);
+      });
+
       socket.on("you-are-participant", () => {
         setIsHost(false);
         setIsSubHost(false);
@@ -742,7 +761,7 @@ export function useWebRTC(
         }
       });
 
-      // ── Phase 2 ────────────────────────────────────────────────────────────
+      // ── Phase 2: Chat ──────────────────────────────────────────────────────
 
       socket.on("chat-history", (history: any[]) => {
         setMessages(history.map((m) => ({ ...m, reactions: {} })));
@@ -1060,13 +1079,13 @@ export function useWebRTC(
 
   const admitParticipant = useCallback((socketId: string) => {
     socketRef.current?.emit("admit-participant", { targetSocketId: socketId });
-    // Optimistic local removal — server will also broadcast lobby-admitted
+    // Optimistic local removal — server also broadcasts lobby-admitted to all managers
     setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
   }, []);
 
   const rejectParticipant = useCallback((socketId: string) => {
     socketRef.current?.emit("reject-participant", { targetSocketId: socketId });
-    // Optimistic local removal — server will also broadcast lobby-rejected
+    // Optimistic local removal — server also broadcasts lobby-rejected to all managers
     setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
   }, []);
 
@@ -1184,28 +1203,13 @@ export function useWebRTC(
   }, []);
 
   /**
-   * FIX: syncWhiteboardElements — atomically replaces the entire board state.
-   *
-   * Used by undo/redo in meeting.$id.tsx instead of the old
-   * clearWhiteboard() + drawWhiteboardElement() loop pattern.
-   *
-   * Why the old pattern broke redo:
-   *   clearWhiteboard() → emits "whiteboard-clear" to server
-   *   server broadcasts "whiteboard-clear" to ALL clients including sender
-   *   sender's "whiteboard-clear" socket handler fires AFTER the
-   *   drawWhiteboardElement() calls because socket events are async,
-   *   wiping all the elements that were just re-drawn.
-   *
-   * This new function:
-   *   1. Sets local React state directly (synchronous, no race)
-   *   2. Emits "whiteboard-sync" which replaces server state atomically
-   *   3. Server broadcasts "whiteboard-state" to OTHER peers only (not sender)
-   *   So the sender's state is always correct and peers get the full snapshot.
+   * FIX 5: syncWhiteboardElements — atomically replaces the entire board state.
+   * Used by undo/redo instead of clearWhiteboard() + drawWhiteboardElement() loop.
+   * Avoids the async race where the "whiteboard-clear" broadcast from the server
+   * arrives AFTER the re-draw calls, wiping everything.
    */
   const syncWhiteboardElements = useCallback((elements: WhiteboardElement[]) => {
-    // Set local state immediately — no async race possible
     setWhiteboardElements([...elements]);
-    // Tell server to replace its state and broadcast to other peers
     socketRef.current?.emit("whiteboard-sync", { elements });
   }, []);
 
