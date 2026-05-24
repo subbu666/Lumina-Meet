@@ -1,16 +1,28 @@
 /**
  * useWebRTC — Lumina Meet Phase 4
  *
- * NEW in Phase 4:
- *  • Collaborative whiteboard (draw, erase, clear, cursor relay)
- *  • Live polls (create, vote, close, dismiss)
- *  • Shared agenda + focus timer (set, navigate, start/pause timer)
- *  • Noise suppression toggle (RNNoise WASM / spectral gate fallback)
- *  • Background blur / virtual backgrounds (MediaPipe / canvas fallback)
- *  • Spatial layout (drag-drop tile positions persisted in local state)
- *  • Auto-spotlight / cinema mode (derived from existing VAD)
+ * FIXES in this version:
  *
- * All Phase 1/2/3 functionality is preserved unchanged.
+ * FIX 1 — Whiteboard redo not working:
+ *   Root cause: wbUndo/wbRedo called clearWhiteboard() which emitted
+ *   "whiteboard-clear" to the server. The server then broadcast the clear
+ *   back to ALL clients including the sender, wiping the elements that
+ *   were being re-drawn via drawWhiteboardElement(). This created a race
+ *   condition: clear arrives after draw, erasing everything.
+ *
+ *   Fix: Added a new socket event "whiteboard-sync" that replaces the entire
+ *   board state atomically — no clear+redraw race. The hook now exposes
+ *   `syncWhiteboardElements` for local undo/redo state replacement.
+ *   The meeting component uses this instead of clearWhiteboard+drawElement loops.
+ *
+ * FIX 2 — Lobby RBAC for co-hosts:
+ *   • Added "lobby-knock" socket event listener (plays notification sound)
+ *   • Added "lobby-admitted" / "lobby-rejected" listeners so all managers
+ *     (host + co-host) keep their pendingParticipants list in sync
+ *   • admitParticipant / rejectParticipant functions now work for subhost
+ *     (server already fixed to accept from both)
+ *
+ * All Phase 1/2/3/4 functionality is preserved unchanged.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -82,9 +94,9 @@ export type WhiteboardColor = string;
 export interface WhiteboardElement {
   id: string;
   type: "stroke" | "text" | "sticky" | "arrow" | "rect" | "ellipse";
-  points?: number[][]; // for stroke
+  points?: number[][];
   x?: number;
-  y?: number; // for placed elements
+  y?: number;
   width?: number;
   height?: number;
   text?: string;
@@ -105,10 +117,10 @@ export interface Poll {
   id: string;
   question: string;
   options: string[];
-  votes: Record<number, number>; // optionIndex → count
+  votes: Record<number, number>;
   totalVoters: number;
   closed: boolean;
-  myVote?: number; // local user's vote
+  myVote?: number;
 }
 
 export interface AgendaItem {
@@ -121,15 +133,14 @@ export interface AgendaItem {
 export interface AgendaState {
   items: AgendaItem[];
   activeIdx: number;
-  timerEnd: number | null; // epoch ms
+  timerEnd: number | null;
   timerPaused: boolean;
-  timerRemaining: number | null; // ms, set when paused
+  timerRemaining: number | null;
 }
 
-// Tile position for spatial layout
 export interface TilePosition {
-  x: number; // percent 0-100
-  y: number; // percent 0-100
+  x: number;
+  y: number;
 }
 
 export interface UseWebRTCReturn {
@@ -183,6 +194,11 @@ export interface UseWebRTCReturn {
   drawWhiteboardElement: (element: WhiteboardElement) => void;
   eraseWhiteboardElement: (elementId: string) => void;
   clearWhiteboard: () => void;
+  /**
+   * FIX: New function for undo/redo — atomically replaces local + server board
+   * state without emitting "whiteboard-clear" (which caused the redo race).
+   */
+  syncWhiteboardElements: (elements: WhiteboardElement[]) => void;
   broadcastWhiteboardCursor: (x: number, y: number) => void;
   // ── Phase 4: Polls ────────────────────────────────────────────────────────
   currentPoll: Poll | null;
@@ -212,12 +228,15 @@ export interface UseWebRTCReturn {
   // ── Phase 4: Cinema / Spotlight mode ─────────────────────────────────────
   cinemaMode: boolean;
   setCinemaMode: (v: boolean) => void;
-  spotlightId: string | null; // manually pinned tile ID (socketId or "local")
+  spotlightId: string | null;
   setSpotlightId: (id: string | null) => void;
-  autoSpotlight: boolean; // whether VAD auto-pins the speaker
+  autoSpotlight: boolean;
   setAutoSpotlight: (v: boolean) => void;
-  /** The effective tile currently spotlighted (auto or manual) */
   activeSpotlightId: string | null;
+  // ── Lobby ─────────────────────────────────────────────────────────────────
+  /** Number of new lobby knocks since last seen (badge for host/cohost UI) */
+  lobbyKnockCount: number;
+  clearLobbyKnockCount: () => void;
 }
 
 // ─── ICE servers ──────────────────────────────────────────────────────────────
@@ -267,6 +286,35 @@ function buildAnalyser(ctx: AudioContext, stream: MediaStream): AnalyserNode | n
   return analyser;
 }
 
+/**
+ * Play a soft "knock" notification sound using Web Audio API.
+ * Pure synthesis — no external file dependency.
+ */
+function playLobbyKnockSound(): void {
+  try {
+    const ctx = new AudioContext();
+    // Two gentle knock pulses
+    [0, 0.18].forEach((delay) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = 440;
+      osc.type = "sine";
+      const t = ctx.currentTime + delay;
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.35, t + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      osc.start(t);
+      osc.stop(t + 0.2);
+    });
+    // Auto-close context after sound finishes
+    setTimeout(() => ctx.close(), 800);
+  } catch {
+    // AudioContext not available — silently ignore
+  }
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useWebRTC(
@@ -301,6 +349,7 @@ export function useWebRTC(
   const [isSubHost, setIsSubHost] = useState(false);
   const [isWaiting, setIsWaiting] = useState(false);
   const [pendingParticipants, setPendingParticipants] = useState<PendingParticipant[]>([]);
+  const [lobbyKnockCount, setLobbyKnockCount] = useState(0);
 
   // ── Phase 4 state ──────────────────────────────────────────────────────────
   const [whiteboardElements, setWhiteboardElements] = useState<WhiteboardElement[]>([]);
@@ -329,7 +378,6 @@ export function useWebRTC(
   const prevStatusRef = useRef<ParticipantStatus>("available");
   const sharingRef = useRef(false);
   const myVoteRef = useRef<number | undefined>(undefined);
-  // Expose refs for the noise/blur sub-hooks
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
@@ -586,13 +634,11 @@ export function useWebRTC(
         closePC(socketId);
         setTypingPeers((prev) => prev.filter((p) => p.socketId !== socketId));
         setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
-        // Remove from spatial positions
         setTilePositionsState((prev) => {
           const next = new Map(prev);
           next.delete(socketId);
           return next;
         });
-        // Clean cursor
         setWhiteboardCursors((prev) => prev.filter((c) => c.socketId !== socketId));
       });
 
@@ -622,24 +668,56 @@ export function useWebRTC(
         setIsWaiting(true);
         setIsConnecting(false);
       });
+
       socket.on("admitted", () => setIsWaiting(false));
+
       socket.on("join-request", (data: PendingParticipant) => {
         setPendingParticipants((prev) => {
           if (prev.some((p) => p.socketId === data.socketId)) return prev;
           return [...prev, data];
         });
       });
+
+      /**
+       * FIX: "lobby-knock" is a new event from the server (separate from
+       * join-request) that triggers the audio notification sound.
+       * Decoupled so the sound fires even if join-request is deduplicated.
+       */
+      socket.on("lobby-knock", ({ username: knocker }: { socketId: string; username: string }) => {
+        playLobbyKnockSound();
+        setLobbyKnockCount((n) => n + 1);
+        console.log(`[Lobby] ${knocker} is knocking`);
+      });
+
+      /**
+       * FIX: "lobby-admitted" — server broadcasts to the room when any manager
+       * admits a participant. This keeps all managers' pending lists in sync,
+       * so a co-host's UI clears correctly after the host admits someone.
+       */
+      socket.on("lobby-admitted", ({ socketId: admittedId }: { socketId: string }) => {
+        setPendingParticipants((prev) => prev.filter((p) => p.socketId !== admittedId));
+      });
+
+      /**
+       * FIX: "lobby-rejected" — same as above but for rejections.
+       */
+      socket.on("lobby-rejected", ({ socketId: rejectedId }: { socketId: string }) => {
+        setPendingParticipants((prev) => prev.filter((p) => p.socketId !== rejectedId));
+      });
+
       socket.on("join-rejected", ({ reason }: any) => {
         setError(reason);
         setIsWaiting(false);
         setIsConnecting(false);
       });
+
       socket.on("you-are-host", () => setIsHost(true));
       socket.on("you-are-subhost", () => setIsSubHost(true));
       socket.on("you-are-participant", () => {
         setIsHost(false);
         setIsSubHost(false);
       });
+
       socket.on("host-transferred", (data: any) => {
         if (data.mode === "full") {
           if (data.newHostSocketId === socket.id) {
@@ -669,6 +747,7 @@ export function useWebRTC(
       socket.on("chat-history", (history: any[]) => {
         setMessages(history.map((m) => ({ ...m, reactions: {} })));
       });
+
       socket.on("chat-message", (msg: any) => {
         setMessages((prev) => {
           if (prev.some((m) => m.id === msg.id)) return prev;
@@ -677,6 +756,7 @@ export function useWebRTC(
         if (!chatOpenRef.current && msg.socketId !== socket.id) setUnreadCount((n) => n + 1);
         setTypingPeers((prev) => prev.filter((p) => p.socketId !== msg.socketId));
       });
+
       socket.on("chat-reaction", ({ messageId, emoji, socketId: sid }: any) => {
         setMessages((prev) =>
           prev.map((m) => {
@@ -691,6 +771,7 @@ export function useWebRTC(
           }),
         );
       });
+
       socket.on("chat-typing", ({ socketId: sid, username: uname, isTyping }: any) => {
         setTypingPeers((prev) => {
           if (isTyping) {
@@ -700,13 +781,17 @@ export function useWebRTC(
           return prev.filter((p) => p.socketId !== sid);
         });
       });
+
       socket.on("peer-status", ({ socketId: sid, status }: any) => updatePeer(sid, { status }));
+
       socket.on("hand-raised", ({ socketId: sid, handRaisedAt }: any) =>
         updatePeer(sid, { handRaised: true, handRaisedAt }),
       );
+
       socket.on("hand-lowered", ({ socketId: sid }: any) =>
         updatePeer(sid, { handRaised: false, handRaisedAt: null }),
       );
+
       socket.on("reaction", (event: ReactionEvent) => {
         setReactions((prev) => [...prev, event]);
         setTimeout(() => {
@@ -719,6 +804,7 @@ export function useWebRTC(
       socket.on("whiteboard-state", (elements: WhiteboardElement[]) => {
         setWhiteboardElements(elements ?? []);
       });
+
       socket.on("whiteboard-draw", ({ element }: any) => {
         setWhiteboardElements((prev) => {
           const idx = prev.findIndex((e) => e.id === element.id);
@@ -730,10 +816,13 @@ export function useWebRTC(
           return [...prev, element];
         });
       });
+
       socket.on("whiteboard-erase", ({ elementId }: any) => {
         setWhiteboardElements((prev) => prev.filter((e) => e.id !== elementId));
       });
+
       socket.on("whiteboard-clear", () => setWhiteboardElements([]));
+
       socket.on("whiteboard-cursor", (cursor: WhiteboardCursor) => {
         setWhiteboardCursors((prev) => {
           const idx = prev.findIndex((c) => c.socketId === cursor.socketId);
@@ -744,7 +833,6 @@ export function useWebRTC(
           }
           return [...prev, cursor];
         });
-        // Auto-expire cursor after 3s of inactivity
         setTimeout(() => {
           setWhiteboardCursors((prev) =>
             prev.filter(
@@ -972,11 +1060,13 @@ export function useWebRTC(
 
   const admitParticipant = useCallback((socketId: string) => {
     socketRef.current?.emit("admit-participant", { targetSocketId: socketId });
+    // Optimistic local removal — server will also broadcast lobby-admitted
     setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
   }, []);
 
   const rejectParticipant = useCallback((socketId: string) => {
     socketRef.current?.emit("reject-participant", { targetSocketId: socketId });
+    // Optimistic local removal — server will also broadcast lobby-rejected
     setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
   }, []);
 
@@ -1054,6 +1144,7 @@ export function useWebRTC(
     setLocalHandRaised(false);
     socketRef.current?.emit("lower-hand");
   }, []);
+
   const lowerPeerHand = useCallback((socketId: string) => {
     socketRef.current?.emit("host-lower-hand", { targetSocketId: socketId });
   }, []);
@@ -1070,7 +1161,6 @@ export function useWebRTC(
   // ── Phase 4: Whiteboard ────────────────────────────────────────────────────
 
   const drawWhiteboardElement = useCallback((element: WhiteboardElement) => {
-    // Optimistic update
     setWhiteboardElements((prev) => {
       const idx = prev.findIndex((e) => e.id === element.id);
       if (idx >= 0) {
@@ -1093,6 +1183,32 @@ export function useWebRTC(
     socketRef.current?.emit("whiteboard-clear");
   }, []);
 
+  /**
+   * FIX: syncWhiteboardElements — atomically replaces the entire board state.
+   *
+   * Used by undo/redo in meeting.$id.tsx instead of the old
+   * clearWhiteboard() + drawWhiteboardElement() loop pattern.
+   *
+   * Why the old pattern broke redo:
+   *   clearWhiteboard() → emits "whiteboard-clear" to server
+   *   server broadcasts "whiteboard-clear" to ALL clients including sender
+   *   sender's "whiteboard-clear" socket handler fires AFTER the
+   *   drawWhiteboardElement() calls because socket events are async,
+   *   wiping all the elements that were just re-drawn.
+   *
+   * This new function:
+   *   1. Sets local React state directly (synchronous, no race)
+   *   2. Emits "whiteboard-sync" which replaces server state atomically
+   *   3. Server broadcasts "whiteboard-state" to OTHER peers only (not sender)
+   *   So the sender's state is always correct and peers get the full snapshot.
+   */
+  const syncWhiteboardElements = useCallback((elements: WhiteboardElement[]) => {
+    // Set local state immediately — no async race possible
+    setWhiteboardElements([...elements]);
+    // Tell server to replace its state and broadcast to other peers
+    socketRef.current?.emit("whiteboard-sync", { elements });
+  }, []);
+
   const broadcastWhiteboardCursor = useCallback((x: number, y: number) => {
     socketRef.current?.emit("whiteboard-cursor", { x, y });
   }, []);
@@ -1113,6 +1229,7 @@ export function useWebRTC(
   const closePoll = useCallback(() => {
     socketRef.current?.emit("poll-close");
   }, []);
+
   const dismissPoll = useCallback(() => {
     setCurrentPoll(null);
     socketRef.current?.emit("poll-dismiss");
@@ -1151,9 +1268,15 @@ export function useWebRTC(
   }, []);
 
   // ── Phase 4: Spotlight ─────────────────────────────────────────────────────
-  // activeSpotlightId = manual pin if set, else auto-detected speaker if autoSpotlight on
+
   const activeSpotlightId =
     spotlightId ?? (autoSpotlight ? (isSpeaking ? "local" : speakingPeerId) : null);
+
+  // ── Lobby helpers ──────────────────────────────────────────────────────────
+
+  const clearLobbyKnockCount = useCallback(() => {
+    setLobbyKnockCount(0);
+  }, []);
 
   return {
     localStream,
@@ -1197,12 +1320,12 @@ export function useWebRTC(
     transferHost,
     error,
     isConnecting,
-    // Phase 4
     whiteboardElements,
     whiteboardCursors,
     drawWhiteboardElement,
     eraseWhiteboardElement,
     clearWhiteboard,
+    syncWhiteboardElements,
     broadcastWhiteboardCursor,
     currentPoll,
     createPoll,
@@ -1231,5 +1354,7 @@ export function useWebRTC(
     autoSpotlight,
     setAutoSpotlight,
     activeSpotlightId,
+    lobbyKnockCount,
+    clearLobbyKnockCount,
   };
 }

@@ -1,23 +1,32 @@
 /**
- * meeting.$id.tsx — Lumina Meet
+ * meeting.$id.tsx — Lumina Meet (Phase 4 — Full Lobby RBAC + Whiteboard Redo Fix)
  *
- * REACTION PICKER FIXES (3 bugs were compounding):
+ * CHANGES vs previous version:
  *
- * Bug 1 — ControlBtn `active` prop was inverted for the reaction button.
- *   ControlBtn renders red/dim styling when active=false (meaning "off").
- *   Fixed: active={true} always, so the button is never red in normal state.
+ * 1. LOBBY RBAC UI
+ *    - LobbyGate component: shown to waiting participants with animated pulse,
+ *      "Host has not yet allowed you" messaging, and graceful leave option.
+ *    - LobbyManagerPanel: shown to host AND co-host (canManage), renders a
+ *      full-screen overlay + a persistent badge when pendingParticipants > 0.
+ *    - LobbyKnockToast: appears in top-right with sound cue (from hook),
+ *      username, Admit/Decline quick-action buttons.
+ *    - DenyConfirmModal: elegant confirmation dialog before rejecting a participant.
+ *    - lobbyKnockCount badge on the header lobby button.
+ *    - All lobby controls are gated by `canManage` (isHost || isSubHost).
  *
- * Bug 2 — The reaction picker used `absolute bottom-full` positioning inside
- *   the footer which has `overflow-x-auto`. That creates a new scroll
- *   container that clips absolutely-positioned children that overflow it.
- *   Fixed: ReactionPickerPortal renders via createPortal into document.body,
- *   positioned via getBoundingClientRect() above the anchor button.
+ * 2. WHITEBOARD REDO FIX
+ *    - wbUndo / wbRedo now call `syncWhiteboardElements` (the new hook export)
+ *      instead of clearWhiteboard() + drawWhiteboardElement() loop.
+ *    - This eliminates the async race: clear event was broadcast back to sender
+ *      after the draw calls, wiping newly drawn elements.
+ *    - Redo now works correctly.
  *
- * Bug 3 — The previous outside-click handler used capture:true which could
- *   catch the same click that opened the picker before the setTimeout(0)
- *   fired in some browsers.
- *   Fixed: ReactionPickerPortal owns its own outside-click logic using
- *   mousedown (not click) so it doesn't race with the toggle click.
+ * 3. REACTION PICKER BUGS (preserved from previous version)
+ *    - ReactionPickerPortal renders via createPortal into document.body.
+ *    - active={true} on the ControlBtn so it never turns red.
+ *    - Outside-click via mousedown with setTimeout(0) guard.
+ *
+ * All Phase 1/2/3/4 functionality preserved.
  */
 
 import { createPortal } from "react-dom";
@@ -85,6 +94,16 @@ import {
   Undo2,
   Redo2,
   Type,
+  Bell,
+  BellRing,
+  DoorOpen,
+  DoorClosed,
+  ShieldAlert,
+  UserCheck,
+  UserX,
+  LogIn,
+  Unlock,
+  Lock,
 } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
 import { NeonButton } from "@/components/ui-custom/NeonButton";
@@ -99,6 +118,7 @@ import {
   type Poll,
   type AgendaState,
   type TilePosition,
+  type PendingParticipant,
 } from "@/hooks/useWebRTC";
 import { useAmbientSound, type SoundscapeId } from "@/hooks/useAmbientSound";
 import { apiClient } from "@/api/apiClient";
@@ -158,7 +178,7 @@ const STATUS_CONFIG: Record<
 };
 const MANUAL_STATUSES: ParticipantStatus[] = ["available", "busy", "away", "brb"];
 
-type PanelType = "participants" | "chat" | "whiteboard" | "polls" | "agenda" | null;
+type PanelType = "participants" | "chat" | "whiteboard" | "polls" | "agenda" | "lobby" | null;
 type LayoutMode = "grid" | "spatial" | "cinema";
 
 // ─── Portal Dropdown ──────────────────────────────────────────────────────────
@@ -240,14 +260,7 @@ function PortalDropdown({
 }
 
 // ─── Reaction Picker Portal ───────────────────────────────────────────────────
-/**
- * Renders the emoji grid via createPortal so it is never clipped by the
- * footer's overflow-x-auto scroll container. Positioned ABOVE the anchor
- * using getBoundingClientRect(), centred horizontally.
- *
- * Outside-click uses `mousedown` (not `click`) so it never races with the
- * toggle-click handler on the React button.
- */
+
 function ReactionPickerPortal({
   anchorRef,
   open,
@@ -261,13 +274,11 @@ function ReactionPickerPortal({
 }) {
   const [pos, setPos] = useState({ bottom: 0, centerX: 0 });
 
-  // Recompute position whenever open state changes or window resizes
   useEffect(() => {
     if (!open || !anchorRef.current) return;
     const update = () => {
       const rect = anchorRef.current!.getBoundingClientRect();
       setPos({
-        // Place picker above the button with 8px gap
         bottom: window.innerHeight - rect.top + 8,
         centerX: rect.left + rect.width / 2,
       });
@@ -277,18 +288,14 @@ function ReactionPickerPortal({
     return () => window.removeEventListener("resize", update);
   }, [open, anchorRef]);
 
-  // Close on outside mousedown — use mousedown so it fires before any click
-  // handler and doesn't race with the button's own toggle-click.
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      // Ignore clicks on the anchor button itself (the toggle handles that)
       if (anchorRef.current?.contains(e.target as Node)) return;
       const pickerEl = document.getElementById("reaction-picker-portal");
       if (pickerEl?.contains(e.target as Node)) return;
       onClose();
     };
-    // Small delay so the mousedown that opened the picker isn't caught
     const timer = setTimeout(() => {
       document.addEventListener("mousedown", handler);
     }, 0);
@@ -345,6 +352,446 @@ function ReactionPickerPortal({
   );
 }
 
+// ─── Lobby Knock Toast ────────────────────────────────────────────────────────
+/**
+ * Appears in the top-right for host/co-host when a new participant knocks.
+ * Shows username, animated pulse ring, Admit / Decline buttons.
+ * Deny triggers a confirmation modal before emitting reject.
+ */
+function LobbyKnockToast({
+  participant,
+  onAdmit,
+  onDeny,
+  onDismiss,
+}: {
+  participant: PendingParticipant;
+  onAdmit: () => void;
+  onDeny: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: 80, scale: 0.9 }}
+      animate={{ opacity: 1, x: 0, scale: 1 }}
+      exit={{ opacity: 0, x: 80, scale: 0.9 }}
+      transition={{ type: "spring", damping: 22, stiffness: 300 }}
+      className="relative overflow-hidden rounded-2xl border border-[var(--neon-primary)]/40 bg-[oklch(0.17_0.025_265/0.95)] backdrop-blur-xl shadow-[0_8px_40px_-8px_oklch(0.65_0.22_280/0.5)] w-80"
+    >
+      {/* Animated shimmer bar at top */}
+      <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-[var(--neon-primary)] to-transparent opacity-80 shimmer" />
+
+      <div className="p-4">
+        <div className="flex items-start gap-3">
+          {/* Pulsing avatar */}
+          <div className="relative shrink-0">
+            <div className="absolute inset-0 rounded-full bg-[var(--neon-primary)]/30 animate-ping" />
+            <div className="relative">
+              <Avatar
+                name={participant.username}
+                hue={hueForName(participant.username)}
+                size={40}
+              />
+            </div>
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-0.5">
+              <BellRing className="h-3.5 w-3.5 text-[var(--neon-primary)] shrink-0 animate-pulse" />
+              <p className="text-[11px] uppercase tracking-wider text-[var(--neon-primary)] font-semibold">
+                Lobby knock
+              </p>
+            </div>
+            <p className="text-sm font-semibold truncate">{participant.username}</p>
+            <p className="text-[11px] text-muted-foreground">is waiting to join</p>
+          </div>
+
+          <button
+            onClick={onDismiss}
+            className="shrink-0 text-muted-foreground hover:text-foreground transition mt-0.5"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        <div className="flex gap-2 mt-3">
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={onAdmit}
+            className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-[var(--neon-primary)]/20 border border-[var(--neon-primary)]/40 py-2 text-xs font-semibold text-[var(--neon-primary)] hover:bg-[var(--neon-primary)]/30 transition"
+          >
+            <UserCheck className="h-3.5 w-3.5" /> Admit
+          </motion.button>
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={onDeny}
+            className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-[oklch(0.72_0.22_35)]/15 border border-[oklch(0.72_0.22_35)]/35 py-2 text-xs font-semibold text-[oklch(0.82_0.2_35)] hover:bg-[oklch(0.72_0.22_35)]/25 transition"
+          >
+            <UserX className="h-3.5 w-3.5" /> Decline
+          </motion.button>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+// ─── Deny Confirm Modal ───────────────────────────────────────────────────────
+/**
+ * Shown before actually rejecting a participant — prevents accidental denials.
+ */
+function DenyConfirmModal({
+  participant,
+  onConfirm,
+  onCancel,
+}: {
+  participant: PendingParticipant;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return createPortal(
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/75 backdrop-blur-lg"
+      onClick={onCancel}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.85, y: 24 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.85, y: 24 }}
+        transition={{ type: "spring", damping: 22, stiffness: 300 }}
+        className="relative mx-4 w-full max-w-sm"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Glow halo */}
+        <div className="absolute -inset-1.5 rounded-[2rem] bg-gradient-to-br from-[oklch(0.72_0.22_35)] to-[oklch(0.65_0.22_280)] opacity-25 blur-2xl" />
+
+        <div className="relative glass-strong rounded-3xl border border-white/10 p-8 text-center overflow-hidden">
+          {/* Top shimmer */}
+          <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[oklch(0.72_0.22_35)] to-transparent" />
+
+          {/* Icon */}
+          <motion.div
+            animate={{ scale: [1, 1.08, 1] }}
+            transition={{ duration: 2, repeat: Infinity }}
+            className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-[oklch(0.72_0.22_35)]/15 border border-[oklch(0.72_0.22_35)]/30"
+          >
+            <ShieldAlert className="h-8 w-8 text-[oklch(0.82_0.2_35)]" />
+          </motion.div>
+
+          <h2 className="text-xl font-bold mb-2">Decline admission?</h2>
+          <p className="text-sm text-muted-foreground mb-1">Are you sure you don't want to let</p>
+          <p className="text-base font-semibold text-[var(--neon-primary)] mb-1">
+            {participant.username}
+          </p>
+          <p className="text-sm text-muted-foreground mb-6">
+            into the meeting? They'll be notified and disconnected from the lobby.
+          </p>
+
+          <div className="flex gap-3">
+            <NeonButton variant="outline" onClick={onCancel} className="flex-1">
+              Cancel
+            </NeonButton>
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.97 }}
+              onClick={onConfirm}
+              className="flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[oklch(0.65_0.25_25)] to-[oklch(0.72_0.22_35)] py-2.5 text-sm font-semibold text-white"
+            >
+              <UserX className="h-4 w-4" /> Yes, decline
+            </motion.button>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>,
+    document.body,
+  );
+}
+
+// ─── Lobby Gate (shown to waiting participant) ────────────────────────────────
+
+function LobbyGate({ username, onLeave }: { username: string; onLeave: () => void }) {
+  const [dotCount, setDotCount] = useState(1);
+  useEffect(() => {
+    const t = setInterval(() => setDotCount((n) => (n % 3) + 1), 600);
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <div className="flex min-h-screen items-center justify-center px-4 relative z-10 overflow-hidden">
+      {/* Ambient orbs */}
+      <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
+        <motion.div
+          className="absolute -top-32 -left-32 h-96 w-96 rounded-full opacity-20"
+          style={{ background: "radial-gradient(circle, oklch(0.65 0.22 280), transparent 70%)" }}
+          animate={{ scale: [1, 1.15, 1], x: [0, 30, 0], y: [0, -20, 0] }}
+          transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
+        />
+        <motion.div
+          className="absolute -bottom-32 -right-32 h-96 w-96 rounded-full opacity-15"
+          style={{ background: "radial-gradient(circle, oklch(0.82 0.16 210), transparent 70%)" }}
+          animate={{ scale: [1, 1.2, 1], x: [0, -20, 0], y: [0, 20, 0] }}
+          transition={{ duration: 15, repeat: Infinity, ease: "easeInOut", delay: 3 }}
+        />
+      </div>
+
+      <motion.div
+        initial={{ opacity: 0, scale: 0.9, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ type: "spring", damping: 22, stiffness: 280 }}
+        className="relative mx-auto w-full max-w-md"
+      >
+        {/* Outer glow */}
+        <div className="absolute -inset-2 rounded-[2.5rem] bg-gradient-to-br from-[var(--neon-primary)]/20 via-[var(--neon-accent)]/10 to-[var(--neon-secondary)]/20 blur-2xl" />
+
+        <div className="relative glass-strong rounded-3xl border border-[var(--neon-primary)]/20 overflow-hidden">
+          {/* Top gradient strip */}
+          <div className="h-1 bg-gradient-to-r from-[var(--neon-primary)] via-[var(--neon-accent)] to-[var(--neon-secondary)]" />
+
+          <div className="p-10 text-center">
+            {/* Animated door icon */}
+            <div className="mx-auto mb-6 relative w-20 h-20">
+              <motion.div
+                className="absolute inset-0 rounded-2xl bg-[var(--neon-primary)]/10 border border-[var(--neon-primary)]/20"
+                animate={{ scale: [1, 1.12, 1] }}
+                transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
+              />
+              <motion.div
+                className="absolute -inset-2 rounded-3xl"
+                style={{
+                  background:
+                    "radial-gradient(circle, oklch(0.65 0.22 280 / 0.3), transparent 70%)",
+                }}
+                animate={{ opacity: [0.4, 0.8, 0.4] }}
+                transition={{ duration: 2, repeat: Infinity }}
+              />
+              <div className="relative flex h-full w-full items-center justify-center">
+                <DoorClosed className="h-9 w-9 text-[var(--neon-primary)]" />
+              </div>
+            </div>
+
+            {/* Greeting */}
+            <h2 className="text-2xl font-bold text-gradient mb-1">Hi, {username}!</h2>
+            <p className="text-base font-medium mb-1">You're in the lobby</p>
+            <p className="text-sm text-muted-foreground mb-6 max-w-xs mx-auto">
+              The host has been notified. Please wait while they review your request to join.
+            </p>
+
+            {/* Animated waiting indicator */}
+            <div className="mb-8 flex items-center justify-center gap-3 rounded-2xl border border-white/8 bg-white/4 px-5 py-3">
+              <div className="flex gap-1 items-end">
+                {[0, 1, 2].map((i) => (
+                  <motion.span
+                    key={i}
+                    className="w-1.5 rounded-full bg-[var(--neon-secondary)]"
+                    animate={{ height: ["6px", "14px", "6px"] }}
+                    transition={{ duration: 1, repeat: Infinity, delay: i * 0.2 }}
+                  />
+                ))}
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Waiting for host approval
+                <span className="inline-block w-6 text-left">{".".repeat(dotCount)}</span>
+              </p>
+            </div>
+
+            {/* Steps */}
+            <div className="space-y-2.5 mb-8 text-left">
+              {[
+                { icon: <BellRing className="h-4 w-4" />, label: "Host notified", done: true },
+                {
+                  icon: <Hourglass className="h-4 w-4" />,
+                  label: "Waiting for permission",
+                  active: true,
+                },
+                { icon: <DoorOpen className="h-4 w-4" />, label: "Enter meeting", done: false },
+              ].map((step, i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    "flex items-center gap-3 rounded-xl px-3 py-2.5 border transition",
+                    step.done
+                      ? "border-[oklch(0.75_0.18_145)/0.3] bg-[oklch(0.75_0.18_145)/0.07] text-[oklch(0.85_0.15_145)]"
+                      : step.active
+                        ? "border-[var(--neon-primary)]/30 bg-[var(--neon-primary)]/7 text-[var(--neon-primary)]"
+                        : "border-white/5 bg-white/3 text-muted-foreground/50",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg",
+                      step.done
+                        ? "bg-[oklch(0.75_0.18_145)/0.2]"
+                        : step.active
+                          ? "bg-[var(--neon-primary)]/15"
+                          : "bg-white/5",
+                    )}
+                  >
+                    {step.active ? (
+                      <motion.span
+                        animate={{ rotate: 360 }}
+                        transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                      >
+                        {step.icon}
+                      </motion.span>
+                    ) : (
+                      step.icon
+                    )}
+                  </span>
+                  <span className="text-sm font-medium">{step.label}</span>
+                  {step.done && (
+                    <CheckCircle2 className="ml-auto h-4 w-4 text-[oklch(0.75_0.18_145)]" />
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <NeonButton variant="outline" onClick={onLeave} className="w-full">
+              <PhoneOff className="h-4 w-4 mr-2" />
+              Leave lobby
+            </NeonButton>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// ─── Lobby Manager Panel (side panel for host/cohost) ─────────────────────────
+
+function LobbyManagerPanel({
+  pendingParticipants,
+  onAdmit,
+  onDeny,
+  onClose,
+}: {
+  pendingParticipants: PendingParticipant[];
+  onAdmit: (socketId: string) => void;
+  onDeny: (p: PendingParticipant) => void;
+  onClose: () => void;
+}) {
+  return (
+    <motion.aside
+      initial={{ x: 340 }}
+      animate={{ x: 0 }}
+      exit={{ x: 340 }}
+      transition={{ type: "spring", damping: 26, stiffness: 250 }}
+      className="absolute right-0 top-0 bottom-0 w-80 max-w-full glass-strong border-l border-white/10 overflow-y-auto z-10 flex flex-col"
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between p-5 border-b border-white/5 shrink-0">
+        <h3 className="text-sm font-semibold flex items-center gap-2">
+          <div className="relative">
+            <DoorOpen className="h-4 w-4 text-[var(--neon-primary)]" />
+            {pendingParticipants.length > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 h-3 w-3 rounded-full bg-[var(--neon-danger)] text-[8px] font-bold text-white flex items-center justify-center">
+                {pendingParticipants.length}
+              </span>
+            )}
+          </div>
+          Lobby{" "}
+          <span className="text-muted-foreground font-normal">
+            ({pendingParticipants.length} waiting)
+          </span>
+        </h3>
+        <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4">
+        {pendingParticipants.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 gap-4">
+            <motion.div
+              animate={{ scale: [1, 1.05, 1] }}
+              transition={{ duration: 3, repeat: Infinity }}
+              className="h-16 w-16 rounded-2xl border border-white/10 bg-white/5 flex items-center justify-center"
+            >
+              <DoorClosed className="h-8 w-8 text-muted-foreground/40" />
+            </motion.div>
+            <div className="text-center">
+              <p className="text-sm font-medium text-muted-foreground">Lobby is empty</p>
+              <p className="text-xs text-muted-foreground/50 mt-1">
+                Participants will appear here when they knock
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {pendingParticipants.map((p, i) => (
+              <motion.div
+                key={p.socketId}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                transition={{ delay: i * 0.05 }}
+                className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/4"
+              >
+                {/* Inner shimmer */}
+                <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[var(--neon-primary)]/30 to-transparent" />
+
+                <div className="p-3.5">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="relative">
+                      <div
+                        className="absolute inset-0 rounded-full bg-[var(--neon-primary)]/20 animate-ping"
+                        style={{ animationDuration: "2s" }}
+                      />
+                      <Avatar name={p.username} hue={hueForName(p.username)} size={36} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold truncate">{p.username}</p>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-[oklch(0.8_0.18_80)] animate-pulse" />
+                        <p className="text-[11px] text-muted-foreground">Waiting in lobby</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.97 }}
+                      onClick={() => onAdmit(p.socketId)}
+                      className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-[var(--neon-primary)]/15 border border-[var(--neon-primary)]/30 py-2 text-xs font-semibold text-[var(--neon-primary)] hover:bg-[var(--neon-primary)]/25 transition"
+                    >
+                      <UserCheck className="h-3.5 w-3.5" />
+                      Admit
+                    </motion.button>
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.97 }}
+                      onClick={() => onDeny(p)}
+                      className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-[oklch(0.72_0.22_35)]/10 border border-[oklch(0.72_0.22_35)]/25 py-2 text-xs font-semibold text-[oklch(0.82_0.2_35)] hover:bg-[oklch(0.72_0.22_35)]/20 transition"
+                    >
+                      <UserX className="h-3.5 w-3.5" />
+                      Decline
+                    </motion.button>
+                  </div>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Bottom tip */}
+      {pendingParticipants.length > 0 && (
+        <div className="p-4 border-t border-white/5 shrink-0">
+          <div className="flex items-start gap-2 rounded-xl border border-[var(--neon-primary)]/15 bg-[var(--neon-primary)]/5 p-3">
+            <ShieldCheck className="h-3.5 w-3.5 text-[var(--neon-primary)] shrink-0 mt-0.5" />
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              Only host and co-hosts can manage lobby access.
+            </p>
+          </div>
+        </div>
+      )}
+    </motion.aside>
+  );
+}
+
 // ─── Root component ───────────────────────────────────────────────────────────
 
 function MeetingRoom() {
@@ -396,7 +843,7 @@ function CountdownScreen({ scheduledFor, now }: { scheduledFor: number; now: num
         animate={{ opacity: 1, scale: 1 }}
         className="glass-strong rounded-3xl p-10 text-center max-w-md"
       >
-        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gradient-neon glow-primary">
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gradient-neon animate-pulse-glow">
           <Hourglass className="h-8 w-8 text-white" />
         </div>
         <h2 className="mt-5 text-2xl font-semibold">Meeting not started yet</h2>
@@ -449,15 +896,18 @@ function Room({
   const [showLeaveModal, setShowLeaveModal] = useState(false);
   const [transferTarget, setTransferTarget] = useState<RemotePeer | null>(null);
 
+  // Lobby state for host/cohost
+  // toastQueue: participants currently showing a knock toast (dismissed separately from pendingParticipants)
+  const [toastQueue, setToastQueue] = useState<PendingParticipant[]>([]);
+  // participant pending deny confirmation
+  const [denyTarget, setDenyTarget] = useState<PendingParticipant | null>(null);
+  // track which toasts have been dismissed (so they don't re-appear)
+  const dismissedToastsRef = useRef<Set<string>>(new Set());
+
   const layoutBtnRef = useRef<HTMLButtonElement>(null);
   const statusBtnRef = useRef<HTMLButtonElement>(null);
-
-  // FIX: ref for the reaction button container — used by ReactionPickerPortal
-  // to calculate position. No longer using reactionPickerRootRef or a manual
-  // document click listener in Room; the portal component handles all of that.
   const reactionBtnContainerRef = useRef<HTMLDivElement>(null);
 
-  // Stable close callback
   const handleCloseReactionPicker = useCallback(() => {
     setReactionPickerOpen(false);
   }, []);
@@ -543,6 +993,7 @@ function Room({
     drawWhiteboardElement,
     eraseWhiteboardElement,
     clearWhiteboard,
+    syncWhiteboardElements, // ← FIX: new atomic sync
     broadcastWhiteboardCursor,
     currentPoll,
     createPoll,
@@ -571,6 +1022,8 @@ function Room({
     autoSpotlight,
     setAutoSpotlight,
     activeSpotlightId,
+    lobbyKnockCount,
+    clearLobbyKnockCount,
   } = webrtc;
 
   const canManage = isHost || isSubHost;
@@ -589,6 +1042,53 @@ function Room({
     return () => window.removeEventListener("Lumina Meet:host-removed", handler);
   }, [leaveRoom, onLeave]);
 
+  // ── Lobby toast management ──────────────────────────────────────────────────
+  // When a new participant appears in pendingParticipants and hasn't been dismissed yet,
+  // add them to the toast queue (max 3 visible at once).
+  useEffect(() => {
+    if (!canManage) return;
+    pendingParticipants.forEach((p) => {
+      if (dismissedToastsRef.current.has(p.socketId)) return;
+      setToastQueue((prev) => {
+        if (prev.some((t) => t.socketId === p.socketId)) return prev;
+        return [...prev, p];
+      });
+    });
+    // Remove toasts for participants no longer pending (admitted/rejected elsewhere)
+    setToastQueue((prev) =>
+      prev.filter((t) => pendingParticipants.some((p) => p.socketId === t.socketId)),
+    );
+  }, [pendingParticipants, canManage]);
+
+  const dismissToast = useCallback((socketId: string) => {
+    dismissedToastsRef.current.add(socketId);
+    setToastQueue((prev) => prev.filter((t) => t.socketId !== socketId));
+  }, []);
+
+  const handleAdmitFromToast = useCallback(
+    (socketId: string) => {
+      admitParticipant(socketId);
+      dismissToast(socketId);
+    },
+    [admitParticipant, dismissToast],
+  );
+
+  const handleDenyRequest = useCallback((p: PendingParticipant) => {
+    setDenyTarget(p);
+  }, []);
+
+  const handleDenyConfirm = useCallback(() => {
+    if (!denyTarget) return;
+    rejectParticipant(denyTarget.socketId);
+    dismissToast(denyTarget.socketId);
+    setDenyTarget(null);
+  }, [denyTarget, rejectParticipant, dismissToast]);
+
+  // Clear lobby knock badge when lobby panel opens
+  useEffect(() => {
+    if (activePanel === "lobby") clearLobbyKnockCount();
+  }, [activePanel, clearLobbyKnockCount]);
+
   // ── Whiteboard helpers ─────────────────────────────────────────────────────
 
   const wbPushUndo = useCallback((snapshot: WhiteboardElement[]) => {
@@ -596,29 +1096,37 @@ function Room({
     setWbRedoStack([]);
   }, []);
 
+  /**
+   * FIX: wbUndo now uses syncWhiteboardElements instead of
+   * clearWhiteboard() + drawWhiteboardElement() loop.
+   * This avoids the async race where "whiteboard-clear" broadcast arrives
+   * after the draw calls, erasing everything.
+   */
   const wbUndo = useCallback(() => {
     setWbUndoStack((prev) => {
       if (!prev.length) return prev;
       const stack = [...prev];
       const snapshot = stack.pop()!;
       setWbRedoStack((r) => [...r, [...whiteboardElements]]);
-      clearWhiteboard();
-      snapshot.forEach((el) => drawWhiteboardElement(el));
+      syncWhiteboardElements(snapshot);
       return stack;
     });
-  }, [whiteboardElements, clearWhiteboard, drawWhiteboardElement]);
+  }, [whiteboardElements, syncWhiteboardElements]);
 
+  /**
+   * FIX: wbRedo now uses syncWhiteboardElements for the same reason.
+   * This is the primary fix for redo not working.
+   */
   const wbRedo = useCallback(() => {
     setWbRedoStack((prev) => {
       if (!prev.length) return prev;
       const stack = [...prev];
       const snapshot = stack.pop()!;
       setWbUndoStack((u) => [...u, [...whiteboardElements]]);
-      clearWhiteboard();
-      snapshot.forEach((el) => drawWhiteboardElement(el));
+      syncWhiteboardElements(snapshot);
       return stack;
     });
-  }, [whiteboardElements, clearWhiteboard, drawWhiteboardElement]);
+  }, [whiteboardElements, syncWhiteboardElements]);
 
   useEffect(() => {
     if (activePanel !== "whiteboard") return;
@@ -844,11 +1352,11 @@ function Room({
     setActivePanel((prev) => {
       if (prev === panel) return null;
       if (panel === "chat") markRead();
+      if (panel === "lobby") clearLobbyKnockCount();
       return panel;
     });
   };
 
-  // FIX: stable handler — closes the picker then fires the reaction
   const handleSendReaction = useCallback(
     (emoji: string) => {
       sendReaction(emoji);
@@ -885,34 +1393,25 @@ function Room({
     );
   }
 
+  // ── Waiting participant sees the LobbyGate ─────────────────────────────────
   if (isWaiting) {
     return (
-      <div className="flex min-h-screen items-center justify-center px-4 relative z-10">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="glass-strong rounded-3xl p-10 text-center max-w-md border border-[var(--neon-primary)]/20"
-        >
-          <motion.div
-            animate={{ scale: [1, 1.1, 1], opacity: [0.5, 1, 0.5] }}
-            transition={{ duration: 2, repeat: Infinity }}
-            className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-[var(--neon-primary)] to-[var(--neon-accent)] glow-primary mb-4"
-          >
-            <Hourglass className="h-8 w-8 text-white" />
-          </motion.div>
-          <h2 className="text-2xl font-semibold text-gradient">Waiting in lobby</h2>
-          <p className="mt-2 text-sm text-muted-foreground">
-            The host has been notified. Please wait.
-          </p>
-          <div className="mt-6 flex justify-center">
-            <NeonButton variant="outline" onClick={onLeave}>
-              Leave lobby
-            </NeonButton>
-          </div>
-        </motion.div>
-      </div>
+      <LobbyGate
+        username={username}
+        onLeave={() => {
+          leaveRoom();
+          onLeave();
+        }}
+      />
     );
   }
+
+  // ── Lobby knock badge count (for header button) ───────────────────────────
+  const effectiveLobbyBadge = canManage
+    ? lobbyKnockCount > 0 && activePanel !== "lobby"
+      ? lobbyKnockCount
+      : 0
+    : 0;
 
   return (
     <div className="flex min-h-screen flex-col overflow-hidden" style={{ background: "#0B0F19" }}>
@@ -931,6 +1430,50 @@ function Room({
           transition={{ duration: 15, repeat: Infinity, ease: "easeInOut", delay: 3 }}
         />
       </div>
+
+      {/* ── Lobby Knock Toasts (top-right, for host/cohost only) ──────────── */}
+      <AnimatePresence>
+        {canManage && toastQueue.length > 0 && (
+          <div className="fixed top-20 right-4 z-[9990] flex flex-col gap-3 pointer-events-none">
+            {toastQueue.slice(0, 3).map((p) => (
+              <div key={p.socketId} className="pointer-events-auto">
+                <LobbyKnockToast
+                  participant={p}
+                  onAdmit={() => handleAdmitFromToast(p.socketId)}
+                  onDeny={() => handleDenyRequest(p)}
+                  onDismiss={() => dismissToast(p.socketId)}
+                />
+              </div>
+            ))}
+            {toastQueue.length > 3 && (
+              <motion.div
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                className="pointer-events-auto glass-strong rounded-xl border border-white/10 px-3 py-2 text-xs text-muted-foreground text-center"
+              >
+                +{toastQueue.length - 3} more waiting →{" "}
+                <button
+                  onClick={() => togglePanel("lobby")}
+                  className="text-[var(--neon-primary)] hover:underline"
+                >
+                  Open lobby
+                </button>
+              </motion.div>
+            )}
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Deny Confirmation Modal ────────────────────────────────────────── */}
+      <AnimatePresence>
+        {denyTarget && (
+          <DenyConfirmModal
+            participant={denyTarget}
+            onConfirm={handleDenyConfirm}
+            onCancel={() => setDenyTarget(null)}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Cinema exit FAB */}
       <AnimatePresence>
@@ -1013,6 +1556,26 @@ function Room({
                   >
                     <BarChart2 className="h-3 w-3" />
                     <span>Live poll</span>
+                  </motion.button>
+                )}
+              </AnimatePresence>
+              {/* Lobby waiting indicator in header (host/cohost only) */}
+              <AnimatePresence>
+                {canManage && pendingParticipants.length > 0 && (
+                  <motion.button
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    onClick={() => togglePanel("lobby")}
+                    className="hidden sm:flex items-center gap-1.5 rounded-full border border-[oklch(0.8_0.18_80)/0.5] bg-[oklch(0.8_0.18_80)/0.12] px-2.5 py-1 text-[11px] text-[oklch(0.9_0.18_80)] animate-pulse-glow shrink-0"
+                  >
+                    <motion.span
+                      animate={{ scale: [1, 1.3, 1] }}
+                      transition={{ duration: 1, repeat: Infinity }}
+                    >
+                      🔔
+                    </motion.span>
+                    <span>{pendingParticipants.length} in lobby</span>
                   </motion.button>
                 )}
               </AnimatePresence>
@@ -1110,6 +1673,10 @@ function Room({
                   ["polls", <BarChart2 className="h-4 w-4" />, 0],
                   ["agenda", <ListChecks className="h-4 w-4" />, 0],
                   ["participants", <Users className="h-4 w-4" />, 0],
+                  // Lobby button only visible to host/cohost
+                  ...(canManage
+                    ? [["lobby", <DoorOpen className="h-4 w-4" />, effectiveLobbyBadge] as const]
+                    : []),
                 ] as const
               ).map(([panel, icon, badge]) => (
                 <button
@@ -1120,7 +1687,9 @@ function Room({
                     "relative rounded-lg border p-2 transition",
                     activePanel === panel
                       ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
-                      : "border-white/10 bg-white/5 hover:bg-white/10",
+                      : panel === "lobby" && pendingParticipants.length > 0
+                        ? "border-[oklch(0.8_0.18_80)/0.5] bg-[oklch(0.8_0.18_80)/0.1] text-[oklch(0.9_0.18_80)] animate-pulse-glow"
+                        : "border-white/10 bg-white/5 hover:bg-white/10",
                   )}
                 >
                   {icon}
@@ -1183,48 +1752,6 @@ function Room({
               </div>
             </div>
           </motion.header>
-        )}
-      </AnimatePresence>
-
-      {/* Lobby banner */}
-      <AnimatePresence>
-        {isHost && pendingParticipants.length > 0 && !isCinema && (
-          <motion.div
-            initial={{ opacity: 0, y: -20, height: 0 }}
-            animate={{ opacity: 1, y: 0, height: "auto" }}
-            exit={{ opacity: 0, y: -20, height: 0 }}
-            className="relative z-20 mx-4 mt-3 glass-strong rounded-2xl border border-[var(--neon-primary)]/30 p-4 max-h-64 overflow-y-auto"
-          >
-            <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
-              <Users className="h-4 w-4 text-[var(--neon-primary)]" /> Lobby{" "}
-              <span className="text-muted-foreground">({pendingParticipants.length} waiting)</span>
-            </h3>
-            <div className="space-y-2">
-              {pendingParticipants.map((p) => (
-                <div
-                  key={p.socketId}
-                  className="flex items-center gap-3 rounded-xl bg-white/5 border border-white/10 p-2.5"
-                >
-                  <Avatar name={p.username} hue={hueForName(p.username)} size={32} />
-                  <span className="text-sm font-medium flex-1">{p.username}</span>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => admitParticipant(p.socketId)}
-                      className="flex items-center gap-1 rounded-lg bg-[var(--neon-primary)]/20 border border-[var(--neon-primary)]/30 px-3 py-1.5 text-xs text-[var(--neon-primary)] hover:bg-[var(--neon-primary)]/30 transition"
-                    >
-                      <CheckCircle2 className="h-3 w-3" /> Admit
-                    </button>
-                    <button
-                      onClick={() => rejectParticipant(p.socketId)}
-                      className="flex items-center gap-1 rounded-lg bg-[oklch(0.72_0.22_35)]/15 border border-[oklch(0.72_0.22_35)]/30 px-3 py-1.5 text-xs text-[oklch(0.78_0.2_35)] hover:bg-[oklch(0.72_0.22_35)]/25 transition"
-                    >
-                      <X className="h-3 w-3" /> Decline
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </motion.div>
         )}
       </AnimatePresence>
 
@@ -1390,6 +1917,15 @@ function Room({
               onClose={() => setActivePanel(null)}
             />
           )}
+          {/* Lobby panel — only for host/cohost */}
+          {activePanel === "lobby" && canManage && (
+            <LobbyManagerPanel
+              pendingParticipants={pendingParticipants}
+              onAdmit={admitParticipant}
+              onDeny={handleDenyRequest}
+              onClose={() => setActivePanel(null)}
+            />
+          )}
         </AnimatePresence>
       </div>
 
@@ -1424,6 +1960,10 @@ function Room({
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: 60 }}
             className="absolute top-20 right-4 z-30 flex items-center gap-2 rounded-2xl border border-[oklch(0.8_0.18_80)/0.4] bg-black/70 backdrop-blur px-4 py-2 text-sm text-[oklch(0.9_0.18_80)]"
+            style={{
+              top: canManage && toastQueue.length > 0 ? "auto" : undefined,
+              bottom: canManage && toastQueue.length > 0 ? "96px" : undefined,
+            }}
           >
             <motion.span
               animate={{ rotate: [0, 20, -10, 20, 0] }}
@@ -1476,15 +2016,6 @@ function Room({
               highlightColor="oklch(0.8 0.18 80)"
             />
 
-            {/*
-              FIX: The wrapper div carries the ref used by ReactionPickerPortal
-              to measure position. The ControlBtn itself is always active=true
-              so it NEVER turns red in its idle state — it only gets the
-              neon-primary highlight when the picker is open (highlightOn).
-
-              The ReactionPickerPortal renders via createPortal into document.body,
-              so it is never clipped by the footer's overflow-x-auto container.
-            */}
             <div ref={reactionBtnContainerRef} className="relative">
               <ControlBtn
                 active={true}
@@ -1496,7 +2027,6 @@ function Room({
               />
             </div>
 
-            {/* Portal-based reaction picker — rendered into document.body */}
             <ReactionPickerPortal
               anchorRef={reactionBtnContainerRef as React.RefObject<HTMLElement>}
               open={reactionPickerOpen}
