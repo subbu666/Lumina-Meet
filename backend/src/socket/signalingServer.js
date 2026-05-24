@@ -1,11 +1,33 @@
 /**
  * WebRTC Signaling Server — Lumina Meet Phase 4
  *
- * FIXES in this version:
- *  • Lobby join-request is now broadcast to BOTH host AND subhost (RBAC fix)
- *  • admit-participant now accepts actions from host OR subhost
- *  • reject-participant now accepts actions from host OR subhost
- *  • Lobby notification sound event sent alongside join-request
+ * LOBBY FIXES in this version:
+ *
+ * FIX 1 — Gate condition was too strict:
+ *   OLD: meeting?.settings?.waitingRoom && !isHost && meeting.status === "active"
+ *   Problems:
+ *     a) settings.waitingRoom defaults to undefined — falsy — so the gate never fires
+ *        unless the meeting document explicitly has waitingRoom: true set in the DB.
+ *     b) meeting.status === "active" fails for newly created meetings whose status
+ *        might be "pending" or "scheduled" until the host joins.
+ *   NEW: Gate fires whenever a meeting record exists and the joiner is not a host/subhost.
+ *   Use settings.waitingRoom === false to EXPLICITLY disable the lobby.
+ *
+ * FIX 2 — isSubHost not considered at gate:
+ *   Co-hosts who rejoin mid-meeting were sent to the lobby because socket.data.isSubHost
+ *   is only set after a full join. Now the gate checks the in-memory room state to see
+ *   if this userId was previously a subhost.
+ *
+ * FIX 3 — join-request broadcast only went to peers with isHost:
+ *   Co-hosts in the room never received join-request or lobby-knock events.
+ *   Fixed: iterate room peers and emit to both isHost and isSubHost.
+ *   (This fix was already noted in comments but the forEach condition was wrong —
+ *   it used peer.isHost || peer.isSubHost correctly, but socket.data.isSubHost was
+ *   never set on the co-host's socket when they joined, so it was always false.)
+ *
+ * FIX 4 — admit-participant / reject-participant used socket.data.isHost only:
+ *   Now uses isHostOrSubhost() which checks both isHost and isSubHost.
+ *   socket.data.isSubHost is now correctly set when subhost joins.
  *
  * All existing Phase 1/2/3/4 functionality is preserved unchanged.
  */
@@ -78,11 +100,11 @@ function sanitizeText(text) {
 }
 
 /**
- * FIX: Previously only checked isHost. Now checks isHost OR isSubHost
- * so co-hosts can perform privileged lobby/whiteboard/poll actions.
+ * FIX 4: Check both isHost and isSubHost on the socket data.
+ * socket.data.isSubHost is now correctly set when subhost joins (see join-room handler).
  */
 function isHostOrSubhost(socket) {
-  return socket.data.isHost || socket.data.isSubHost;
+  return socket.data.isHost === true || socket.data.isSubHost === true;
 }
 
 // ─── Session tracking ─────────────────────────────────────────────────────────
@@ -116,7 +138,6 @@ async function handleRoomLeave(roomId) {
     if (meeting.type === "scheduled") return;
     await meeting.closeCurrentSession();
 
-    // Clean up Phase 4 ephemeral state
     whiteboardState.delete(roomId);
     pollState.delete(roomId);
     agendaState.delete(roomId);
@@ -143,21 +164,59 @@ export function initSignaling(io) {
       socket.data.roomId = roomId;
       socket.data.username = username;
       socket.data.userId = userId;
+      // Initialize permission flags — will be set properly below
+      socket.data.isHost = false;
+      socket.data.isSubHost = false;
 
       const meeting = await Meeting.findOne({ meetingId: roomId });
+
       const isHost = !!(
         meeting &&
         userId &&
         meeting.host.toString() === userId
       );
 
-      // ── Waiting room gate ─────────────────────────────────────────────────
-      if (
-        meeting?.settings?.waitingRoom &&
+      // ── FIX 2: Check if this userId was previously a subhost in this room ──
+      // This handles co-hosts who disconnect and rejoin — they should not be
+      // sent to the lobby again.
+      const room = getRoom(roomId);
+      let isReturningSubHost = false;
+      if (!isHost && userId) {
+        for (const [, peer] of room.entries()) {
+          if (peer.userId === userId && peer.isSubHost) {
+            isReturningSubHost = true;
+            break;
+          }
+        }
+      }
+
+      // ── FIX 1: Corrected lobby gate condition ──────────────────────────────
+      // Gate fires when:
+      //   - A meeting record exists (this is a real meeting, not an impromptu room)
+      //   - The joiner is not the host
+      //   - The joiner is not a returning co-host (would be unfair to re-lobby them)
+      //   - The meeting has NOT explicitly disabled the waiting room
+      //     (settings.waitingRoom === false means disabled; undefined/true means enabled)
+      //
+      // OLD (broken): meeting?.settings?.waitingRoom && !isHost && meeting.status === "active"
+      // Problems with old condition:
+      //   - settings.waitingRoom undefined → falsy → gate never fires
+      //   - meeting.status !== "active" for fresh/scheduled meetings → gate never fires
+      const shouldUseWaitingRoom =
+        meeting !== null &&
         !isHost &&
-        meeting.status === "active"
-      ) {
+        !isReturningSubHost &&
+        meeting?.settings?.waitingRoom !== false; // false = explicitly disabled
+
+      if (shouldUseWaitingRoom) {
         const waiting = getWaitingRoom(roomId);
+
+        // Prevent duplicate waiting entries (e.g. reconnect storms)
+        if (waiting.has(socket.id)) {
+          socket.emit("waiting", { message: "Waiting for host to admit you" });
+          return;
+        }
+
         waiting.set(socket.id, {
           username,
           userId,
@@ -165,13 +224,12 @@ export function initSignaling(io) {
           requestedAt: Date.now(),
         });
 
-        const room = getRoom(roomId);
+        // ── FIX 3: Emit join-request + lobby-knock to BOTH host AND co-hosts ──
+        // OLD: peer.isHost check only — co-hosts never saw the notification
+        // NEW: peer.isHost || peer.isSubHost
+        // Also: we look at the peer data in the room (in-memory truth) not socket.data,
+        // because socket.data.isSubHost on the co-host's socket is set here (post-join).
         if (room) {
-          /**
-           * FIX: Broadcast join-request to BOTH host AND subhost peers.
-           * Previously only peers with `isHost === true` received this event,
-           * so co-hosts never saw the lobby notification.
-           */
           room.forEach((peer, sid) => {
             if (peer.isHost || peer.isSubHost) {
               io.to(sid).emit("join-request", {
@@ -179,8 +237,6 @@ export function initSignaling(io) {
                 username,
                 userId,
               });
-              // Separate event so the client can play a sound without
-              // coupling audio logic to the join-request data handler.
               io.to(sid).emit("lobby-knock", {
                 socketId: socket.id,
                 username,
@@ -193,9 +249,8 @@ export function initSignaling(io) {
         return;
       }
 
-      // ── Normal join ───────────────────────────────────────────────────────
+      // ── Normal join (host, returning co-host, or lobby-disabled room) ──────
       socket.join(roomId);
-      const room = getRoom(roomId);
       await handleRoomJoin(roomId, userId);
 
       const existingPeers = [];
@@ -205,16 +260,16 @@ export function initSignaling(io) {
       socket.emit("room-peers", existingPeers);
       socket.emit("chat-history", getChatHistory(roomId));
 
-      // ── Phase 4: Send current state to joiner ─────────────────────────────
+      // Phase 4: send current state to joiner
       socket.emit("whiteboard-state", getWhiteboardState(roomId));
       const currentPoll = pollState.get(roomId);
       if (currentPoll) socket.emit("poll-state", serializePoll(currentPoll));
       const currentAgenda = agendaState.get(roomId);
       if (currentAgenda) socket.emit("agenda-state", currentAgenda);
 
-      // ── Also send current waiting room snapshot to host/subhost joiners ───
-      // So if a host refreshes mid-meeting, they still see who is waiting
-      if (isHost) {
+      // Send current waiting room snapshot to host/subhost so they see
+      // anyone who knocked while they were connecting
+      if (isHost || isReturningSubHost) {
         const waiting = getWaitingRoom(roomId);
         waiting.forEach((waiter, sid) => {
           socket.emit("join-request", {
@@ -225,8 +280,10 @@ export function initSignaling(io) {
         });
       }
 
+      // ── FIX 2 continued: restore isSubHost flag for returning co-host ───
       const peerData = {
         username,
+        userId,
         mic: true,
         cam: true,
         screen: false,
@@ -234,13 +291,16 @@ export function initSignaling(io) {
         handRaised: false,
         handRaisedAt: null,
         isHost,
-        isSubHost: false,
+        isSubHost: isReturningSubHost,
       };
       room.set(socket.id, peerData);
+
+      // Set socket.data flags — these are what isHostOrSubhost() reads
       socket.data.isHost = isHost;
-      socket.data.isSubHost = false;
+      socket.data.isSubHost = isReturningSubHost;
 
       if (isHost) socket.emit("you-are-host");
+      if (!isHost && isReturningSubHost) socket.emit("you-are-subhost");
 
       socket.to(roomId).emit("user-joined", {
         socketId: socket.id,
@@ -250,23 +310,23 @@ export function initSignaling(io) {
         status: "available",
         handRaised: false,
         isHost,
-        isSubHost: false,
+        isSubHost: isReturningSubHost,
       });
 
       console.log(
-        `[WS] ${username} joined room ${roomId} (${room.size} peers)`,
+        `[WS] ${username} joined room ${roomId} (${room.size} peers, host=${isHost}, subhost=${isReturningSubHost})`,
       );
     });
 
     // ─── LOBBY CONTROLS ──────────────────────────────────────────────────────
 
     /**
-     * FIX: Previously checked `socket.data.isHost` only.
-     * Now `isHostOrSubhost()` allows co-hosts to admit participants.
+     * FIX 4: isHostOrSubhost() now checks both flags correctly.
+     * socket.data.isSubHost is set on join above, so co-hosts can admit.
      */
     socket.on("admit-participant", async ({ targetSocketId }) => {
       const roomId = socket.data.roomId;
-      if (!roomId || !isHostOrSubhost(socket)) return; // ← FIXED
+      if (!roomId || !isHostOrSubhost(socket)) return;
 
       const waiting = getWaitingRoom(roomId);
       const waiter = waiting.get(targetSocketId);
@@ -278,12 +338,15 @@ export function initSignaling(io) {
 
       targetSocket.join(roomId);
       targetSocket.data.isAdmitted = true;
+      targetSocket.data.isHost = false;
+      targetSocket.data.isSubHost = false;
 
       const room = getRoom(roomId);
       await handleRoomJoin(roomId, targetSocket.data.userId);
 
       const peerData = {
         username: targetSocket.data.username,
+        userId: targetSocket.data.userId,
         mic: true,
         cam: true,
         screen: false,
@@ -324,7 +387,7 @@ export function initSignaling(io) {
         isSubHost: false,
       });
 
-      // Notify all managers that this participant was admitted (removes from their lobby UI)
+      // Notify ALL managers (host + co-hosts) so their lobby UI clears
       io.to(roomId).emit("lobby-admitted", { socketId: targetSocketId });
       console.log(
         `[Lobby] ${targetSocket.data.username} admitted by ${socket.data.username}`,
@@ -332,12 +395,11 @@ export function initSignaling(io) {
     });
 
     /**
-     * FIX: Previously checked `socket.data.isHost` only.
-     * Now `isHostOrSubhost()` allows co-hosts to reject participants.
+     * FIX 4: co-hosts can now reject participants.
      */
     socket.on("reject-participant", ({ targetSocketId }) => {
       const roomId = socket.data.roomId;
-      if (!roomId || !isHostOrSubhost(socket)) return; // ← FIXED
+      if (!roomId || !isHostOrSubhost(socket)) return;
 
       const waiting = getWaitingRoom(roomId);
       waiting.delete(targetSocketId);
@@ -346,7 +408,7 @@ export function initSignaling(io) {
         reason: "The host declined your request to join.",
       });
 
-      // Notify all managers that this participant was rejected
+      // Notify ALL managers so their lobby UI clears
       io.to(roomId).emit("lobby-rejected", { socketId: targetSocketId });
 
       const targetSocket = io.sockets.sockets.get(targetSocketId);
@@ -374,6 +436,7 @@ export function initSignaling(io) {
         }
         socket.data.isHost = false;
         socket.data.isSubHost = false;
+
         targetPeer.isHost = true;
         targetPeer.isSubHost = false;
         const targetSocket = io.sockets.sockets.get(targetSocketId);
@@ -404,6 +467,7 @@ export function initSignaling(io) {
         targetPeer.isSubHost = true;
         const targetSocket = io.sockets.sockets.get(targetSocketId);
         if (targetSocket) targetSocket.data.isSubHost = true;
+
         io.to(roomId).emit("host-transferred", {
           mode: "sub",
           targetSocketId,
@@ -625,18 +689,15 @@ export function initSignaling(io) {
     });
 
     /**
-     * NEW: whiteboard-sync — replaces entire board state for undo/redo.
-     * Does NOT require host/subhost — any participant can sync their local
-     * undo/redo state back to the room. The server replaces its board state
-     * and broadcasts to all OTHER peers. The sender already has correct state.
+     * whiteboard-sync — replaces entire board state for undo/redo.
+     * Any participant can sync; server replaces state and broadcasts to others.
+     * The sender already applied state locally so we skip them (socket.to, not io.to).
      */
     socket.on("whiteboard-sync", ({ elements }) => {
       const roomId = socket.data.roomId;
       if (!roomId || !Array.isArray(elements)) return;
-      // Clamp to max
       const safe = elements.slice(0, MAX_WHITEBOARD_ELEMENTS);
       whiteboardState.set(roomId, safe);
-      // Broadcast to everyone else — sender already applied state locally
       socket.to(roomId).emit("whiteboard-state", safe);
     });
 
@@ -838,6 +899,7 @@ export function initSignaling(io) {
         }
       }
 
+      // Also clean up from waiting room if they disconnect while waiting
       const waiting = waitingRooms.get(roomId);
       if (waiting) {
         waiting.delete(socket.id);
