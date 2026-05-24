@@ -1,14 +1,23 @@
 /**
- * meeting.$id.tsx — Lumina Meet  (complete rewrite of UI layer)
+ * meeting.$id.tsx — Lumina Meet
  *
- * FIXES in this version vs previous:
- *  • ReactionPicker: trigger button and popup now share a wrapper with
- *    class "reaction-picker-root" so the outside-click handler works correctly.
- *  • ReactionPicker: switched from "mousedown" listener to a delayed "click"
- *    listener (setTimeout 0) so the opening click doesn't immediately close
- *    the picker.
- *  • ControlBtn active prop for the reaction button was inverted — fixed.
- *  • All other functionality preserved unchanged.
+ * REACTION PICKER FIXES (3 bugs were compounding):
+ *
+ * Bug 1 — ControlBtn `active` prop was inverted for the reaction button.
+ *   ControlBtn renders red/dim styling when active=false (meaning "off").
+ *   Fixed: active={true} always, so the button is never red in normal state.
+ *
+ * Bug 2 — The reaction picker used `absolute bottom-full` positioning inside
+ *   the footer which has `overflow-x-auto`. That creates a new scroll
+ *   container that clips absolutely-positioned children that overflow it.
+ *   Fixed: ReactionPickerPortal renders via createPortal into document.body,
+ *   positioned via getBoundingClientRect() above the anchor button.
+ *
+ * Bug 3 — The previous outside-click handler used capture:true which could
+ *   catch the same click that opened the picker before the setTimeout(0)
+ *   fired in some browsers.
+ *   Fixed: ReactionPickerPortal owns its own outside-click logic using
+ *   mousedown (not click) so it doesn't race with the toggle click.
  */
 
 import { createPortal } from "react-dom";
@@ -230,6 +239,112 @@ function PortalDropdown({
   );
 }
 
+// ─── Reaction Picker Portal ───────────────────────────────────────────────────
+/**
+ * Renders the emoji grid via createPortal so it is never clipped by the
+ * footer's overflow-x-auto scroll container. Positioned ABOVE the anchor
+ * using getBoundingClientRect(), centred horizontally.
+ *
+ * Outside-click uses `mousedown` (not `click`) so it never races with the
+ * toggle-click handler on the React button.
+ */
+function ReactionPickerPortal({
+  anchorRef,
+  open,
+  onClose,
+  onReact,
+}: {
+  anchorRef: React.RefObject<HTMLElement>;
+  open: boolean;
+  onClose: () => void;
+  onReact: (emoji: string) => void;
+}) {
+  const [pos, setPos] = useState({ bottom: 0, centerX: 0 });
+
+  // Recompute position whenever open state changes or window resizes
+  useEffect(() => {
+    if (!open || !anchorRef.current) return;
+    const update = () => {
+      const rect = anchorRef.current!.getBoundingClientRect();
+      setPos({
+        // Place picker above the button with 8px gap
+        bottom: window.innerHeight - rect.top + 8,
+        centerX: rect.left + rect.width / 2,
+      });
+    };
+    update();
+    window.addEventListener("resize", update, { passive: true });
+    return () => window.removeEventListener("resize", update);
+  }, [open, anchorRef]);
+
+  // Close on outside mousedown — use mousedown so it fires before any click
+  // handler and doesn't race with the button's own toggle-click.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      // Ignore clicks on the anchor button itself (the toggle handles that)
+      if (anchorRef.current?.contains(e.target as Node)) return;
+      const pickerEl = document.getElementById("reaction-picker-portal");
+      if (pickerEl?.contains(e.target as Node)) return;
+      onClose();
+    };
+    // Small delay so the mousedown that opened the picker isn't caught
+    const timer = setTimeout(() => {
+      document.addEventListener("mousedown", handler);
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("mousedown", handler);
+    };
+  }, [open, onClose, anchorRef]);
+
+  if (!open) return null;
+
+  return createPortal(
+    <div
+      id="reaction-picker-portal"
+      style={{
+        position: "fixed",
+        bottom: pos.bottom,
+        left: pos.centerX,
+        transform: "translateX(-50%)",
+        zIndex: 9999,
+      }}
+    >
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: 10, scale: 0.88 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.88 }}
+            transition={{ type: "spring", damping: 20, stiffness: 300 }}
+          >
+            <div className="glass-strong rounded-2xl border border-white/10 p-2 shadow-2xl">
+              <div className="flex gap-0.5">
+                {REACTIONS.map((emoji, i) => (
+                  <motion.button
+                    key={emoji}
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.025 }}
+                    whileHover={{ scale: 1.4, y: -5 }}
+                    whileTap={{ scale: 0.9 }}
+                    onClick={() => onReact(emoji)}
+                    className="text-xl p-1.5 rounded-lg hover:bg-white/10 transition-colors"
+                  >
+                    {emoji}
+                  </motion.button>
+                ))}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>,
+    document.body,
+  );
+}
+
 // ─── Root component ───────────────────────────────────────────────────────────
 
 function MeetingRoom() {
@@ -330,13 +445,22 @@ function Room({
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("grid");
   const [showSettings, setShowSettings] = useState(false);
   const [showStatusPicker, setShowStatusPicker] = useState(false);
-  // ── FIX: renamed from showReactionPicker to make intent clearer ──
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   const [showLeaveModal, setShowLeaveModal] = useState(false);
   const [transferTarget, setTransferTarget] = useState<RemotePeer | null>(null);
 
   const layoutBtnRef = useRef<HTMLButtonElement>(null);
   const statusBtnRef = useRef<HTMLButtonElement>(null);
+
+  // FIX: ref for the reaction button container — used by ReactionPickerPortal
+  // to calculate position. No longer using reactionPickerRootRef or a manual
+  // document click listener in Room; the portal component handles all of that.
+  const reactionBtnContainerRef = useRef<HTMLDivElement>(null);
+
+  // Stable close callback
+  const handleCloseReactionPicker = useCallback(() => {
+    setReactionPickerOpen(false);
+  }, []);
 
   // Whiteboard state
   const [wbTool, setWbTool] = useState<WhiteboardTool>("pen");
@@ -455,6 +579,7 @@ function Room({
   useEffect(() => {
     setCinemaMode(isCinema);
   }, [isCinema, setCinemaMode]);
+
   useEffect(() => {
     const handler = () => {
       leaveRoom();
@@ -722,6 +847,15 @@ function Room({
       return panel;
     });
   };
+
+  // FIX: stable handler — closes the picker then fires the reaction
+  const handleSendReaction = useCallback(
+    (emoji: string) => {
+      sendReaction(emoji);
+      setReactionPickerOpen(false);
+    },
+    [sendReaction],
+  );
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -1343,32 +1477,32 @@ function Room({
             />
 
             {/*
-              ── FIX: Wrap trigger button + popup in ONE div with "reaction-picker-root".
-                 This means the outside-click handler in ReactionPicker sees clicks on
-                 the trigger button as "inside" and won't close the picker immediately.
-                 Also fixed: active prop was !reactionPickerOpen (inverted) → now reactionPickerOpen
+              FIX: The wrapper div carries the ref used by ReactionPickerPortal
+              to measure position. The ControlBtn itself is always active=true
+              so it NEVER turns red in its idle state — it only gets the
+              neon-primary highlight when the picker is open (highlightOn).
+
+              The ReactionPickerPortal renders via createPortal into document.body,
+              so it is never clipped by the footer's overflow-x-auto container.
             */}
-            <div className="relative reaction-picker-root">
+            <div ref={reactionBtnContainerRef} className="relative">
               <ControlBtn
-                active={reactionPickerOpen}
+                active={true}
                 onClick={() => setReactionPickerOpen((v) => !v)}
                 on={<SmilePlus className="h-4 w-4 sm:h-5 sm:w-5" />}
                 off={<SmilePlus className="h-4 w-4 sm:h-5 sm:w-5" />}
                 label="React"
                 highlightOn={reactionPickerOpen}
               />
-              <AnimatePresence>
-                {reactionPickerOpen && (
-                  <ReactionPicker
-                    onReact={(e) => {
-                      sendReaction(e);
-                      setReactionPickerOpen(false);
-                    }}
-                    onClose={() => setReactionPickerOpen(false)}
-                  />
-                )}
-              </AnimatePresence>
             </div>
+
+            {/* Portal-based reaction picker — rendered into document.body */}
+            <ReactionPickerPortal
+              anchorRef={reactionBtnContainerRef as React.RefObject<HTMLElement>}
+              open={reactionPickerOpen}
+              onClose={handleCloseReactionPicker}
+              onReact={handleSendReaction}
+            />
 
             <ControlBtn
               active={activePanel !== "whiteboard"}
@@ -3895,78 +4029,6 @@ function ReactionBurstLayer({
         ))}
       </AnimatePresence>
     </div>
-  );
-}
-
-// ─── Reaction Picker ──────────────────────────────────────────────────────────
-/**
- * FIX EXPLAINED:
- *
- * Original bug: ReactionPicker used a `mousedown` listener added in a useEffect.
- * When the user clicked the trigger button to open the picker, that same click
- * event propagated up to the document listener which then closed it immediately
- * (because the trigger button was NOT inside `.reaction-picker-root` — only the
- * popup was). The picker would flash open and close in the same frame.
- *
- * Fix: The trigger button is now inside a wrapper div with class
- * `reaction-picker-root` (see the footer section in Room). The outside-click
- * listener now uses a `click` event registered inside a `setTimeout(fn, 0)`
- * so it doesn't catch the originating click that opened the picker.
- */
-function ReactionPicker({
-  onReact,
-  onClose,
-}: {
-  onReact: (e: string) => void;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    // Delay registration by one tick so the click that opened the picker
-    // doesn't immediately trigger the close handler.
-    let handler: (e: MouseEvent) => void;
-    const timer = setTimeout(() => {
-      handler = (e: MouseEvent) => {
-        if (!(e.target as HTMLElement).closest(".reaction-picker-root")) {
-          onClose();
-        }
-      };
-      document.addEventListener("click", handler);
-    }, 0);
-
-    return () => {
-      clearTimeout(timer);
-      if (handler) document.removeEventListener("click", handler);
-    };
-  }, [onClose]);
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8, scale: 0.9 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: 8, scale: 0.9 }}
-      transition={{ type: "spring", damping: 20, stiffness: 300 }}
-      // No extra class needed here — the wrapper div in Room already has reaction-picker-root
-      className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 z-30"
-    >
-      <div className="glass-strong rounded-2xl border border-white/10 p-2 shadow-2xl">
-        <div className="flex gap-1">
-          {REACTIONS.map((emoji, i) => (
-            <motion.button
-              key={emoji}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.03 }}
-              whileHover={{ scale: 1.4, y: -4 }}
-              whileTap={{ scale: 0.9 }}
-              onClick={() => onReact(emoji)}
-              className="text-xl p-1.5 rounded-lg hover:bg-white/10"
-            >
-              {emoji}
-            </motion.button>
-          ))}
-        </div>
-      </div>
-    </motion.div>
   );
 }
 

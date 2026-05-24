@@ -24,6 +24,10 @@ function SignupPage() {
   const validate = () => {
     const e: Record<string, string> = {};
     if (form.username.trim().length < 3) e.username = "At least 3 characters";
+    if (!/^[a-zA-Z0-9_ ]+$/.test(form.username))
+      e.username = "Only letters, numbers, underscores, and spaces allowed";
+    if (form.username.startsWith(" ") || form.username.endsWith(" "))
+      e.username = "Username cannot start or end with a space";
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = "Enter a valid email";
     if (computeStrength(form.password).score < 3) e.password = "Choose a stronger password";
     if (form.password !== form.confirm) e.confirm = "Passwords don't match";
