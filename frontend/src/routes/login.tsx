@@ -38,7 +38,22 @@ function LoginPage() {
       setWelcome(user.username);
       setTimeout(() => navigate({ to: "/dashboard" }), 2200);
     } catch (err) {
-      toast.error(extractError(err).message);
+      const { code } = extractError(err);
+
+      // Backend returns code "USER_NOT_FOUND" when no account exists for this email.
+      // All other 401s (wrong password, suspended, etc.) show the generic message.
+      if (code === "USER_NOT_FOUND") {
+        toast.error("No account found for this email.", {
+          description: "New here? Create an account and join in seconds.",
+          duration: 6000,
+          action: {
+            label: "Sign up →",
+            onClick: () => navigate({ to: "/signup" }),
+          },
+        });
+      } else {
+        toast.error("Invalid email or password. Please try again.");
+      }
     } finally {
       setLoading(false);
     }

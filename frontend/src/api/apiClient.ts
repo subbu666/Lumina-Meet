@@ -8,7 +8,7 @@ export const apiClient = axios.create({
   timeout: 15000,
 });
 
-// Request: attach token (future JWT)
+// Request: attach token
 apiClient.interceptors.request.use((config) => {
   const token = typeof window !== "undefined" ? localStorage.getItem("auth_access_token") : null;
   if (token) config.headers.Authorization = `Bearer ${token}`;
@@ -27,11 +27,13 @@ apiClient.interceptors.response.use(
   },
 );
 
-export type ApiError = { message: string; status?: number };
+export type ApiError = { message: string; status?: number; code?: string };
+
 export function extractError(err: unknown): ApiError {
-  const e = err as AxiosError<{ message?: string }>;
+  const e = err as AxiosError<{ message?: string; code?: string }>;
   return {
     message: e?.response?.data?.message || e?.message || "Something went wrong",
     status: e?.response?.status,
+    code: e?.response?.data?.code,
   };
 }

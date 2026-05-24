@@ -47,21 +47,25 @@ export const authService = {
   login: (data: { email: string; password: string }): Promise<AuthResponse> =>
     apiClient.post(API_ENDPOINTS.LOGIN, data).then((r) => normalizeAuthResponse(r.data.data)),
 
-  // Used for signup OTP verification → returns tokens + user
   verifyOtp: (data: { email: string; otp: string }): Promise<AuthResponse> =>
     apiClient.post(API_ENDPOINTS.VERIFY_OTP, data).then((r) => normalizeAuthResponse(r.data.data)),
 
-  // Used for password reset OTP verification → confirms OTP is valid before proceeding
   verifyResetOtp: (data: { email: string; otp: string }): Promise<{ email: string; otp: string }> =>
     apiClient.post(API_ENDPOINTS.VERIFY_RESET_OTP, data).then((r) => r.data.data),
 
   resendOtp: (data: { email: string }) =>
     apiClient.post(API_ENDPOINTS.RESEND_OTP, data).then((r) => r.data.data),
 
+  /**
+   * FIX: Return the full response body — not just r.data.data.
+   * When no account exists the backend sends:
+   *   { success: false, code: "USER_NOT_FOUND", message: "..." }
+   * with HTTP 200 (anti-enumeration). The `data` field is absent in that case,
+   * so we must return r.data so the caller can inspect `code`.
+   */
   forgotPassword: (data: { email: string }) =>
-    apiClient.post(API_ENDPOINTS.FORGOT_PASSWORD, data).then((r) => r.data.data),
+    apiClient.post(API_ENDPOINTS.FORGOT_PASSWORD, data).then((r) => r.data),
 
-  // FIX: backend expects `newPassword`, not `password`
   resetPassword: (data: { email: string; otp: string; password: string }) =>
     apiClient
       .post(API_ENDPOINTS.RESET_PASSWORD, {

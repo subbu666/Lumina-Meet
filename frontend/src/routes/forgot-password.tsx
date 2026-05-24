@@ -10,6 +10,7 @@ import { OtpInput } from "@/components/ui-custom/OtpInput";
 import { PasswordStrength, computeStrength } from "@/components/ui-custom/PasswordStrength";
 import { authService } from "@/api/services/authService";
 import { extractError } from "@/api/apiClient";
+import { NoAccountModal } from "@/components/modals/NoAccountModal";
 
 export const Route = createFileRoute("/forgot-password")({
   component: ForgotPasswordPage,
@@ -25,16 +26,35 @@ function ForgotPasswordPage() {
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // Controls the "no account found" modal
+  const [noAccountOpen, setNoAccountOpen] = useState(false);
+
   // Phase 1 — send OTP to email
   const send = async () => {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast.error("Enter a valid email");
     setLoading(true);
     try {
-      await authService.forgotPassword({ email });
+      const result = await authService.forgotPassword({ email });
+
+      // Backend returns success:false + code:"USER_NOT_FOUND" at HTTP 200
+      // when the email has no registered account (anti-enumeration pattern).
+      // authService resolves (doesn't throw) in this case, so we check here.
+      if (result?.code === "USER_NOT_FOUND") {
+        setNoAccountOpen(true);
+        return;
+      }
+
       toast.success("Reset code sent — check your inbox");
       setStep(1);
     } catch (err) {
-      toast.error(extractError(err).message);
+      // Real errors (network, 429, 500) land here
+      const { code } = extractError(err);
+      if (code === "USER_NOT_FOUND") {
+        // Defensive: handle it even if backend ever throws instead of resolving
+        setNoAccountOpen(true);
+      } else {
+        toast.error(extractError(err).message);
+      }
     } finally {
       setLoading(false);
     }
@@ -49,9 +69,7 @@ function ForgotPasswordPage() {
       toast.success("Code verified");
       setStep(2);
     } catch (err) {
-      // Shows backend message e.g. "Invalid reset code. 2 attempts remaining."
       toast.error(extractError(err).message);
-      // Clear the OTP input so the user can try again cleanly
       setOtp("");
     } finally {
       setLoading(false);
@@ -75,111 +93,116 @@ function ForgotPasswordPage() {
   };
 
   return (
-    <AuthShell
-      title="Reset your password"
-      subtitle="Three quick steps to get back in."
-      footer={
-        <Link to="/login" className="text-[var(--neon-secondary)] hover:underline">
-          Back to login
-        </Link>
-      }
-    >
-      <Stepper step={step} />
+    <>
+      <AuthShell
+        title="Reset your password"
+        subtitle="Three quick steps to get back in."
+        footer={
+          <Link to="/login" className="text-[var(--neon-secondary)] hover:underline">
+            Back to login
+          </Link>
+        }
+      >
+        <Stepper step={step} />
 
-      <div className="mt-6 overflow-hidden">
-        <AnimatePresence mode="wait">
-          {/* ── Step 0 : Email ── */}
-          {step === 0 && (
-            <motion.div
-              key="s0"
-              initial={{ x: 30, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: -30, opacity: 0 }}
-              className="space-y-4"
-            >
-              <FloatingInput
-                label="Email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && send()}
-              />
-              <NeonButton fullWidth loading={loading} onClick={send}>
-                Send reset code
-              </NeonButton>
-            </motion.div>
-          )}
-
-          {/* ── Step 1 : Enter OTP — verified against backend ── */}
-          {step === 1 && (
-            <motion.div
-              key="s1"
-              initial={{ x: 30, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: -30, opacity: 0 }}
-              className="space-y-5"
-            >
-              <p className="text-center text-sm text-muted-foreground">
-                Code sent to <span className="text-foreground font-medium">{email}</span>.
-              </p>
-              <OtpInput value={otp} onChange={setOtp} />
-              <NeonButton fullWidth loading={loading} onClick={verify} disabled={otp.length < 6}>
-                Verify code
-              </NeonButton>
-              <p className="text-center text-xs text-muted-foreground">
-                Didn't receive it?{" "}
-                <button
-                  type="button"
-                  className="text-[var(--neon-secondary)] hover:underline"
-                  onClick={async () => {
-                    try {
-                      await authService.forgotPassword({ email });
-                      toast.success("New code sent");
-                      setOtp("");
-                    } catch (err) {
-                      toast.error(extractError(err).message);
-                    }
-                  }}
-                >
-                  Resend
-                </button>
-              </p>
-            </motion.div>
-          )}
-
-          {/* ── Step 2 : New password ── */}
-          {step === 2 && (
-            <motion.div
-              key="s2"
-              initial={{ x: 30, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: -30, opacity: 0 }}
-              className="space-y-4"
-            >
-              <div>
+        <div className="mt-6 overflow-hidden">
+          <AnimatePresence mode="wait">
+            {/* ── Step 0 : Email ── */}
+            {step === 0 && (
+              <motion.div
+                key="s0"
+                initial={{ x: 30, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                exit={{ x: -30, opacity: 0 }}
+                className="space-y-4"
+              >
                 <FloatingInput
-                  label="New password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  label="Email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && send()}
                 />
-                <PasswordStrength password={password} />
-              </div>
-              <FloatingInput
-                label="Confirm password"
-                type="password"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && reset()}
-              />
-              <NeonButton fullWidth loading={loading} onClick={reset}>
-                Update password
-              </NeonButton>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-    </AuthShell>
+                <NeonButton fullWidth loading={loading} onClick={send}>
+                  Send reset code
+                </NeonButton>
+              </motion.div>
+            )}
+
+            {/* ── Step 1 : Enter OTP ── */}
+            {step === 1 && (
+              <motion.div
+                key="s1"
+                initial={{ x: 30, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                exit={{ x: -30, opacity: 0 }}
+                className="space-y-5"
+              >
+                <p className="text-center text-sm text-muted-foreground">
+                  Code sent to <span className="text-foreground font-medium">{email}</span>.
+                </p>
+                <OtpInput value={otp} onChange={setOtp} />
+                <NeonButton fullWidth loading={loading} onClick={verify} disabled={otp.length < 6}>
+                  Verify code
+                </NeonButton>
+                <p className="text-center text-xs text-muted-foreground">
+                  Didn't receive it?{" "}
+                  <button
+                    type="button"
+                    className="text-[var(--neon-secondary)] hover:underline"
+                    onClick={async () => {
+                      try {
+                        await authService.forgotPassword({ email });
+                        toast.success("New code sent");
+                        setOtp("");
+                      } catch (err) {
+                        toast.error(extractError(err).message);
+                      }
+                    }}
+                  >
+                    Resend
+                  </button>
+                </p>
+              </motion.div>
+            )}
+
+            {/* ── Step 2 : New password ── */}
+            {step === 2 && (
+              <motion.div
+                key="s2"
+                initial={{ x: 30, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                exit={{ x: -30, opacity: 0 }}
+                className="space-y-4"
+              >
+                <div>
+                  <FloatingInput
+                    label="New password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                  <PasswordStrength password={password} />
+                </div>
+                <FloatingInput
+                  label="Confirm password"
+                  type="password"
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && reset()}
+                />
+                <NeonButton fullWidth loading={loading} onClick={reset}>
+                  Update password
+                </NeonButton>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </AuthShell>
+
+      {/* No-account modal — shown when forgotPassword detects USER_NOT_FOUND */}
+      <NoAccountModal open={noAccountOpen} email={email} onClose={() => setNoAccountOpen(false)} />
+    </>
   );
 }
 
