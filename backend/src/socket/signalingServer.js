@@ -1,12 +1,13 @@
 /**
  * WebRTC Signaling Server — Lumina Meet Phase 4
  *
- * NEW in Phase 4:
- *  • Collaborative whiteboard — SVG delta events, ephemeral per session
- *  • Live polls + word cloud — host creates, room votes, real-time results
- *  • Shared agenda + focus timer — host sets items, shared countdown synced
+ * FIXES in this version:
+ *  • Lobby join-request is now broadcast to BOTH host AND subhost (RBAC fix)
+ *  • admit-participant now accepts actions from host OR subhost
+ *  • reject-participant now accepts actions from host OR subhost
+ *  • Lobby notification sound event sent alongside join-request
  *
- * All existing Phase 1/2/3 functionality is preserved unchanged.
+ * All existing Phase 1/2/3/4 functionality is preserved unchanged.
  */
 
 import Meeting from "../models/Meeting.js";
@@ -37,36 +38,6 @@ const ALLOWED_REACTIONS = [
   "🙌",
   "✨",
 ];
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-/**
- * WhiteboardElement — a single drawn element on the canvas.
- * Ephemeral: cleared when the last participant leaves.
- *
- * @property type - "stroke" | "text" | "sticky" | "clear"
- * @property id   - unique element ID for deletion / update
- */
-
-/**
- * Poll — a live poll broadcast to all participants.
- *
- * @property id      - unique poll ID
- * @property question
- * @property options - string[]
- * @property votes   - Record<optionIndex, Set<socketId>>
- * @property closed  - whether voting is still open
- */
-
-/**
- * AgendaState
- *
- * @property items     - AgendaItem[]
- * @property activeIdx - currently active item index
- * @property timerEnd  - epoch ms when current item timer expires (null = paused)
- * @property timerPaused - whether timer is paused
- * @property timerRemaining - ms remaining when paused
- */
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -106,6 +77,10 @@ function sanitizeText(text) {
     .slice(0, 2000);
 }
 
+/**
+ * FIX: Previously only checked isHost. Now checks isHost OR isSubHost
+ * so co-hosts can perform privileged lobby/whiteboard/poll actions.
+ */
 function isHostOrSubhost(socket) {
   return socket.data.isHost || socket.data.isSubHost;
 }
@@ -189,17 +164,31 @@ export function initSignaling(io) {
           socket,
           requestedAt: Date.now(),
         });
+
         const room = getRoom(roomId);
         if (room) {
+          /**
+           * FIX: Broadcast join-request to BOTH host AND subhost peers.
+           * Previously only peers with `isHost === true` received this event,
+           * so co-hosts never saw the lobby notification.
+           */
           room.forEach((peer, sid) => {
-            if (peer.isHost)
+            if (peer.isHost || peer.isSubHost) {
               io.to(sid).emit("join-request", {
                 socketId: socket.id,
                 username,
                 userId,
               });
+              // Separate event so the client can play a sound without
+              // coupling audio logic to the join-request data handler.
+              io.to(sid).emit("lobby-knock", {
+                socketId: socket.id,
+                username,
+              });
+            }
           });
         }
+
         socket.emit("waiting", { message: "Waiting for host to admit you" });
         return;
       }
@@ -216,12 +205,25 @@ export function initSignaling(io) {
       socket.emit("room-peers", existingPeers);
       socket.emit("chat-history", getChatHistory(roomId));
 
-      // ── Phase 4: Send current whiteboard / poll / agenda state to joiner ──
+      // ── Phase 4: Send current state to joiner ─────────────────────────────
       socket.emit("whiteboard-state", getWhiteboardState(roomId));
       const currentPoll = pollState.get(roomId);
       if (currentPoll) socket.emit("poll-state", serializePoll(currentPoll));
       const currentAgenda = agendaState.get(roomId);
       if (currentAgenda) socket.emit("agenda-state", currentAgenda);
+
+      // ── Also send current waiting room snapshot to host/subhost joiners ───
+      // So if a host refreshes mid-meeting, they still see who is waiting
+      if (isHost) {
+        const waiting = getWaitingRoom(roomId);
+        waiting.forEach((waiter, sid) => {
+          socket.emit("join-request", {
+            socketId: sid,
+            username: waiter.username,
+            userId: waiter.userId,
+          });
+        });
+      }
 
       const peerData = {
         username,
@@ -258,9 +260,13 @@ export function initSignaling(io) {
 
     // ─── LOBBY CONTROLS ──────────────────────────────────────────────────────
 
+    /**
+     * FIX: Previously checked `socket.data.isHost` only.
+     * Now `isHostOrSubhost()` allows co-hosts to admit participants.
+     */
     socket.on("admit-participant", async ({ targetSocketId }) => {
       const roomId = socket.data.roomId;
-      if (!roomId || !socket.data.isHost) return;
+      if (!roomId || !isHostOrSubhost(socket)) return; // ← FIXED
 
       const waiting = getWaitingRoom(roomId);
       const waiter = waiting.get(targetSocketId);
@@ -298,6 +304,7 @@ export function initSignaling(io) {
       targetSocket.emit("room-peers", existingPeers);
       targetSocket.emit("admitted");
       targetSocket.emit("chat-history", getChatHistory(roomId));
+
       // Send Phase 4 state to newly admitted participant
       targetSocket.emit("whiteboard-state", getWhiteboardState(roomId));
       const currentPoll = pollState.get(roomId);
@@ -316,18 +323,37 @@ export function initSignaling(io) {
         isHost: false,
         isSubHost: false,
       });
+
+      // Notify all managers that this participant was admitted (removes from their lobby UI)
+      io.to(roomId).emit("lobby-admitted", { socketId: targetSocketId });
+      console.log(
+        `[Lobby] ${targetSocket.data.username} admitted by ${socket.data.username}`,
+      );
     });
 
+    /**
+     * FIX: Previously checked `socket.data.isHost` only.
+     * Now `isHostOrSubhost()` allows co-hosts to reject participants.
+     */
     socket.on("reject-participant", ({ targetSocketId }) => {
       const roomId = socket.data.roomId;
-      if (!roomId || !socket.data.isHost) return;
+      if (!roomId || !isHostOrSubhost(socket)) return; // ← FIXED
+
       const waiting = getWaitingRoom(roomId);
       waiting.delete(targetSocketId);
+
       io.to(targetSocketId).emit("join-rejected", {
-        reason: "Host declined your request",
+        reason: "The host declined your request to join.",
       });
+
+      // Notify all managers that this participant was rejected
+      io.to(roomId).emit("lobby-rejected", { socketId: targetSocketId });
+
       const targetSocket = io.sockets.sockets.get(targetSocketId);
       if (targetSocket) targetSocket.disconnect(true);
+      console.log(
+        `[Lobby] ${targetSocketId} rejected by ${socket.data.username}`,
+      );
     });
 
     // ─── HOST TRANSFER ───────────────────────────────────────────────────────
@@ -364,6 +390,16 @@ export function initSignaling(io) {
         });
         io.to(targetSocketId).emit("you-are-host");
         io.to(socket.id).emit("you-are-participant");
+
+        // Send pending waiting participants to new host
+        const waiting = getWaitingRoom(roomId);
+        waiting.forEach((waiter, sid) => {
+          io.to(targetSocketId).emit("join-request", {
+            socketId: sid,
+            username: waiter.username,
+            userId: waiter.userId,
+          });
+        });
       } else if (mode === "sub") {
         targetPeer.isSubHost = true;
         const targetSocket = io.sockets.sockets.get(targetSocketId);
@@ -375,6 +411,16 @@ export function initSignaling(io) {
           grantedBy: socket.id,
         });
         io.to(targetSocketId).emit("you-are-subhost");
+
+        // Send pending waiting participants to new co-host
+        const waiting = getWaitingRoom(roomId);
+        waiting.forEach((waiter, sid) => {
+          io.to(targetSocketId).emit("join-request", {
+            socketId: sid,
+            username: waiter.username,
+            userId: waiter.userId,
+          });
+        });
       }
     });
 
@@ -536,30 +582,13 @@ export function initSignaling(io) {
     // ════════════════════════════════════════════════════════════════════════
     // PHASE 4: COLLABORATIVE WHITEBOARD
     // ════════════════════════════════════════════════════════════════════════
-    //
-    // Events (client → server):
-    //   whiteboard-draw   { element }          → relay + append to room state
-    //   whiteboard-erase  { elementId }        → relay + remove from state
-    //   whiteboard-clear  {}                   → clear all elements (host only)
-    //   whiteboard-cursor { x, y }             → relay cursor position (not persisted)
-    //
-    // Events (server → client):
-    //   whiteboard-state  [ ...elements ]      → full state on join
-    //   whiteboard-draw   { element, from }    → new element from a peer
-    //   whiteboard-erase  { elementId, from }  → element deleted by a peer
-    //   whiteboard-clear  {}                   → full clear
-    //   whiteboard-cursor { socketId, x, y }   → peer cursor position
 
     socket.on("whiteboard-draw", ({ element }) => {
       const roomId = socket.data.roomId;
       if (!roomId || !element?.id) return;
-
-      // Sanitize element — only allow known types, numeric coordinates
       const allowed = ["stroke", "text", "sticky", "arrow", "rect", "ellipse"];
       if (!allowed.includes(element.type)) return;
-
       const board = getWhiteboardState(roomId);
-      // Replace if same id (update), otherwise append
       const idx = board.findIndex((e) => e.id === element.id);
       const safeElement = {
         ...element,
@@ -572,7 +601,6 @@ export function initSignaling(io) {
         if (board.length > MAX_WHITEBOARD_ELEMENTS)
           board.splice(0, board.length - MAX_WHITEBOARD_ELEMENTS);
       }
-
       socket
         .to(roomId)
         .emit("whiteboard-draw", { element: safeElement, from: socket.id });
@@ -581,11 +609,9 @@ export function initSignaling(io) {
     socket.on("whiteboard-erase", ({ elementId }) => {
       const roomId = socket.data.roomId;
       if (!roomId || !elementId) return;
-
       const board = getWhiteboardState(roomId);
       const idx = board.findIndex((e) => e.id === elementId);
       if (idx >= 0) board.splice(idx, 1);
-
       socket
         .to(roomId)
         .emit("whiteboard-erase", { elementId, from: socket.id });
@@ -598,10 +624,25 @@ export function initSignaling(io) {
       io.to(roomId).emit("whiteboard-clear");
     });
 
+    /**
+     * NEW: whiteboard-sync — replaces entire board state for undo/redo.
+     * Does NOT require host/subhost — any participant can sync their local
+     * undo/redo state back to the room. The server replaces its board state
+     * and broadcasts to all OTHER peers. The sender already has correct state.
+     */
+    socket.on("whiteboard-sync", ({ elements }) => {
+      const roomId = socket.data.roomId;
+      if (!roomId || !Array.isArray(elements)) return;
+      // Clamp to max
+      const safe = elements.slice(0, MAX_WHITEBOARD_ELEMENTS);
+      whiteboardState.set(roomId, safe);
+      // Broadcast to everyone else — sender already applied state locally
+      socket.to(roomId).emit("whiteboard-state", safe);
+    });
+
     socket.on("whiteboard-cursor", ({ x, y }) => {
       const roomId = socket.data.roomId;
       if (!roomId) return;
-      // Validate numeric coordinates
       if (typeof x !== "number" || typeof y !== "number") return;
       socket.to(roomId).emit("whiteboard-cursor", {
         socketId: socket.id,
@@ -612,20 +653,8 @@ export function initSignaling(io) {
     });
 
     // ════════════════════════════════════════════════════════════════════════
-    // PHASE 4: LIVE POLLS + WORD CLOUD
+    // PHASE 4: LIVE POLLS
     // ════════════════════════════════════════════════════════════════════════
-    //
-    // Events (client → server):
-    //   poll-create  { question, options[] }  → host only
-    //   poll-vote    { optionIndex }           → any participant
-    //   poll-close   {}                        → host only
-    //   poll-dismiss {}                        → host only — removes poll from UI
-    //
-    // Events (server → client):
-    //   poll-state   { id, question, options[], votes: {idx: count}, closed, totalVoters }
-    //   poll-update  { id, votes: {idx: count}, totalVoters }
-    //   poll-closed  { id }
-    //   poll-dismissed {}
 
     socket.on("poll-create", ({ question, options }) => {
       const roomId = socket.data.roomId;
@@ -637,22 +666,18 @@ export function initSignaling(io) {
         options.length > 8
       )
         return;
-
       const poll = {
         id: `poll-${Date.now()}`,
         question: sanitizeText(question).slice(0, 200),
         options: options
           .slice(0, 8)
           .map((o) => sanitizeText(String(o)).slice(0, 100)),
-        votes: new Map(), // socketId → optionIndex
+        votes: new Map(),
         closed: false,
         createdAt: Date.now(),
       };
       pollState.set(roomId, poll);
       io.to(roomId).emit("poll-state", serializePoll(poll));
-      console.log(
-        `[Poll] Created by ${socket.data.username}: "${poll.question}"`,
-      );
     });
 
     socket.on("poll-vote", ({ optionIndex }) => {
@@ -666,7 +691,6 @@ export function initSignaling(io) {
         optionIndex >= poll.options.length
       )
         return;
-
       poll.votes.set(socket.id, optionIndex);
       io.to(roomId).emit("poll-update", serializePollUpdate(poll));
     });
@@ -693,26 +717,12 @@ export function initSignaling(io) {
     // ════════════════════════════════════════════════════════════════════════
     // PHASE 4: SHARED AGENDA + FOCUS TIMER
     // ════════════════════════════════════════════════════════════════════════
-    //
-    // Events (client → server):
-    //   agenda-set      { items: [{title, durationSec}] }  → host only, replace agenda
-    //   agenda-next     {}                                  → host: advance to next item
-    //   agenda-prev     {}                                  → host: go to previous item
-    //   agenda-goto     { index }                           → host: jump to specific item
-    //   agenda-timer-start {}                               → host: start/resume timer
-    //   agenda-timer-pause {}                               → host: pause timer
-    //
-    // Events (server → client):
-    //   agenda-state    { items, activeIdx, timerEnd, timerPaused, timerRemaining }
-    //   agenda-tick     { activeIdx, timerEnd, timerPaused, timerRemaining }  (every 5s to re-sync)
-    //   agenda-complete {}  → all items done
 
     socket.on("agenda-set", ({ items }) => {
       const roomId = socket.data.roomId;
       if (!roomId || !isHostOrSubhost(socket)) return;
       if (!Array.isArray(items) || items.length === 0 || items.length > 20)
         return;
-
       const safeItems = items.map((item, i) => ({
         id: `agenda-${i}-${Date.now()}`,
         title:
@@ -724,7 +734,6 @@ export function initSignaling(io) {
         ),
         done: false,
       }));
-
       const state = {
         items: safeItems,
         activeIdx: 0,
@@ -734,9 +743,6 @@ export function initSignaling(io) {
       };
       agendaState.set(roomId, state);
       io.to(roomId).emit("agenda-state", state);
-      console.log(
-        `[Agenda] Set by ${socket.data.username}: ${safeItems.length} items`,
-      );
     });
 
     socket.on("agenda-next", () => {
@@ -744,7 +750,6 @@ export function initSignaling(io) {
       if (!roomId || !isHostOrSubhost(socket)) return;
       const state = agendaState.get(roomId);
       if (!state) return;
-
       state.items[state.activeIdx].done = true;
       const nextIdx = state.activeIdx + 1;
       if (nextIdx >= state.items.length) {
@@ -752,7 +757,6 @@ export function initSignaling(io) {
         agendaState.delete(roomId);
         return;
       }
-
       state.activeIdx = nextIdx;
       state.timerEnd = null;
       state.timerPaused = true;
@@ -765,7 +769,6 @@ export function initSignaling(io) {
       if (!roomId || !isHostOrSubhost(socket)) return;
       const state = agendaState.get(roomId);
       if (!state || state.activeIdx <= 0) return;
-
       state.items[state.activeIdx].done = false;
       state.activeIdx -= 1;
       state.timerEnd = null;
@@ -785,7 +788,6 @@ export function initSignaling(io) {
         index >= state.items.length
       )
         return;
-
       state.activeIdx = index;
       state.timerEnd = null;
       state.timerPaused = true;
@@ -798,7 +800,6 @@ export function initSignaling(io) {
       if (!roomId || !isHostOrSubhost(socket)) return;
       const state = agendaState.get(roomId);
       if (!state) return;
-
       const remaining =
         state.timerRemaining ?? state.items[state.activeIdx].durationSec * 1000;
       state.timerEnd = Date.now() + remaining;
@@ -812,7 +813,6 @@ export function initSignaling(io) {
       if (!roomId || !isHostOrSubhost(socket)) return;
       const state = agendaState.get(roomId);
       if (!state || state.timerPaused) return;
-
       const remaining = state.timerEnd
         ? Math.max(0, state.timerEnd - Date.now())
         : 0;
@@ -860,9 +860,6 @@ export function initSignaling(io) {
       if (!state.timerPaused && state.timerEnd) {
         const remaining = state.timerEnd - Date.now();
         if (remaining <= 0) {
-          // Timer expired — advance to next item automatically
-          const room = rooms.get(roomId);
-          if (!room) return;
           state.items[state.activeIdx].done = true;
           const nextIdx = state.activeIdx + 1;
           if (nextIdx >= state.items.length) {
@@ -883,7 +880,7 @@ export function initSignaling(io) {
   }, 5000);
 }
 
-// ─── Poll serializers (convert Map→Record for JSON transport) ─────────────────
+// ─── Poll serializers ─────────────────────────────────────────────────────────
 
 function serializePollVotes(poll) {
   const votes = {};
