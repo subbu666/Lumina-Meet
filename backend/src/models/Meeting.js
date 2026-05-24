@@ -169,7 +169,7 @@ const meetingSchema = new mongoose.Schema(
       participantVideo: { type: Boolean, default: true },
       hostAudio: { type: Boolean, default: true },
       participantAudio: { type: Boolean, default: true },
-      waitingRoom: { type: Boolean, default: false },
+      waitingRoom: { type: Boolean, default: true },
       allowJoinBeforeHost: { type: Boolean, default: false },
       muteParticipantsOnEntry: { type: Boolean, default: false },
       allowRecording: { type: Boolean, default: true },
