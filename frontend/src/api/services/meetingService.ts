@@ -147,9 +147,6 @@ function toMeetingGroup(raw: RawMeeting, index: number): MeetingGroup {
   };
 }
 
-// ─── API endpoint constants (add these to your endpoints.ts) ─────────────────
-// RECORD_JOINED_MEETING: "/meeting/record-joined"
-
 // ─── Service ──────────────────────────────────────────────────────────────────
 
 export const meetingService = {
@@ -163,15 +160,26 @@ export const meetingService = {
       meetingId: r.data.data.meeting.meetingId,
     })),
 
+  /**
+   * Schedule a meeting.
+   *
+   * FIX: scheduledFor MUST be an ISO 8601 string (e.g. "2026-05-26T05:31:00.000Z").
+   * The backend validator uses .isISO8601() — sending a unix timestamp number
+   * causes a 400 "Invalid date format" validation error.
+   *
+   * FIX: Backend returns { data: { meeting, joinUrl, invitationsSent } }.
+   * scheduledFor lives inside `meeting`, not at the response root.
+   */
   schedule: (data: {
     title: string;
-    scheduledFor: string;
+    scheduledFor: string; // ISO 8601 string — NOT a unix timestamp number
     description?: string;
     duration?: number;
-  }) =>
-    apiClient
-      .post(API_ENDPOINTS.SCHEDULE_MEETING, data)
-      .then((r) => ({ link: r.data.data.joinUrl, meeting: r.data.data.meeting })),
+  }): Promise<{ link: string; meeting: RawMeeting }> =>
+    apiClient.post(API_ENDPOINTS.SCHEDULE_MEETING, data).then((r) => ({
+      link: r.data.data.joinUrl,
+      meeting: r.data.data.meeting, // full meeting object; scheduledFor is inside here
+    })),
 
   invite: (data: { meetingId: string; emails: string[] }) =>
     apiClient.post(API_ENDPOINTS.SEND_INVITE, data).then((r) => r.data.data),

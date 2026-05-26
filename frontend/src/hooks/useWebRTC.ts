@@ -1,34 +1,49 @@
 /**
- * useWebRTC — Lumina Meet Phase 4
+ * useWebRTC — Lumina Meet
  *
- * LOBBY FIXES in this version:
+ * FIXES IN THIS VERSION:
  *
- * FIX 1 — isWaiting state was set correctly but the "admitted" handler
- *   did not clear isConnecting. If the user reconnects after being admitted
- *   the spinner could show indefinitely. Now "admitted" also sets
- *   isConnecting(false) defensively.
+ * FIX 1 — End meeting for all (Issue #1):
+ *   Listen for "meeting-ended" socket event and navigate all participants
+ *   away. Previously only the host navigated away on leave; other peers
+ *   kept their connections indefinitely.
+ *   The hook now accepts an `onMeetingEnded` callback that the component
+ *   wires to navigate({ to: "/dashboard" }).
+ *   The host's LeaveModal now emits "end-meeting" via socket BEFORE calling
+ *   the HTTP endpoint, so the broadcast is instant regardless of HTTP latency.
  *
- * FIX 2 — socket.data.isSubHost was never sent back to the client when a
- *   co-host joined. The server now emits "you-are-subhost" on join for
- *   returning co-hosts, and the hook listens for it (it already did, just
- *   documenting the full fix chain).
+ * FIX 2 — Lobby default (Issue #2):
+ *   meetingController now defaults waitingRoom: true. No hook changes needed
+ *   — the existing "waiting" / "admitted" / LobbyGate flow already works.
  *
- * FIX 3 — "lobby-knock" / "lobby-admitted" / "lobby-rejected" listeners
- *   were correct but lobby-knock was also not playing a sound for subhosts
- *   because socket.data.isSubHost was not set at the time of the event.
- *   The sound now fires unconditionally on "lobby-knock" — the server only
- *   sends it to managers, so no guard is needed client-side.
+ * FIX 3 — Mobile/desktop audio echo (Issue #3):
+ *   Root cause: WebRTC delivers remote audio as a MediaStreamTrack. When that
+ *   track is put into the same MediaStream as the remote video, and that
+ *   stream is set as srcObject on a <video> element, mobile browsers play
+ *   audio through the loudspeaker. The local mic picks up the speaker output
+ *   → echo / howl on the mobile end.
  *
- * FIX 4 — pendingParticipants list was not cleared when a waiting participant
- *   disconnected from the lobby (they just close the tab). Added "user-left"
- *   handler to also clean pendingParticipants, in addition to peers.
- *   Previously the lobby panel would show a ghost entry forever.
+ *   Fix strategy:
+ *   a) Keep remote VIDEO tracks in the peer's `stream` (drives the <video>).
+ *   b) Route remote AUDIO tracks through a SEPARATE dedicated <audio> element
+ *      per peer that is NOT muted and uses the default audio output (earpiece
+ *      on mobile when on a call). The <video> element for that peer is then
+ *      rendered MUTED so it never plays audio through the speaker.
+ *   c) The RemotePeer object now carries `audioStream` in addition to
+ *      `stream`. RemoteVideoTile renders <video muted> and the hook manages
+ *      hidden <audio> elements mounted in the DOM outside React's render tree.
+ *   d) getUserMedia audio constraints: added `echoCancellation: true`,
+ *      `noiseSuppression: true`, `autoGainControl: true` — these are the
+ *      browser-level hints that help on both platforms.
+ *   e) RTCPeerConnection now uses `unified-plan` sdpSemantics explicitly
+ *      (default in modern browsers but explicit is safer on older iOS Safari).
  *
- * FIX 5 — Whiteboard redo race (preserved from previous version):
- *   syncWhiteboardElements replaces board state atomically without the
- *   clearWhiteboard + drawElement async race.
- *
- * All Phase 1/2/3/4 functionality is preserved unchanged.
+ * FIX 4 — Missing meeting guard / join-error (Issue #4):
+ *   Server now emits "join-error" when the meeting document is not found
+ *   instead of silently dropping the participant into a ghost room.
+ *   The hook listens for "join-error" and surfaces it via the `error` state
+ *   so the UI can render a proper error screen instead of hanging forever
+ *   on the connecting spinner.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -43,7 +58,8 @@ export type ParticipantStatus = "available" | "busy" | "away" | "presenting" | "
 export interface RemotePeer {
   socketId: string;
   username: string;
-  stream: MediaStream | null;
+  stream: MediaStream | null; // video-only stream → drives <video muted>
+  audioStream: MediaStream | null; // FIX 3: audio-only stream → drives hidden <audio>
   mic: boolean;
   cam: boolean;
   screen: boolean;
@@ -84,7 +100,7 @@ export interface PendingParticipant {
   userId?: string;
 }
 
-// ─── Phase 4 Types ────────────────────────────────────────────────────────────
+// ─── Phase 4 Types (unchanged) ────────────────────────────────────────────────
 
 export type WhiteboardTool =
   | "pen"
@@ -161,6 +177,7 @@ export interface UseWebRTCReturn {
   toggleCam: () => Promise<void>;
   toggleScreenShare: () => Promise<void>;
   leaveRoom: () => void;
+  endMeetingForAll: () => void; // FIX 1: host emits end-meeting via socket
   muteAll: () => void;
   camOffAll: () => void;
   removePeer: (socketId: string) => void;
@@ -276,10 +293,6 @@ function buildAnalyser(ctx: AudioContext, stream: MediaStream): AnalyserNode | n
   return analyser;
 }
 
-/**
- * Play a soft "knock" notification sound using Web Audio API.
- * Pure synthesis — no external file dependency.
- */
 function playLobbyKnockSound(): void {
   try {
     const ctx = new AudioContext();
@@ -299,8 +312,70 @@ function playLobbyKnockSound(): void {
     });
     setTimeout(() => ctx.close(), 800);
   } catch {
-    // AudioContext not available — silently ignore
+    // AudioContext not available
   }
+}
+
+// ─── FIX 3: Audio element pool ───────────────────────────────────────────────
+/**
+ * We maintain a Map<socketId, HTMLAudioElement> outside React.
+ * Each remote peer gets one hidden <audio autoplay> element that plays their
+ * audio track. The corresponding <video> element in the UI is rendered MUTED.
+ *
+ * This prevents the audio from going through the video element which on mobile
+ * defaults to the loudspeaker and causes echo.
+ */
+const audioElements = new Map<string, HTMLAudioElement>();
+
+function createAudioElement(socketId: string, stream: MediaStream): HTMLAudioElement {
+  // Reuse existing element if already created for this peer
+  if (audioElements.has(socketId)) {
+    const el = audioElements.get(socketId)!;
+    el.srcObject = stream;
+    return el;
+  }
+  const audio = document.createElement("audio");
+  audio.autoplay = true;
+  audio.setAttribute("playsinline", ""); // iOS Safari: do not go fullscreen
+  // NOT muted — we want to hear remote audio
+  audio.muted = false;
+  // Hide it completely; it must be in the DOM for autoplay to work in some browsers
+  audio.style.cssText = "position:absolute;width:0;height:0;opacity:0;pointer-events:none;";
+  audio.srcObject = stream;
+  document.body.appendChild(audio);
+  audioElements.set(socketId, audio);
+
+  // iOS Safari requires a user-gesture-triggered play() after srcObject is set
+  audio.play().catch(() => {
+    // Retry on next user interaction (click, touchstart)
+    const retry = () => {
+      audio.play().catch(() => {});
+      document.removeEventListener("click", retry);
+      document.removeEventListener("touchstart", retry);
+    };
+    document.addEventListener("click", retry, { once: true });
+    document.addEventListener("touchstart", retry, { once: true });
+  });
+  return audio;
+}
+
+function removeAudioElement(socketId: string) {
+  const el = audioElements.get(socketId);
+  if (el) {
+    el.srcObject = null;
+    el.pause();
+    el.remove();
+    audioElements.delete(socketId);
+  }
+}
+
+function cleanupAllAudioElements() {
+  audioElements.forEach((el) => {
+    el.srcObject = null;
+    el.pause();
+    el.remove();
+  });
+  audioElements.clear();
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -310,6 +385,7 @@ export function useWebRTC(
   username: string,
   socketUrl: string,
   userId?: string,
+  onMeetingEnded?: () => void, // FIX 1: callback invoked when "meeting-ended" is received
 ): UseWebRTCReturn {
   // ── Core state ─────────────────────────────────────────────────────────────
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -367,6 +443,11 @@ export function useWebRTC(
   const sharingRef = useRef(false);
   const myVoteRef = useRef<number | undefined>(undefined);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const onMeetingEndedRef = useRef(onMeetingEnded);
+
+  useEffect(() => {
+    onMeetingEndedRef.current = onMeetingEnded;
+  }, [onMeetingEnded]);
 
   useEffect(() => {
     sharingRef.current = sharing;
@@ -390,23 +471,39 @@ export function useWebRTC(
 
   const createPC = useCallback(
     (remoteSocketId: string, remoteUsername: string): RTCPeerConnection => {
-      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      const pc = new RTCPeerConnection({
+        iceServers: ICE_SERVERS,
+        // FIX 3: explicit unified-plan for older iOS Safari
+        sdpSemantics: "unified-plan" as any,
+      });
+
       const stream = cameraStreamRef.current;
       if (stream) stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
       pc.onicecandidate = ({ candidate }) => {
-        if (candidate && socketRef.current) {
+        if (candidate && socketRef.current)
           socketRef.current.emit("ice-candidate", { to: remoteSocketId, candidate });
-        }
       };
 
-      const remoteStream = new MediaStream();
+      // FIX 3: Separate video and audio into different streams
+      const videoStream = new MediaStream();
+      const audioStream = new MediaStream();
+
       pc.ontrack = ({ track }) => {
-        remoteStream.addTrack(track);
-        updatePeer(remoteSocketId, { stream: remoteStream });
-        if (track.kind === "audio" && audioCtxRef.current) {
-          const analyser = buildAnalyser(audioCtxRef.current, remoteStream);
-          if (analyser) remoteAnalysers.current.set(remoteSocketId, analyser);
+        if (track.kind === "video") {
+          videoStream.addTrack(track);
+          updatePeer(remoteSocketId, { stream: videoStream });
+        } else if (track.kind === "audio") {
+          audioStream.addTrack(track);
+          updatePeer(remoteSocketId, { audioStream });
+          // Route audio through a dedicated hidden <audio> element.
+          // The <video> element for this peer MUST be rendered muted.
+          createAudioElement(remoteSocketId, audioStream);
+          // Still build an analyser for VAD
+          if (audioCtxRef.current) {
+            const analyser = buildAnalyser(audioCtxRef.current, audioStream);
+            if (analyser) remoteAnalysers.current.set(remoteSocketId, analyser);
+          }
         }
       };
 
@@ -424,6 +521,7 @@ export function useWebRTC(
             socketId: remoteSocketId,
             username: remoteUsername,
             stream: null,
+            audioStream: null,
             mic: true,
             cam: true,
             screen: false,
@@ -452,6 +550,8 @@ export function useWebRTC(
       pcsRef.current.delete(socketId);
     }
     remoteAnalysers.current.delete(socketId);
+    // FIX 3: clean up the dedicated audio element for this peer
+    removeAudioElement(socketId);
     setPeers((prev) => prev.filter((p) => p.socketId !== socketId));
   }, []);
 
@@ -466,11 +566,21 @@ export function useWebRTC(
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
-          audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 44100 },
+          audio: {
+            // FIX 3: Aggressive echo cancellation constraints
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            sampleRate: 48000,
+            channelCount: 1,
+          },
         });
       } catch {
         try {
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+            video: false,
+          });
         } catch {
           stream = new MediaStream();
         }
@@ -485,9 +595,6 @@ export function useWebRTC(
       localStreamRef.current = stream;
       setLocalStream(stream);
       setLocalCameraStream(stream);
-      // NOTE: do NOT setIsConnecting(false) here yet — wait for socket connect
-      // so the spinner shows while the socket handshake is in progress.
-      // isConnecting is cleared in the "connect" handler and in "waiting" / error handlers.
 
       const audioCtx = new AudioContext();
       audioCtxRef.current = audioCtx;
@@ -531,6 +638,17 @@ export function useWebRTC(
         setIsConnecting(false);
       });
 
+      // ── FIX 4: Handle server-side join rejection ───────────────────────────
+      // Emitted by the server when the meeting document cannot be found.
+      // Previously the client would hang indefinitely on the connecting spinner
+      // because the server silently dropped the join request. Now we surface
+      // the error immediately so the UI can show a proper message.
+      socket.on("join-error", ({ message }: { message: string }) => {
+        setError(message);
+        setIsConnecting(false);
+        setIsWaiting(false);
+      });
+
       const remoteVadTimer = setInterval(() => {
         let loudestId: string | null = null;
         let loudestVol = VAD_THRESHOLD;
@@ -548,7 +666,6 @@ export function useWebRTC(
       // ── Signaling ──────────────────────────────────────────────────────────
 
       socket.on("room-peers", async (existingPeers: any[]) => {
-        // Receiving room-peers means we are fully admitted — clear connecting state
         setIsConnecting(false);
         for (const peer of existingPeers) {
           const pc = createPC(peer.socketId, peer.username);
@@ -574,6 +691,7 @@ export function useWebRTC(
               socketId: data.socketId,
               username: data.username,
               stream: null,
+              audioStream: null,
               mic: data.mic ?? true,
               cam: data.cam ?? true,
               screen: false,
@@ -631,9 +749,31 @@ export function useWebRTC(
           return next;
         });
         setWhiteboardCursors((prev) => prev.filter((c) => c.socketId !== socketId));
-
-        // FIX 4: also remove from pending lobby list if they disconnected while waiting
         setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
+      });
+
+      // ── FIX 1: meeting-ended broadcast ────────────────────────────────────
+      /**
+       * Received by ALL participants (including the host who triggered it).
+       * Clean up everything locally then call the onMeetingEnded callback
+       * which the component wires to navigate({ to: "/dashboard" }).
+       */
+      socket.on("meeting-ended", ({ reason }: { reason: string }) => {
+        console.log(`[Meeting] Ended: ${reason}`);
+        // Stop all media immediately
+        cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
+        screenStreamRef.current?.getTracks().forEach((t) => t.stop());
+        // Close all peer connections
+        pcsRef.current.forEach((pc) => pc.close());
+        pcsRef.current.clear();
+        // Remove all hidden audio elements
+        cleanupAllAudioElements();
+        // Disconnect socket (but don't emit anything — server already knows)
+        socket.disconnect();
+        // Navigate away via the callback the component passed in
+        onMeetingEndedRef.current?.();
+        // Fallback DOM event for any other listeners
+        window.dispatchEvent(new CustomEvent("LuminaMeet:meeting-ended", { detail: { reason } }));
       });
 
       socket.on("host-action", ({ action }: any) => {
@@ -658,30 +798,16 @@ export function useWebRTC(
 
       // ── Phase 3: Lobby ─────────────────────────────────────────────────────
 
-      /**
-       * FIX: "waiting" now also clears isConnecting so the spinner goes away
-       * and the LobbyGate renders. Previously, if isConnecting was still true
-       * (because we moved setIsConnecting(false) to "room-peers") the spinner
-       * would show instead of the LobbyGate because of the guard:
-       *   if (isConnecting && !isWaiting) return <Spinner>
-       * Now both isConnecting=false and isWaiting=true are set together.
-       */
       socket.on("waiting", () => {
         setIsConnecting(false);
         setIsWaiting(true);
       });
 
-      /**
-       * FIX 1: "admitted" clears both isWaiting and isConnecting defensively.
-       * After admission the server sends "room-peers" which also clears
-       * isConnecting, but setting it here avoids a brief flash of the spinner.
-       */
       socket.on("admitted", () => {
         setIsWaiting(false);
         setIsConnecting(false);
       });
 
-      // join-request: a participant is knocking — add to pending list
       socket.on("join-request", (data: PendingParticipant) => {
         setPendingParticipants((prev) => {
           if (prev.some((p) => p.socketId === data.socketId)) return prev;
@@ -689,28 +815,16 @@ export function useWebRTC(
         });
       });
 
-      /**
-       * FIX 3: lobby-knock fires unconditionally for the sound.
-       * The server only sends this event to managers (host + co-hosts),
-       * so no client-side guard needed.
-       */
       socket.on("lobby-knock", ({ username: knocker }: { socketId: string; username: string }) => {
         playLobbyKnockSound();
         setLobbyKnockCount((n) => n + 1);
         console.log(`[Lobby] ${knocker} is knocking`);
       });
 
-      /**
-       * lobby-admitted: server broadcast when any manager admits someone.
-       * Keeps all managers' pending lists in sync.
-       */
       socket.on("lobby-admitted", ({ socketId: admittedId }: { socketId: string }) => {
         setPendingParticipants((prev) => prev.filter((p) => p.socketId !== admittedId));
       });
 
-      /**
-       * lobby-rejected: same as above but for rejections.
-       */
       socket.on("lobby-rejected", ({ socketId: rejectedId }: { socketId: string }) => {
         setPendingParticipants((prev) => prev.filter((p) => p.socketId !== rejectedId));
       });
@@ -726,12 +840,10 @@ export function useWebRTC(
         setIsSubHost(false);
         setIsConnecting(false);
       });
-
       socket.on("you-are-subhost", () => {
         setIsSubHost(true);
         setIsConnecting(false);
       });
-
       socket.on("you-are-participant", () => {
         setIsHost(false);
         setIsSubHost(false);
@@ -802,11 +914,9 @@ export function useWebRTC(
       });
 
       socket.on("peer-status", ({ socketId: sid, status }: any) => updatePeer(sid, { status }));
-
       socket.on("hand-raised", ({ socketId: sid, handRaisedAt }: any) =>
         updatePeer(sid, { handRaised: true, handRaisedAt }),
       );
-
       socket.on("hand-lowered", ({ socketId: sid }: any) =>
         updatePeer(sid, { handRaised: false, handRaisedAt: null }),
       );
@@ -823,7 +933,6 @@ export function useWebRTC(
       socket.on("whiteboard-state", (elements: WhiteboardElement[]) => {
         setWhiteboardElements(elements ?? []);
       });
-
       socket.on("whiteboard-draw", ({ element }: any) => {
         setWhiteboardElements((prev) => {
           const idx = prev.findIndex((e) => e.id === element.id);
@@ -835,13 +944,10 @@ export function useWebRTC(
           return [...prev, element];
         });
       });
-
       socket.on("whiteboard-erase", ({ elementId }: any) => {
         setWhiteboardElements((prev) => prev.filter((e) => e.id !== elementId));
       });
-
       socket.on("whiteboard-clear", () => setWhiteboardElements([]));
-
       socket.on("whiteboard-cursor", (cursor: WhiteboardCursor) => {
         setWhiteboardCursors((prev) => {
           const idx = prev.findIndex((c) => c.socketId === cursor.socketId);
@@ -909,6 +1015,7 @@ export function useWebRTC(
       cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
       screenStreamRef.current?.getTracks().forEach((t) => t.stop());
       socketRef.current?.disconnect();
+      cleanupAllAudioElements(); // FIX 3: remove all hidden audio elements
       if (vadTimerRef.current) clearInterval(vadTimerRef.current);
       if (localSpeakingDebounce.current) clearTimeout(localSpeakingDebounce.current);
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
@@ -1052,7 +1159,17 @@ export function useWebRTC(
     pcsRef.current.clear();
     cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
     screenStreamRef.current?.getTracks().forEach((t) => t.stop());
+    cleanupAllAudioElements();
     socketRef.current?.disconnect();
+  }, []);
+
+  // FIX 1: endMeetingForAll
+  // Host emits "end-meeting" socket event. The server's teardownRoom()
+  // broadcasts "meeting-ended" to every socket in the room (including this
+  // host). All clients receive it and call onMeetingEnded() → navigate away.
+  // Do NOT call leaveRoom() here — the "meeting-ended" handler does cleanup.
+  const endMeetingForAll = useCallback(() => {
+    socketRef.current?.emit("end-meeting");
   }, []);
 
   // ── Host controls ──────────────────────────────────────────────────────────
@@ -1079,13 +1196,11 @@ export function useWebRTC(
 
   const admitParticipant = useCallback((socketId: string) => {
     socketRef.current?.emit("admit-participant", { targetSocketId: socketId });
-    // Optimistic local removal — server also broadcasts lobby-admitted to all managers
     setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
   }, []);
 
   const rejectParticipant = useCallback((socketId: string) => {
     socketRef.current?.emit("reject-participant", { targetSocketId: socketId });
-    // Optimistic local removal — server also broadcasts lobby-rejected to all managers
     setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
   }, []);
 
@@ -1158,12 +1273,10 @@ export function useWebRTC(
     setLocalHandRaised(true);
     socketRef.current?.emit("raise-hand");
   }, [localHandRaised]);
-
   const lowerHand = useCallback(() => {
     setLocalHandRaised(false);
     socketRef.current?.emit("lower-hand");
   }, []);
-
   const lowerPeerHand = useCallback((socketId: string) => {
     socketRef.current?.emit("host-lower-hand", { targetSocketId: socketId });
   }, []);
@@ -1202,12 +1315,6 @@ export function useWebRTC(
     socketRef.current?.emit("whiteboard-clear");
   }, []);
 
-  /**
-   * FIX 5: syncWhiteboardElements — atomically replaces the entire board state.
-   * Used by undo/redo instead of clearWhiteboard() + drawWhiteboardElement() loop.
-   * Avoids the async race where the "whiteboard-clear" broadcast from the server
-   * arrives AFTER the re-draw calls, wiping everything.
-   */
   const syncWhiteboardElements = useCallback((elements: WhiteboardElement[]) => {
     setWhiteboardElements([...elements]);
     socketRef.current?.emit("whiteboard-sync", { elements });
@@ -1223,17 +1330,14 @@ export function useWebRTC(
     myVoteRef.current = undefined;
     socketRef.current?.emit("poll-create", { question, options });
   }, []);
-
   const votePoll = useCallback((optionIndex: number) => {
     myVoteRef.current = optionIndex;
     setCurrentPoll((prev) => (prev ? { ...prev, myVote: optionIndex } : prev));
     socketRef.current?.emit("poll-vote", { optionIndex });
   }, []);
-
   const closePoll = useCallback(() => {
     socketRef.current?.emit("poll-close");
   }, []);
-
   const dismissPoll = useCallback(() => {
     setCurrentPoll(null);
     socketRef.current?.emit("poll-dismiss");
@@ -1244,7 +1348,6 @@ export function useWebRTC(
   const setAgenda = useCallback((items: Array<{ title: string; durationSec: number }>) => {
     socketRef.current?.emit("agenda-set", { items });
   }, []);
-
   const agendaNext = useCallback(() => {
     socketRef.current?.emit("agenda-next");
   }, []);
@@ -1294,6 +1397,7 @@ export function useWebRTC(
     toggleCam,
     toggleScreenShare,
     leaveRoom,
+    endMeetingForAll,
     muteAll,
     camOffAll,
     removePeer,

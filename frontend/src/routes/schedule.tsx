@@ -36,8 +36,20 @@ function SchedulePage() {
 
     setLoading(true);
     try {
-      const res = await meetingService.schedule({ title, scheduledFor: scheduled.getTime() });
-      setResult({ link: res.link, scheduledFor: res.scheduledFor });
+      // FIX: send ISO 8601 string — backend validator uses .isISO8601()
+      // Previously: scheduledFor: scheduled.getTime()  ← number, caused 400
+      const res = await meetingService.schedule({
+        title,
+        scheduledFor: scheduled.toISOString(),
+      });
+
+      // FIX: meetingService.schedule returns { link, meeting }
+      // scheduledFor lives inside res.meeting, not at the top level
+      const scheduledForMs = res.meeting?.scheduledFor
+        ? new Date(res.meeting.scheduledFor).getTime()
+        : scheduled.getTime();
+
+      setResult({ link: res.link, scheduledFor: scheduledForMs });
       toast.success("Meeting scheduled");
     } catch (err) {
       toast.error(extractError(err).message);

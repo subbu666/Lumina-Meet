@@ -1,5 +1,10 @@
 /**
- * meeting.$id.tsx — Lumina Meet (Phase 4 — Full Lobby RBAC + Whiteboard Redo Fix)
+ * meeting.$id.tsx — Lumina Meet (Phase 4 — Full Lobby RBAC + Whiteboard Redo Fix + Patches A/B/C)
+ *
+ * PATCHES APPLIED:
+ * FIX A: useWebRTC() now passes onMeetingEnded callback for host "end for all" navigation.
+ * FIX B: handleLeaveConfirm uses endMeetingForAll() + fire-and-forget HTTP for host.
+ * FIX C: RemoteVideoTile <video> has muted attribute to prevent mobile echo/feedback.
  *
  * LOBBY FIXES in this version vs previous:
  *
@@ -915,7 +920,13 @@ function Room({
     toggleSoundscape,
   } = useAmbientSound();
 
-  const webrtc = useWebRTC(id, username, SOCKET_URL, userId);
+  // ════════════════════════════════════════════════════════════════════════════
+  // CHANGE A: useWebRTC call with onMeetingEnded callback
+  // ════════════════════════════════════════════════════════════════════════════
+  const webrtc = useWebRTC(id, username, SOCKET_URL, userId, () => {
+    onLeave();
+  });
+
   const {
     localStream,
     localCameraStream,
@@ -928,6 +939,7 @@ function Room({
     toggleCam,
     toggleScreenShare,
     leaveRoom,
+    endMeetingForAll,
     muteAll,
     camOffAll,
     removePeer,
@@ -1273,24 +1285,18 @@ function Room({
     if (activePanel !== "agenda") setActivePanel("agenda");
   }, [agendaIn, setAgenda, activePanel]);
 
-  const agendaTimeLeft = useMemo(() => {
-    if (!agenda) return null;
-    if (agenda.timerPaused) return agenda.timerRemaining ?? 0;
-    if (agenda.timerEnd) return Math.max(0, agenda.timerEnd - agendaTick);
-    return null;
-  }, [agenda, agendaTick]);
-
+  // ════════════════════════════════════════════════════════════════════════════
+  // CHANGE B: handleLeaveConfirm — host path uses endMeetingForAll
+  // ════════════════════════════════════════════════════════════════════════════
   const handleLeaveConfirm = useCallback(async () => {
     if (isHost) {
-      try {
-        await apiClient.post(`/meeting/${id}/end`);
-      } catch {
-        /* ignore */
-      }
+      endMeetingForAll();
+      apiClient.post(`/meeting/${id}/end`).catch(() => {});
+    } else {
+      leaveRoom();
+      onLeave();
     }
-    leaveRoom();
-    onLeave();
-  }, [isHost, id, leaveRoom, onLeave]);
+  }, [isHost, id, endMeetingForAll, leaveRoom, onLeave]);
 
   const handleTransfer = useCallback(
     (mode: "full" | "sub") => {
@@ -1318,8 +1324,6 @@ function Room({
   );
 
   // ── FIX 2: isWaiting checked FIRST, before isConnecting ───────────────────
-  // This prevents a race where isConnecting clears before isWaiting is set,
-  // which would briefly render the meeting room instead of the LobbyGate.
   if (isWaiting) {
     return (
       <LobbyGate
@@ -3613,11 +3617,18 @@ function RemoteVideoTile({
           : `linear-gradient(135deg, oklch(0.25 0.08 ${hue}), oklch(0.18 0.05 ${hue + 30}))`,
       }}
     >
+      {/* ════════════════════════════════════════════════════════════════════════════
+          CHANGE C: muted attribute added to prevent mobile echo/feedback.
+          Audio is routed through the hidden <audio> element managed by
+          createAudioElement() in the hook. Without muted, audio plays through
+          both the speaker (this video) and earpiece (audio element).
+          ════════════════════════════════════════════════════════════════════════════ */}
       {peer.stream && (
         <video
           ref={videoRef}
           autoPlay
           playsInline
+          muted
           className={cn(
             "absolute inset-0 h-full w-full object-cover transition-opacity duration-300",
             hasVideo ? "opacity-100" : "opacity-0",
