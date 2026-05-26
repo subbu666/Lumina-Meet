@@ -14,13 +14,6 @@
  * PATCH 5: All three modals integrated into JSX AnimatePresence block.
  * PATCH 6: host-removed listener no longer calls onLeave directly (lets YouLeftModal handle it).
  *
- * PRIVATE CHAT PATCHES:
- * PATCH P1: ChatPanel accepts peers + updated onSend with recipients.
- * PATCH P2: Private messaging state in ChatPanel (recipient picker, selected recipients).
- * PATCH P3: Recipient selector dropdown in chat input footer.
- * PATCH P4: ChatPanel call site passes peers prop.
- * PATCH P5: Private label indicator on message bubbles.
- *
  * LOBBY FIXES in this version vs previous:
  *
  * FIX 1 — Spinner guard was wrong:
@@ -122,8 +115,8 @@ import {
 import { useAuthStore } from "@/store/authStore";
 import { NeonButton } from "@/components/ui-custom/NeonButton";
 import { cn } from "@/lib/utils";
-import {useWebRTC} from "@/hooks/useWebRTC";
 import {
+  useWebRTC,
   type RemotePeer,
   type ChatMessage,
   type ParticipantStatus,
@@ -929,13 +922,6 @@ function Room({
     const t = setInterval(() => setAgendaTick(Date.now()), 500);
     return () => clearInterval(t);
   }, []);
-
-  // Compute remaining time for active agenda item
-  const agendaTimeLeft = useMemo(() => {
-    if (!agenda || agenda.timerEnd === null) return null;
-    const remaining = agenda.timerEnd - Date.now();
-    return remaining > 0 ? remaining : 0;
-  }, [agenda, agendaTick]);
 
   const {
     activeSoundscape,
@@ -1853,16 +1839,12 @@ function Room({
               onClose={() => setActivePanel(null)}
             />
           )}
-          {/* ═══════════════════════════════════════════════════════════════════════
-              PATCH P4: ChatPanel call site — added peers prop
-              ═══════════════════════════════════════════════════════════════════════ */}
           {activePanel === "chat" && (
             <ChatPanel
               localSocketId={localSocketId}
               username={username}
               messages={messages}
               typingPeers={typingPeers}
-              peers={peers}
               onSend={sendChatMessage}
               onReact={sendChatReaction}
               onTyping={setTyping}
@@ -4058,20 +4040,11 @@ function ParticipantsPanel({
 
 // ─── Chat Panel ───────────────────────────────────────────────────────────────
 
-/*
- * PATCH P1-P5: Private messaging support
- * - Added peers prop for recipient picker
- * - Added selectedRecipients state (null = everyone, string[] = private)
- * - Recipient selector dropdown above input
- * - Private label indicator on message bubbles
- * - Updated onSend signature to include recipients
- */
 function ChatPanel({
   localSocketId,
   username,
   messages,
   typingPeers,
-  peers,
   onSend,
   onReact,
   onTyping,
@@ -4081,8 +4054,7 @@ function ChatPanel({
   username: string;
   messages: ChatMessage[];
   typingPeers: Array<{ socketId: string; username: string }>;
-  peers: RemotePeer[];
-  onSend: (text: string, replyTo?: ChatMessage | null, recipients?: string[] | null) => void;
+  onSend: (text: string, replyTo?: ChatMessage | null) => void;
   onReact: (messageId: string, emoji: string) => void;
   onTyping: (isTyping: boolean) => void;
   onClose: () => void;
@@ -4091,10 +4063,6 @@ function ChatPanel({
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
   const [emojiPickerForMsg, setEmojiPickerForMsg] = useState<string | null>(null);
-  // Private messaging state (PATCH P2)
-  const [recipientPickerOpen, setRecipientPickerOpen] = useState(false);
-  // null = everyone; string[] = selected socket IDs
-  const [selectedRecipients, setSelectedRecipients] = useState<string[] | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -4109,43 +4077,14 @@ function ChatPanel({
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, [emojiPickerForMsg]);
-  useEffect(() => {
-    if (!recipientPickerOpen) return;
-    const h = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest("[data-recipient-picker],[data-recipient-trigger]"))
-        setRecipientPickerOpen(false);
-    };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, [recipientPickerOpen]);
 
   const handleSend = () => {
     if (!input.trim()) return;
-    onSend(input.trim(), replyTo, selectedRecipients);
+    onSend(input.trim(), replyTo);
     setInput("");
     setReplyTo(null);
     onTyping(false);
-    // Keep selectedRecipients so user can send multiple private messages in a row
   };
-
-  const toggleRecipient = (socketId: string) => {
-    setSelectedRecipients((prev) => {
-      if (prev === null) return [socketId];
-      if (prev.includes(socketId)) {
-        const next = prev.filter((id) => id !== socketId);
-        return next.length === 0 ? null : next;
-      }
-      return [...prev, socketId];
-    });
-  };
-
-  const recipientLabel =
-    selectedRecipients === null
-      ? "Everyone"
-      : selectedRecipients.length === 1
-        ? (peers.find((p) => p.socketId === selectedRecipients[0])?.username ?? "1 person")
-        : `${selectedRecipients.length} people`;
-
   const grouped = messages.map((msg, i) => ({
     ...msg,
     isFirst: i === 0 || messages[i - 1].socketId !== msg.socketId,
@@ -4232,20 +4171,6 @@ function ChatPanel({
                       <span className="opacity-70 line-clamp-1">
                         {msg.replyTo.text.slice(0, 60)}
                         {msg.replyTo.text.length > 60 ? "…" : ""}
-                      </span>
-                    </div>
-                  )}
-                  {/* PATCH P5: Private message indicator */}
-                  {(msg as any).isPrivate && (
-                    <div
-                      className={cn(
-                        "flex items-center gap-1 mb-0.5",
-                        msg.isSelf ? "justify-end" : "justify-start",
-                      )}
-                    >
-                      <span className="flex items-center gap-1 rounded-full border border-[var(--neon-accent)]/40 bg-[var(--neon-accent)]/10 px-2 py-0.5 text-[10px] text-[var(--neon-accent)]">
-                        <Lock className="h-2.5 w-2.5" />
-                        Private
                       </span>
                     </div>
                   )}
@@ -4423,108 +4348,8 @@ function ChatPanel({
           </motion.div>
         )}
       </AnimatePresence>
-
-      {/* ═══════════════════════════════════════════════════════════════════════════
-          PATCH P3b: Message input footer with recipient selector
-          ═══════════════════════════════════════════════════════════════════════════ */}
       <div className="border-t border-white/5 p-3 shrink-0">
-        {/* ── Recipient selector ───────────────────────────────────────────── */}
-        {peers.length > 0 && (
-          <div className="relative mb-2">
-            <button
-              data-recipient-trigger
-              onClick={() => setRecipientPickerOpen((v) => !v)}
-              className={cn(
-                "flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs w-full transition",
-                selectedRecipients !== null
-                  ? "border-[var(--neon-accent)]/50 bg-[var(--neon-accent)]/10 text-[var(--neon-accent)]"
-                  : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
-              )}
-            >
-              <Users className="h-3 w-3 shrink-0" />
-              <span className="flex-1 text-left">
-                To: <span className="font-semibold">{recipientLabel}</span>
-              </span>
-              {selectedRecipients !== null && (
-                <span className="rounded-full bg-[var(--neon-accent)]/20 px-1.5 py-0.5 text-[10px] font-bold">
-                  Private
-                </span>
-              )}
-              <ChevronDown
-                className={cn(
-                  "h-3 w-3 text-muted-foreground transition-transform shrink-0",
-                  recipientPickerOpen && "rotate-180",
-                )}
-              />
-            </button>
-
-            <AnimatePresence>
-              {recipientPickerOpen && (
-                <motion.div
-                  data-recipient-picker
-                  initial={{ opacity: 0, y: -6, scale: 0.97 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -6, scale: 0.97 }}
-                  transition={{ type: "spring", damping: 22, stiffness: 320 }}
-                  className="absolute bottom-full mb-1.5 left-0 right-0 z-30 glass-strong rounded-2xl border border-white/10 p-1.5 shadow-2xl"
-                >
-                  {/* Everyone option */}
-                  <button
-                    onClick={() => {
-                      setSelectedRecipients(null);
-                      setRecipientPickerOpen(false);
-                    }}
-                    className={cn(
-                      "flex items-center gap-2.5 w-full rounded-xl px-3 py-2 text-sm transition",
-                      selectedRecipients === null ? "bg-white/10" : "hover:bg-white/5",
-                    )}
-                  >
-                    <div className="flex h-6 w-6 items-center justify-center rounded-full bg-white/10 text-xs">
-                      🌐
-                    </div>
-                    <span className="flex-1 text-left font-medium">Everyone</span>
-                    {selectedRecipients === null && (
-                      <CheckCircle2 className="h-3.5 w-3.5 text-[var(--neon-primary)]" />
-                    )}
-                  </button>
-
-                  <div className="my-1 h-px bg-white/10 mx-1" />
-                  <p className="px-3 py-1 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
-                    Private — select people
-                  </p>
-
-                  {peers.map((p, i) => {
-                    const isSelected = selectedRecipients?.includes(p.socketId) ?? false;
-                    return (
-                      <button
-                        key={p.socketId}
-                        onClick={() => toggleRecipient(p.socketId)}
-                        className={cn(
-                          "flex items-center gap-2.5 w-full rounded-xl px-3 py-2 text-sm transition",
-                          isSelected ? "bg-[var(--neon-accent)]/10" : "hover:bg-white/5",
-                        )}
-                      >
-                        <Avatar name={p.username} hue={hueForIndex(i)} size={24} />
-                        <span className="flex-1 text-left truncate">{p.username}</span>
-                        {isSelected && (
-                          <CheckCircle2 className="h-3.5 w-3.5 text-[var(--neon-accent)] shrink-0" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        )}
-
-        {/* ── Input row ─────────────────────────────────────────────────────── */}
-        <div
-          className={cn(
-            "flex items-center gap-2 rounded-2xl border bg-white/5 pl-4 pr-2 py-2 transition focus-within:border-[var(--neon-primary)]/40",
-            selectedRecipients !== null ? "border-[var(--neon-accent)]/30" : "border-white/10",
-          )}
-        >
+        <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 pl-4 pr-2 py-2 focus-within:border-[var(--neon-primary)]/40 transition">
           <input
             value={input}
             onChange={(e) => {
@@ -4537,9 +4362,7 @@ function ChatPanel({
                 handleSend();
               }
             }}
-            placeholder={
-              selectedRecipients !== null ? `Private to ${recipientLabel}…` : "Send a message…"
-            }
+            placeholder="Send a message…"
             className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/50"
           />
           <motion.button
@@ -4550,9 +4373,7 @@ function ChatPanel({
             className={cn(
               "flex h-8 w-8 items-center justify-center rounded-xl transition",
               input.trim()
-                ? selectedRecipients !== null
-                  ? "bg-gradient-to-br from-[var(--neon-accent)] to-[var(--neon-primary)] text-white"
-                  : "bg-gradient-to-br from-[oklch(0.55_0.22_280)] to-[oklch(0.65_0.18_305)] text-white"
+                ? "bg-gradient-to-br from-[oklch(0.55_0.22_280)] to-[oklch(0.65_0.18_305)] text-white"
                 : "bg-white/5 text-muted-foreground/40 cursor-not-allowed",
             )}
           >
@@ -5283,5 +5104,3 @@ function formatDuration(ms: number): string {
   const s = Math.ceil(ms / 1000);
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
-
-// ─── End of file ─────────────────────────────────────────────────────────────

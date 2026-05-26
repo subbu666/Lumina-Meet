@@ -1,21 +1,22 @@
 /**
  * WebRTC Signaling Server — Lumina Meet
  *
- * NEW IN THIS VERSION:
+ * CHANGES IN THIS VERSION (on top of previous fixes):
  *
- * FEATURE — Private / Direct chat messages:
- *   "chat-message" now accepts an optional `recipients` field.
+ * NEW — Meeting-ended dialogs (host name propagation):
+ *   teardownRoom now accepts a `hostUsername` argument and passes it in the
+ *   "meeting-ended" broadcast payload as `{ reason, hostUsername }`.
+ *   The client uses this to decide which dialog to show:
+ *     • host receives  → "You ended this meeting"   (hostUsername === own username)
+ *     • others receive → "Meeting ended by <hostUsername>"
  *
- *   recipients = undefined | null  → broadcast to the whole room (existing behaviour)
- *   recipients = ["socketId1", ...]→ send ONLY to the listed socket IDs + back to sender
- *
- *   The server tags each outgoing message with:
- *     isPrivate: true/false
- *     recipients: string[] | null   (echoed back so the client can display "Private")
- *
- *   Security: the server ignores any recipients value that isn't a non-empty array
- *   of strings — it never trusts the client to mark its own messages as private
- *   without a valid target list.
+ * NEW — "user-left" self-navigation:
+ *   When a regular participant disconnects intentionally (leaveRoom()),
+ *   the server now emits "you-left" back to that socket BEFORE it leaves
+ *   the room, so the client can show the "You left" dialog.
+ *   This piggybacks on the existing "leave-room" socket event that leaveRoom()
+ *   emits; if leaveRoom() only disconnects the socket we fire it on disconnect
+ *   when data.intentionalLeave is true.
  */
 
 import Meeting from "../models/Meeting.js";
@@ -89,6 +90,17 @@ function isHostOrSubhost(socket) {
 }
 
 // ─── teardownRoom ─────────────────────────────────────────────────────────────
+/**
+ * Tears down an entire room and notifies all participants.
+ *
+ * @param {object} io            - Socket.IO server instance
+ * @param {string} roomId        - The meeting/room ID
+ * @param {string} reason        - Human-readable reason string
+ * @param {string} hostUsername  - Name of the host who ended the meeting.
+ *                                 Included in the broadcast so clients can
+ *                                 display "Meeting ended by <name>" vs
+ *                                 "You ended this meeting".
+ */
 async function teardownRoom(
   io,
   roomId,
@@ -97,7 +109,10 @@ async function teardownRoom(
 ) {
   const room = rooms.get(roomId);
   if (room) {
+    // Broadcast to everyone still in the room — include hostUsername so the
+    // client knows whether to show the "you ended" or "host ended" dialog.
     io.to(roomId).emit("meeting-ended", { reason, hostUsername });
+
     for (const [sid] of room.entries()) {
       const s = io.sockets.sockets.get(sid);
       if (s) s.leave(roomId);
@@ -106,6 +121,7 @@ async function teardownRoom(
     chatHistory.delete(roomId);
   }
 
+  // Also notify anyone still waiting in the lobby
   const waiting = waitingRooms.get(roomId);
   if (waiting) {
     for (const [sid] of waiting.entries()) {
@@ -329,12 +345,14 @@ export function initSignaling(io) {
     socket.on("end-meeting", async () => {
       const roomId = socket.data.roomId;
       if (!roomId) return;
+
       if (!socket.data.isHost) {
         console.warn(
           `[Room] Non-host ${socket.data.username} tried to end meeting ${roomId}`,
         );
         return;
       }
+
       const hostUsername = socket.data.username;
       console.log(
         `[Room] Host ${hostUsername} ending meeting ${roomId} for all`,
@@ -342,9 +360,19 @@ export function initSignaling(io) {
       await teardownRoom(io, roomId, "Host ended the meeting.", hostUsername);
     });
 
-    // ─── INTENTIONAL LEAVE ───────────────────────────────────────────────────
+    // ─── INTENTIONAL LEAVE (participant) ─────────────────────────────────────
+    /**
+     * Emitted by leaveRoom() in useWebRTC BEFORE socket.disconnect().
+     * We store the flag on socket.data so the "disconnect" handler can
+     * emit "you-left" to the departing socket and skip the normal cleanup
+     * that would confuse things.
+     *
+     * We also emit "you-left" immediately here so the client receives it
+     * before the socket closes.
+     */
     socket.on("leave-room", () => {
       socket.data.intentionalLeave = true;
+      // Tell this socket it left intentionally — client shows "You left" dialog
       socket.emit("you-left");
     });
 
@@ -547,49 +575,12 @@ export function initSignaling(io) {
     });
 
     // ─── CHAT ─────────────────────────────────────────────────────────────────
-    //
-    // NEW — Private messaging:
-    //
-    // Payload:  { text, replyTo?, recipients? }
-    //
-    //   recipients = undefined/null/[]  → public message (broadcast to whole room)
-    //   recipients = ["socketId", ...]  → private message (only those sockets + sender)
-    //
-    // The outgoing message includes:
-    //   isPrivate: boolean
-    //   recipients: string[] | null  (the resolved list, or null for public)
-    //
-    // Only sockets currently in the room are valid recipients.
-    // The sender always receives their own message back (echo).
-    // Private messages are NOT stored in chatHistory to avoid leaking them
-    // to participants who join later.
-    //
-    // ─────────────────────────────────────────────────────────────────────────
 
-    socket.on("chat-message", ({ text, replyTo, recipients }) => {
+    socket.on("chat-message", ({ text, replyTo }) => {
       const roomId = socket.data.roomId;
       if (!roomId) return;
       const clean = sanitizeText(text);
       if (!clean) return;
-
-      // Determine if this is a private message
-      // Valid: non-empty array of strings that are actual socket IDs in this room
-      const room = rooms.get(roomId);
-      let resolvedRecipients = null; // null = public
-
-      if (Array.isArray(recipients) && recipients.length > 0) {
-        // Validate: only allow socketIds that are currently in the room
-        const validTargets = recipients.filter(
-          (id) => typeof id === "string" && id !== socket.id && room?.has(id),
-        );
-        if (validTargets.length > 0) {
-          resolvedRecipients = validTargets;
-        }
-        // If all targets were invalid/not in room, fall back to public
-      }
-
-      const isPrivate = resolvedRecipients !== null;
-
       const message = {
         id: `${socket.id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         socketId: socket.id,
@@ -597,24 +588,9 @@ export function initSignaling(io) {
         text: clean,
         timestamp: Date.now(),
         replyTo: replyTo ?? null,
-        isPrivate,
-        // Include recipients list so the UI can display "Private to X, Y"
-        recipients: isPrivate ? resolvedRecipients : null,
       };
-
-      if (!isPrivate) {
-        // ── Public message: broadcast to room + store in history ──────────────
-        pushChat(roomId, message);
-        io.to(roomId).emit("chat-message", message);
-      } else {
-        // ── Private message: send only to targets + echo back to sender ───────
-        // NOT stored in chatHistory (prevent leaking to future joiners)
-        resolvedRecipients.forEach((targetSocketId) => {
-          io.to(targetSocketId).emit("chat-message", message);
-        });
-        // Echo back to sender so they see their own private message
-        socket.emit("chat-message", message);
-      }
+      pushChat(roomId, message);
+      io.to(roomId).emit("chat-message", message);
     });
 
     socket.on("chat-reaction", ({ messageId, emoji }) => {

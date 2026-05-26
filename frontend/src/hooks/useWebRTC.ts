@@ -1,34 +1,32 @@
 /**
  * useWebRTC — Lumina Meet
  *
- * FIX: "Cannot access 'ot' before initialization" (TDZ / circular import)
+ * CHANGES IN THIS VERSION (on top of previous fixes):
  *
- * ROOT CAUSE:
- *   The original file used a mixed value+type import for BackgroundMode:
- *     import { useBackgroundBlur, type BackgroundMode } from "./useBackgroundBlur";
+ * NEW — Meeting-ended dialogs:
+ *   The "meeting-ended" event now carries { reason, hostUsername }.
+ *   Instead of immediately calling onMeetingEnded() (which navigated to
+ *   dashboard), we now call onMeetingEndedWithInfo({ hostUsername }) so the
+ *   component can show a beautiful dialog FIRST and navigate after the user
+ *   dismisses it (or after an auto-close timeout).
  *
- *   Vite/Rollup's module graph processing can hit a Temporal Dead Zone when
- *   a `type` keyword is inlined next to a value import AND the imported module
- *   itself imports from a file that (transitively) imports this hook — creating
- *   a circular reference that makes the bundler access `ot` (mangled variable)
- *   before it is initialized in the output bundle.
+ * NEW — "You left" dialog:
+ *   leaveRoom() now emits "leave-room" to the server BEFORE disconnecting.
+ *   The server emits "you-left" back. The hook surfaces this via the new
+ *   onYouLeft() callback so the component can show the "you left" dialog.
  *
- * FIXES APPLIED:
- *   1. Split ALL type imports into separate `import type { ... }` statements.
- *      This tells the bundler these are compile-time only and breaks the cycle.
- *   2. `useNoiseSuppression` and `useBackgroundBlur` imports are now pure value
- *      imports with their types imported separately.
- *   3. Added `// @ts-ignore` on RTCPeerConnection sdpSemantics (non-standard).
- *   4. No logic changes — all hook behaviour is identical.
+ *   Callback signatures:
+ *     onMeetingEndedWithInfo?: (info: { hostUsername: string }) => void
+ *     onYouLeft?: () => void
+ *
+ *   The component wires these to set local state that controls which dialog
+ *   is shown. Navigation happens inside the dialog's "Go to dashboard" button.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
-
-// ─── Split type imports to avoid TDZ circular reference ───────────────────────
 import { useNoiseSuppression } from "./useNoiseSuppression";
-import { useBackgroundBlur } from "./useBackgroundBlur";
-import type { BackgroundMode } from "./useBackgroundBlur";
+import { useBackgroundBlur, type BackgroundMode } from "./useBackgroundBlur";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -142,12 +140,10 @@ export interface TilePosition {
   y: number;
 }
 
+// ─── New: info passed when meeting is ended by host ───────────────────────────
 export interface MeetingEndedInfo {
   hostUsername: string;
 }
-
-// Re-export BackgroundMode so consumers can import from this file
-export type { BackgroundMode };
 
 export interface UseWebRTCReturn {
   localStream: MediaStream | null;
@@ -357,7 +353,18 @@ export function useWebRTC(
   username: string,
   socketUrl: string,
   userId?: string,
+  /**
+   * Called when the host ends the meeting for all.
+   * Receives the host's username so the component can display:
+   *   - host:        "You ended this meeting"
+   *   - participants: "Meeting ended by <hostUsername>"
+   * Navigation should happen INSIDE the dialog, not immediately here.
+   */
   onMeetingEndedWithInfo?: (info: MeetingEndedInfo) => void,
+  /**
+   * Called when THIS user intentionally leaves (leaveRoom() was called).
+   * Navigation should happen INSIDE the "you left" dialog.
+   */
   onYouLeft?: () => void,
 ): UseWebRTCReturn {
   // ── Core state ─────────────────────────────────────────────────────────────
@@ -417,8 +424,7 @@ export function useWebRTC(
   const myVoteRef = useRef<number | undefined>(undefined);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Keep callback refs stable — MUST use refs so the main effect
-  // doesn't re-run when these callbacks change identity
+  // Keep callback refs stable
   const onMeetingEndedWithInfoRef = useRef(onMeetingEndedWithInfo);
   const onYouLeftRef = useRef(onYouLeft);
   useEffect(() => {
@@ -452,8 +458,7 @@ export function useWebRTC(
     (remoteSocketId: string, remoteUsername: string): RTCPeerConnection => {
       const pc = new RTCPeerConnection({
         iceServers: ICE_SERVERS,
-        // @ts-ignore — sdpSemantics is non-standard but needed for some browsers
-        sdpSemantics: "unified-plan",
+        sdpSemantics: "unified-plan" as any,
       });
 
       const stream = cameraStreamRef.current;
@@ -540,8 +545,6 @@ export function useWebRTC(
   }, []);
 
   // ── Main effect ────────────────────────────────────────────────────────────
-  // IMPORTANT: userId is intentionally excluded from deps — it never changes
-  // after mount and including it would cause reconnects on every render.
 
   useEffect(() => {
     if (!roomId || !username) return;
@@ -732,30 +735,43 @@ export function useWebRTC(
         setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
       });
 
+      // ── meeting-ended: server tells everyone the meeting was ended by host ─
+      // The payload now includes `hostUsername` so the component can show
+      // personalised messages. We do NOT navigate here — the component's
+      // onMeetingEndedWithInfo callback controls the dialog, and navigation
+      // happens when the user dismisses the dialog.
       socket.on(
         "meeting-ended",
         ({ reason, hostUsername }: { reason: string; hostUsername: string }) => {
           console.log(`[Meeting] Ended by ${hostUsername}: ${reason}`);
+          // Stop media & close connections immediately
           cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
           screenStreamRef.current?.getTracks().forEach((t) => t.stop());
           pcsRef.current.forEach((pc) => pc.close());
           pcsRef.current.clear();
           cleanupAllAudioElements();
           socket.disconnect();
+          // Notify component to show the appropriate dialog
           onMeetingEndedWithInfoRef.current?.({ hostUsername });
+          // Legacy DOM event for any other listeners
           window.dispatchEvent(
             new CustomEvent("LuminaMeet:meeting-ended", { detail: { reason, hostUsername } }),
           );
         },
       );
 
+      // ── you-left: server confirms this socket intentionally left ──────────
+      // Fires only when leaveRoom() was called (not on tab close / crash).
+      // The component shows the "You left" dialog; navigation is inside it.
       socket.on("you-left", () => {
         console.log("[Meeting] You left intentionally");
+        // Stop media immediately
         cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
         screenStreamRef.current?.getTracks().forEach((t) => t.stop());
         pcsRef.current.forEach((pc) => pc.close());
         pcsRef.current.clear();
         cleanupAllAudioElements();
+        // DON'T disconnect here — leaveRoom() will do it after emitting leave-room
         onYouLeftRef.current?.();
       });
 
@@ -1005,10 +1021,7 @@ export function useWebRTC(
       audioCtxRef.current?.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, username, socketUrl]);
-  //          ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  // userId intentionally excluded: it never changes after mount and
-  // including it would cause a full reconnect on every render cycle.
+  }, [roomId, username, socketUrl, userId]);
 
   // ── Controls ───────────────────────────────────────────────────────────────
 
@@ -1139,13 +1152,27 @@ export function useWebRTC(
     }
   }, [_stopSharingCleanup]);
 
+  /**
+   * leaveRoom — intentional participant leave.
+   *
+   * Emits "leave-room" FIRST so the server sends back "you-left" (which
+   * triggers the "You left" dialog in the component). Then disconnects.
+   * Media cleanup happens in the "you-left" handler above.
+   */
   const leaveRoom = useCallback(() => {
     socketRef.current?.emit("leave-room");
+    // Short delay so "you-left" can be received before disconnect
     setTimeout(() => {
       socketRef.current?.disconnect();
     }, 150);
   }, []);
 
+  /**
+   * endMeetingForAll — host only.
+   * Emits "end-meeting" to the server. Server calls teardownRoom() which
+   * broadcasts "meeting-ended" to everyone (including this host). The
+   * "meeting-ended" handler above fires onMeetingEndedWithInfo.
+   */
   const endMeetingForAll = useCallback(() => {
     socketRef.current?.emit("end-meeting");
   }, []);
@@ -1320,7 +1347,6 @@ export function useWebRTC(
   const closePoll = useCallback(() => {
     socketRef.current?.emit("poll-close");
   }, []);
-
   const dismissPoll = useCallback(() => {
     setCurrentPoll(null);
     socketRef.current?.emit("poll-dismiss");

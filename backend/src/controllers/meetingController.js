@@ -182,6 +182,8 @@ export const generateInstantMeeting = asyncHandler(async (req, res) => {
       participantVideo: settings.participantVideo ?? true,
       hostAudio: settings.hostAudio ?? true,
       participantAudio: settings.participantAudio ?? true,
+      // FIX 2: waitingRoom defaults to TRUE so the lobby gate actually fires.
+      // Previously this was `false` which disabled the lobby for ALL instant meetings.
       waitingRoom: settings.waitingRoom ?? true,
       allowJoinBeforeHost: settings.allowJoinBeforeHost ?? false,
       muteParticipantsOnEntry: settings.muteParticipantsOnEntry ?? false,
@@ -253,6 +255,7 @@ export const generateAndInvite = asyncHandler(async (req, res) => {
       participantVideo: true,
       hostAudio: true,
       participantAudio: true,
+      // FIX 2: waitingRoom true by default
       waitingRoom: true,
       allowJoinBeforeHost: true,
       muteParticipantsOnEntry: false,
@@ -376,6 +379,7 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
       participantVideo: settings.participantVideo ?? true,
       hostAudio: settings.hostAudio ?? true,
       participantAudio: settings.participantAudio ?? true,
+      // FIX 2: waitingRoom true by default for scheduled meetings too
       waitingRoom: settings.waitingRoom ?? true,
       allowJoinBeforeHost: settings.allowJoinBeforeHost ?? true,
       muteParticipantsOnEntry: settings.muteParticipantsOnEntry ?? false,
@@ -538,20 +542,6 @@ export const joinMeeting = asyncHandler(async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. RECORD A "JOINED" MEETING LINK
-//
-// FIX B — Correct deduplication logic.
-//
-// OLD bug: looked for { host: userId, meetingId, type: "joined" }
-//   Problem: if the same meetingId exists as type "instant" (the host's record),
-//   this query misses it and creates a duplicate with type "joined" — or worse,
-//   if the participant runs it twice, creates two "joined" records.
-//
-// NEW fix: use { host: userId, meetingId } with NO type filter.
-//   • If the user IS the host → they already have an "instant"/"scheduled" record;
-//     we skip creation and just return the existing record. No duplicate.
-//   • If the user is NOT the host → check for an existing "joined" record by
-//     this user for this meetingId; only create if none exists.
-//   This ensures exactly one history entry per user per meeting link.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const recordJoinedMeeting = asyncHandler(async (req, res) => {
@@ -571,7 +561,6 @@ export const recordJoinedMeeting = asyncHandler(async (req, res) => {
   const { meetingLink, title } = req.body;
   const userId = req.userId;
 
-  // Extract meetingId from the URL
   let meetingId;
   try {
     const url = new URL(meetingLink);
@@ -586,36 +575,26 @@ export const recordJoinedMeeting = asyncHandler(async (req, res) => {
     );
   }
 
-  // FIX B: Check if user already has ANY record for this meetingId (any type)
-  const existingAny = await Meeting.findOne({ host: userId, meetingId });
-
-  if (existingAny) {
-    // User already has a record (either as host or from a previous join) — return it
-    const populated = await Meeting.findById(existingAny._id).populate(
-      "host",
-      "username email firstName lastName",
-    );
-    return res.status(200).json({
-      success: true,
-      message: "Meeting already in history",
-      data: { meeting: populated.toHostObject() },
-    });
-  }
-
-  // No existing record — create a new "joined" entry for this user
-  const clientUrl = process.env.CLIENT_URL;
-  const canonicalLink = `${clientUrl}/meeting/${meetingId}`;
-
-  const meeting = await Meeting.create({
+  let meeting = await Meeting.findOne({
     host: userId,
     meetingId,
-    title,
     type: "joined",
-    status: "active",
-    meetingLink: canonicalLink,
-    startedAt: new Date(),
-    sessions: [],
   });
+
+  if (!meeting) {
+    const clientUrl = process.env.CLIENT_URL;
+    const canonicalLink = `${clientUrl}/meeting/${meetingId}`;
+    meeting = await Meeting.create({
+      host: userId,
+      meetingId,
+      title,
+      type: "joined",
+      status: "active",
+      meetingLink: canonicalLink,
+      startedAt: new Date(),
+      sessions: [],
+    });
+  }
 
   const populatedMeeting = await Meeting.findById(meeting._id).populate(
     "host",
@@ -785,10 +764,7 @@ export const updateMeeting = asyncHandler(async (req, res) => {
   const updatedMeeting = await Meeting.findByIdAndUpdate(
     meeting._id,
     actualUpdates,
-    {
-      new: true,
-      runValidators: true,
-    },
+    { new: true, runValidators: true },
   ).populate("host", "username email firstName lastName");
   res.status(200).json({
     success: true,
@@ -832,13 +808,6 @@ export const cancelMeeting = asyncHandler(async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 8. MEETING HISTORY
-//
-// FIX C — History query was correct but lacked `type` in serialized output
-//   (fixed in Meeting.js toPublicObject). No query change needed here since
-//   the $or already covers host:userId which is how "joined" records are stored.
-//
-//   Added: explicit sort newest-first and include sessions in the response
-//   so the frontend session timeline works for all meeting types.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const getMeetingHistory = asyncHandler(async (req, res) => {
@@ -860,25 +829,22 @@ export const getMeetingHistory = asyncHandler(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 10, 100);
   const status = req.query.status;
 
-  // ── FIX C: query includes host:userId which covers "joined" records too,
-  //   since recordJoinedMeeting creates them with host:userId.
-  //   The $or also catches meetings where the user was invited as participant.
-  const queryFilter = { $or: [{ host: userId }] };
+  const query = { $or: [{ host: userId }] };
   const User = (await import("../models/User.js")).default;
   const user = await User.findById(userId);
   if (user) {
-    queryFilter.$or.push({ "participants.email": user.email.toLowerCase() });
-    queryFilter.$or.push({ invitedEmails: user.email.toLowerCase() });
+    query.$or.push({ "participants.email": user.email.toLowerCase() });
+    query.$or.push({ invitedEmails: user.email.toLowerCase() });
   }
-  if (status) queryFilter.status = status;
+  if (status) query.status = status;
 
   const [meetings, totalCount] = await Promise.all([
-    Meeting.find(queryFilter)
+    Meeting.find(query)
       .populate("host", "username email firstName lastName")
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit),
-    Meeting.countDocuments(queryFilter),
+    Meeting.countDocuments(query),
   ]);
 
   const totalPages = Math.ceil(totalCount / limit);
@@ -887,13 +853,8 @@ export const getMeetingHistory = asyncHandler(async (req, res) => {
     success: true,
     data: {
       meetings: meetings.map((m) => ({
-        // toPublicObject now includes `type`, `sessions`, `supportsMultipleSessions`
         ...m.toPublicObject(),
         isHost: m.isHost(userId),
-        // Expose startedAt and completedAt for session duration calculation
-        startedAt: m.startedAt,
-        completedAt: m.completedAt,
-        duration: m.duration,
       })),
       pagination: {
         currentPage: page,
@@ -912,24 +873,24 @@ export const getUpcomingMeetings = asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = Math.min(parseInt(req.query.limit) || 10, 50);
 
-  const queryFilter = {
+  const query = {
     $or: [{ host: userId }],
     status: { $in: ["pending", "active"] },
   };
   const User = (await import("../models/User.js")).default;
   const user = await User.findById(userId);
   if (user) {
-    queryFilter.$or.push({ "participants.email": user.email.toLowerCase() });
-    queryFilter.$or.push({ invitedEmails: user.email.toLowerCase() });
+    query.$or.push({ "participants.email": user.email.toLowerCase() });
+    query.$or.push({ invitedEmails: user.email.toLowerCase() });
   }
 
   const [meetings, totalCount] = await Promise.all([
-    Meeting.find(queryFilter)
+    Meeting.find(query)
       .populate("host", "username email firstName lastName")
       .sort({ scheduledFor: 1, createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit),
-    Meeting.countDocuments(queryFilter),
+    Meeting.countDocuments(query),
   ]);
 
   const totalPages = Math.ceil(totalCount / limit);
@@ -954,9 +915,29 @@ export const getUpcomingMeetings = asyncHandler(async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 9. END MEETING
+// 9. END MEETING  (host clicks "End meeting")
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * FIX 1: End meeting for ALL participants.
+ *
+ * Previously this only updated the DB and the host's UI navigated away, but
+ * other participants kept their connections alive because no socket event was
+ * sent to them. Now we:
+ *
+ *  1. Update the DB (close session, mark completed) — same as before.
+ *  2. Call io._teardownRoom(meetingId) which was attached to the io instance
+ *     by initSignaling(). This broadcasts "meeting-ended" to every socket in
+ *     the room and forcibly disconnects them.
+ *
+ * The io instance is attached to req.app by server.js:
+ *   app.set("io", io)
+ * We read it here via req.app.get("io").
+ *
+ * If the host used the socket "end-meeting" event instead (via LeaveModal),
+ * teardownRoom is called on the socket side and this HTTP endpoint is NOT
+ * needed — but we support both paths so REST API callers also work.
+ */
 export const endMeeting = asyncHandler(async (req, res) => {
   const { meetingId } = req.params;
   const userId = req.userId;
@@ -969,15 +950,20 @@ export const endMeeting = asyncHandler(async (req, res) => {
   if (meeting.status !== "active")
     throw new APIError(400, "Only active meetings can be ended", "NOT_ACTIVE");
 
+  // ── DB update ──────────────────────────────────────────────────────────────
   await meeting.closeCurrentSession();
   if (meeting.status !== "completed") await meeting.complete();
 
+  // ── Broadcast to all socket participants ───────────────────────────────────
   try {
     const io = req.app.get("io");
     if (io?._teardownRoom) {
+      // teardownRoom handles its own DB close too — but the meeting is already
+      // completed above so closeCurrentSession() will be a no-op (no open session).
       await io._teardownRoom(meetingId);
     }
   } catch (socketErr) {
+    // Socket teardown failure must not block the HTTP response.
     console.error("[EndMeeting] Socket teardown error:", socketErr.message);
   }
 
