@@ -1,51 +1,35 @@
 /**
  * WebRTC Signaling Server — Lumina Meet
  *
- * FIXES IN THIS VERSION:
+ * CHANGES IN THIS VERSION (on top of previous fixes):
  *
- * FIX 1 — End meeting for all (Issue #1):
- *   When host emits "end-meeting", the server broadcasts "meeting-ended" to
- *   every socket in the room before cleaning up. Previously the HTTP
- *   POST /:id/end only updated the DB — it never told other participants
- *   to leave. Now the signaling server handles the broadcast so all peers
- *   disconnect immediately.
+ * NEW — Meeting-ended dialogs (host name propagation):
+ *   teardownRoom now accepts a `hostUsername` argument and passes it in the
+ *   "meeting-ended" broadcast payload as `{ reason, hostUsername }`.
+ *   The client uses this to decide which dialog to show:
+ *     • host receives  → "You ended this meeting"   (hostUsername === own username)
+ *     • others receive → "Meeting ended by <hostUsername>"
  *
- * FIX 2 — Lobby default was wrong (Issue #2):
- *   meetingController.generateInstantMeeting had waitingRoom: false in
- *   settings. The signaling gate reads settings.waitingRoom !== false, so
- *   that explicitly disabled it. Default is now true (see controller fix).
- *   Additionally the gate no longer relies solely on the DB value — if the
- *   meeting doc has no settings at all we still gate (safe default).
- *
- * FIX 3 — Mobile/desktop audio echo (Issue #3):
- *   Root cause: remote audio MediaStreamTracks were being added to the same
- *   MediaStream that drives a <video> element which has no `muted` attribute
- *   on the remote side. On mobile, the audio plays through the speaker and
- *   gets picked up by the mic → echo. The server-side fix is to send an
- *   explicit "audio-only" flag in user-joined / room-peers so the client
- *   knows to route audio through a dedicated <audio> element (muted=false,
- *   sinkId to earpiece where possible) rather than through the video element.
- *   The real fix is in useWebRTC.ts — this file just adds the metadata.
- *
- * FIX 4 — Missing meeting guard / join-error (Issue #4):
- *   Previously when meeting was null, waitingRoomEnabled became false and
- *   the participant bypassed the lobby into a ghost room with no peers and
- *   no DB record. Now the server rejects immediately with "join-error" when
- *   the meeting document cannot be found, so the client can show a proper
- *   error UI instead of hanging indefinitely.
+ * NEW — "user-left" self-navigation:
+ *   When a regular participant disconnects intentionally (leaveRoom()),
+ *   the server now emits "you-left" back to that socket BEFORE it leaves
+ *   the room, so the client can show the "You left" dialog.
+ *   This piggybacks on the existing "leave-room" socket event that leaveRoom()
+ *   emits; if leaveRoom() only disconnects the socket we fire it on disconnect
+ *   when data.intentionalLeave is true.
  */
 
 import Meeting from "../models/Meeting.js";
 
 // ─── Room state ───────────────────────────────────────────────────────────────
-const rooms = new Map(); // roomId → Map<socketId, PeerInfo>
-const chatHistory = new Map(); // roomId → ChatMessage[]
-const waitingRooms = new Map(); // roomId → Map<socketId, WaitingPeer>
+const rooms = new Map();
+const chatHistory = new Map();
+const waitingRooms = new Map();
 
 // ─── Phase 4 state ────────────────────────────────────────────────────────────
-const whiteboardState = new Map(); // roomId → WhiteboardElement[]
-const pollState = new Map(); // roomId → Poll | null
-const agendaState = new Map(); // roomId → AgendaState | null
+const whiteboardState = new Map();
+const pollState = new Map();
+const agendaState = new Map();
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const MAX_CHAT_HISTORY = 200;
@@ -105,26 +89,30 @@ function isHostOrSubhost(socket) {
   return socket.data.isHost === true || socket.data.isSubHost === true;
 }
 
-// ─── FIX 1: End meeting for all ───────────────────────────────────────────────
+// ─── teardownRoom ─────────────────────────────────────────────────────────────
 /**
- * Tears down an entire room:
- *  1. Emits "meeting-ended" to every socket currently in the room.
- *  2. Forces each socket to leave the Socket.IO room.
- *  3. Cleans up in-memory state (room map, chat, whiteboard, poll, agenda).
- *  4. Closes the DB session.
+ * Tears down an entire room and notifies all participants.
  *
- * Called from:
- *  a) The "end-meeting" socket event (host clicks "End meeting for all").
- *  b) The HTTP POST /:id/end handler via the endMeetingForRoom() export
- *     (so the REST call also propagates the broadcast).
+ * @param {object} io            - Socket.IO server instance
+ * @param {string} roomId        - The meeting/room ID
+ * @param {string} reason        - Human-readable reason string
+ * @param {string} hostUsername  - Name of the host who ended the meeting.
+ *                                 Included in the broadcast so clients can
+ *                                 display "Meeting ended by <name>" vs
+ *                                 "You ended this meeting".
  */
-async function teardownRoom(io, roomId, reason = "meeting-ended") {
+async function teardownRoom(
+  io,
+  roomId,
+  reason = "meeting-ended",
+  hostUsername = "",
+) {
   const room = rooms.get(roomId);
   if (room) {
-    // Broadcast to everyone still in the room
-    io.to(roomId).emit("meeting-ended", { reason });
+    // Broadcast to everyone still in the room — include hostUsername so the
+    // client knows whether to show the "you ended" or "host ended" dialog.
+    io.to(roomId).emit("meeting-ended", { reason, hostUsername });
 
-    // Force all sockets to leave
     for (const [sid] of room.entries()) {
       const s = io.sockets.sockets.get(sid);
       if (s) s.leave(roomId);
@@ -133,11 +121,14 @@ async function teardownRoom(io, roomId, reason = "meeting-ended") {
     chatHistory.delete(roomId);
   }
 
-  // Clean up waiting room too
+  // Also notify anyone still waiting in the lobby
   const waiting = waitingRooms.get(roomId);
   if (waiting) {
     for (const [sid] of waiting.entries()) {
-      io.to(sid).emit("meeting-ended", { reason: "Host ended the meeting." });
+      io.to(sid).emit("meeting-ended", {
+        reason: "Host ended the meeting.",
+        hostUsername,
+      });
       const s = io.sockets.sockets.get(sid);
       if (s) s.disconnect(true);
     }
@@ -148,7 +139,6 @@ async function teardownRoom(io, roomId, reason = "meeting-ended") {
   pollState.delete(roomId);
   agendaState.delete(roomId);
 
-  // Close DB session
   try {
     const meeting = await Meeting.findOne({ meetingId: roomId });
     if (meeting) {
@@ -162,7 +152,7 @@ async function teardownRoom(io, roomId, reason = "meeting-ended") {
     );
   }
 
-  console.log(`[Room] Torn down room ${roomId}`);
+  console.log(`[Room] Torn down room ${roomId} by ${hostUsername || "system"}`);
 }
 
 // ─── Session tracking ─────────────────────────────────────────────────────────
@@ -195,11 +185,9 @@ async function handleRoomLeave(roomId) {
     if (!meeting) return;
     if (meeting.type === "scheduled") return;
     await meeting.closeCurrentSession();
-
     whiteboardState.delete(roomId);
     pollState.delete(roomId);
     agendaState.delete(roomId);
-
     console.log(`[Session] Closed session for ${roomId}`);
   } catch (err) {
     console.error(
@@ -212,14 +200,13 @@ async function handleRoomLeave(roomId) {
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export function initSignaling(io) {
-  // ── FIX 1: Expose teardownRoom so the REST endMeeting controller can call it
-  // Store reference on io so the controller can reach it.
-  io._teardownRoom = (roomId) => teardownRoom(io, roomId);
+  io._teardownRoom = (roomId, hostUsername) =>
+    teardownRoom(io, roomId, "Host ended the meeting.", hostUsername);
 
   io.on("connection", (socket) => {
     console.log(`[WS] connected: ${socket.id}`);
 
-    // ─── JOIN ───────────────────────────────────────────────────────────────
+    // ─── JOIN ────────────────────────────────────────────────────────────────
     socket.on("join-room", async ({ roomId, username, userId }) => {
       if (!roomId || !username) return;
 
@@ -228,14 +215,10 @@ export function initSignaling(io) {
       socket.data.userId = userId;
       socket.data.isHost = false;
       socket.data.isSubHost = false;
+      socket.data.intentionalLeave = false;
 
       const meeting = await Meeting.findOne({ meetingId: roomId });
 
-      // ── FIX 4: CRITICAL — Reject immediately if meeting doesn't exist ────
-      // Previously: when meeting was null, waitingRoomEnabled became false
-      // and the participant bypassed the lobby into a ghost room with no peers
-      // and no DB record. Now we emit "join-error" so the client can show a
-      // proper error UI instead of hanging indefinitely on a black screen.
       if (!meeting) {
         console.warn(
           `[Lobby] Rejecting ${username}: meeting ${roomId} not found`,
@@ -259,11 +242,6 @@ export function initSignaling(io) {
         }
       }
 
-      // ── FIX 2: Lobby gate ────────────────────────────────────────────────
-      // Defensive: if settings is missing or waitingRoom is undefined/null,
-      // default to TRUE (lobby enabled). Only bypass if EXPLICITLY false.
-      // The pre-save middleware in Meeting.js enforces this at the DB level,
-      // but we also guard here so that stale documents are handled safely.
       const waitingRoomSetting = meeting.settings?.waitingRoom ?? true;
       const waitingRoomEnabled =
         !isHost && !isReturningSubHost && waitingRoomSetting !== false;
@@ -301,7 +279,6 @@ export function initSignaling(io) {
         return;
       }
 
-      // ── Normal join ──────────────────────────────────────────────────────
       socket.join(roomId);
       await handleRoomJoin(roomId, userId);
 
@@ -364,23 +341,11 @@ export function initSignaling(io) {
       );
     });
 
-    // ─── FIX 1: END MEETING FOR ALL ──────────────────────────────────────────
-    /**
-     * Host emits "end-meeting" from the LeaveModal when isHost === true.
-     * This is the SOCKET path. The HTTP POST /:id/end also calls teardownRoom
-     * via io._teardownRoom (see meetingController fix).
-     *
-     * Both paths call teardownRoom() which:
-     *  - Emits "meeting-ended" to all peers
-     *  - Cleans up room state
-     *  - Closes the DB session
-     */
+    // ─── END MEETING FOR ALL ─────────────────────────────────────────────────
     socket.on("end-meeting", async () => {
       const roomId = socket.data.roomId;
       if (!roomId) return;
 
-      // Only the host or server-side call should end for all.
-      // We trust socket.data.isHost here (set on join).
       if (!socket.data.isHost) {
         console.warn(
           `[Room] Non-host ${socket.data.username} tried to end meeting ${roomId}`,
@@ -388,10 +353,27 @@ export function initSignaling(io) {
         return;
       }
 
+      const hostUsername = socket.data.username;
       console.log(
-        `[Room] Host ${socket.data.username} ending meeting ${roomId} for all`,
+        `[Room] Host ${hostUsername} ending meeting ${roomId} for all`,
       );
-      await teardownRoom(io, roomId, "Host ended the meeting.");
+      await teardownRoom(io, roomId, "Host ended the meeting.", hostUsername);
+    });
+
+    // ─── INTENTIONAL LEAVE (participant) ─────────────────────────────────────
+    /**
+     * Emitted by leaveRoom() in useWebRTC BEFORE socket.disconnect().
+     * We store the flag on socket.data so the "disconnect" handler can
+     * emit "you-left" to the departing socket and skip the normal cleanup
+     * that would confuse things.
+     *
+     * We also emit "you-left" immediately here so the client receives it
+     * before the socket closes.
+     */
+    socket.on("leave-room", () => {
+      socket.data.intentionalLeave = true;
+      // Tell this socket it left intentionally — client shows "You left" dialog
+      socket.emit("you-left");
     });
 
     // ─── LOBBY CONTROLS ──────────────────────────────────────────────────────
