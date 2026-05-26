@@ -1,49 +1,26 @@
 /**
  * useWebRTC — Lumina Meet
  *
- * FIXES IN THIS VERSION:
+ * CHANGES IN THIS VERSION (on top of previous fixes):
  *
- * FIX 1 — End meeting for all (Issue #1):
- *   Listen for "meeting-ended" socket event and navigate all participants
- *   away. Previously only the host navigated away on leave; other peers
- *   kept their connections indefinitely.
- *   The hook now accepts an `onMeetingEnded` callback that the component
- *   wires to navigate({ to: "/dashboard" }).
- *   The host's LeaveModal now emits "end-meeting" via socket BEFORE calling
- *   the HTTP endpoint, so the broadcast is instant regardless of HTTP latency.
+ * NEW — Meeting-ended dialogs:
+ *   The "meeting-ended" event now carries { reason, hostUsername }.
+ *   Instead of immediately calling onMeetingEnded() (which navigated to
+ *   dashboard), we now call onMeetingEndedWithInfo({ hostUsername }) so the
+ *   component can show a beautiful dialog FIRST and navigate after the user
+ *   dismisses it (or after an auto-close timeout).
  *
- * FIX 2 — Lobby default (Issue #2):
- *   meetingController now defaults waitingRoom: true. No hook changes needed
- *   — the existing "waiting" / "admitted" / LobbyGate flow already works.
+ * NEW — "You left" dialog:
+ *   leaveRoom() now emits "leave-room" to the server BEFORE disconnecting.
+ *   The server emits "you-left" back. The hook surfaces this via the new
+ *   onYouLeft() callback so the component can show the "you left" dialog.
  *
- * FIX 3 — Mobile/desktop audio echo (Issue #3):
- *   Root cause: WebRTC delivers remote audio as a MediaStreamTrack. When that
- *   track is put into the same MediaStream as the remote video, and that
- *   stream is set as srcObject on a <video> element, mobile browsers play
- *   audio through the loudspeaker. The local mic picks up the speaker output
- *   → echo / howl on the mobile end.
+ *   Callback signatures:
+ *     onMeetingEndedWithInfo?: (info: { hostUsername: string }) => void
+ *     onYouLeft?: () => void
  *
- *   Fix strategy:
- *   a) Keep remote VIDEO tracks in the peer's `stream` (drives the <video>).
- *   b) Route remote AUDIO tracks through a SEPARATE dedicated <audio> element
- *      per peer that is NOT muted and uses the default audio output (earpiece
- *      on mobile when on a call). The <video> element for that peer is then
- *      rendered MUTED so it never plays audio through the speaker.
- *   c) The RemotePeer object now carries `audioStream` in addition to
- *      `stream`. RemoteVideoTile renders <video muted> and the hook manages
- *      hidden <audio> elements mounted in the DOM outside React's render tree.
- *   d) getUserMedia audio constraints: added `echoCancellation: true`,
- *      `noiseSuppression: true`, `autoGainControl: true` — these are the
- *      browser-level hints that help on both platforms.
- *   e) RTCPeerConnection now uses `unified-plan` sdpSemantics explicitly
- *      (default in modern browsers but explicit is safer on older iOS Safari).
- *
- * FIX 4 — Missing meeting guard / join-error (Issue #4):
- *   Server now emits "join-error" when the meeting document is not found
- *   instead of silently dropping the participant into a ghost room.
- *   The hook listens for "join-error" and surfaces it via the `error` state
- *   so the UI can render a proper error screen instead of hanging forever
- *   on the connecting spinner.
+ *   The component wires these to set local state that controls which dialog
+ *   is shown. Navigation happens inside the dialog's "Go to dashboard" button.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -58,8 +35,8 @@ export type ParticipantStatus = "available" | "busy" | "away" | "presenting" | "
 export interface RemotePeer {
   socketId: string;
   username: string;
-  stream: MediaStream | null; // video-only stream → drives <video muted>
-  audioStream: MediaStream | null; // FIX 3: audio-only stream → drives hidden <audio>
+  stream: MediaStream | null;
+  audioStream: MediaStream | null;
   mic: boolean;
   cam: boolean;
   screen: boolean;
@@ -99,8 +76,6 @@ export interface PendingParticipant {
   username: string;
   userId?: string;
 }
-
-// ─── Phase 4 Types (unchanged) ────────────────────────────────────────────────
 
 export type WhiteboardTool =
   | "pen"
@@ -165,6 +140,11 @@ export interface TilePosition {
   y: number;
 }
 
+// ─── New: info passed when meeting is ended by host ───────────────────────────
+export interface MeetingEndedInfo {
+  hostUsername: string;
+}
+
 export interface UseWebRTCReturn {
   localStream: MediaStream | null;
   localCameraStream: MediaStream | null;
@@ -177,7 +157,7 @@ export interface UseWebRTCReturn {
   toggleCam: () => Promise<void>;
   toggleScreenShare: () => Promise<void>;
   leaveRoom: () => void;
-  endMeetingForAll: () => void; // FIX 1: host emits end-meeting via socket
+  endMeetingForAll: () => void;
   muteAll: () => void;
   camOffAll: () => void;
   removePeer: (socketId: string) => void;
@@ -316,19 +296,11 @@ function playLobbyKnockSound(): void {
   }
 }
 
-// ─── FIX 3: Audio element pool ───────────────────────────────────────────────
-/**
- * We maintain a Map<socketId, HTMLAudioElement> outside React.
- * Each remote peer gets one hidden <audio autoplay> element that plays their
- * audio track. The corresponding <video> element in the UI is rendered MUTED.
- *
- * This prevents the audio from going through the video element which on mobile
- * defaults to the loudspeaker and causes echo.
- */
+// ─── Audio element pool ───────────────────────────────────────────────────────
+
 const audioElements = new Map<string, HTMLAudioElement>();
 
 function createAudioElement(socketId: string, stream: MediaStream): HTMLAudioElement {
-  // Reuse existing element if already created for this peer
   if (audioElements.has(socketId)) {
     const el = audioElements.get(socketId)!;
     el.srcObject = stream;
@@ -336,18 +308,14 @@ function createAudioElement(socketId: string, stream: MediaStream): HTMLAudioEle
   }
   const audio = document.createElement("audio");
   audio.autoplay = true;
-  audio.setAttribute("playsinline", ""); // iOS Safari: do not go fullscreen
-  // NOT muted — we want to hear remote audio
+  audio.setAttribute("playsinline", "");
   audio.muted = false;
-  // Hide it completely; it must be in the DOM for autoplay to work in some browsers
   audio.style.cssText = "position:absolute;width:0;height:0;opacity:0;pointer-events:none;";
   audio.srcObject = stream;
   document.body.appendChild(audio);
   audioElements.set(socketId, audio);
 
-  // iOS Safari requires a user-gesture-triggered play() after srcObject is set
   audio.play().catch(() => {
-    // Retry on next user interaction (click, touchstart)
     const retry = () => {
       audio.play().catch(() => {});
       document.removeEventListener("click", retry);
@@ -385,7 +353,19 @@ export function useWebRTC(
   username: string,
   socketUrl: string,
   userId?: string,
-  onMeetingEnded?: () => void, // FIX 1: callback invoked when "meeting-ended" is received
+  /**
+   * Called when the host ends the meeting for all.
+   * Receives the host's username so the component can display:
+   *   - host:        "You ended this meeting"
+   *   - participants: "Meeting ended by <hostUsername>"
+   * Navigation should happen INSIDE the dialog, not immediately here.
+   */
+  onMeetingEndedWithInfo?: (info: MeetingEndedInfo) => void,
+  /**
+   * Called when THIS user intentionally leaves (leaveRoom() was called).
+   * Navigation should happen INSIDE the "you left" dialog.
+   */
+  onYouLeft?: () => void,
 ): UseWebRTCReturn {
   // ── Core state ─────────────────────────────────────────────────────────────
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -443,11 +423,16 @@ export function useWebRTC(
   const sharingRef = useRef(false);
   const myVoteRef = useRef<number | undefined>(undefined);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
-  const onMeetingEndedRef = useRef(onMeetingEnded);
 
+  // Keep callback refs stable
+  const onMeetingEndedWithInfoRef = useRef(onMeetingEndedWithInfo);
+  const onYouLeftRef = useRef(onYouLeft);
   useEffect(() => {
-    onMeetingEndedRef.current = onMeetingEnded;
-  }, [onMeetingEnded]);
+    onMeetingEndedWithInfoRef.current = onMeetingEndedWithInfo;
+  }, [onMeetingEndedWithInfo]);
+  useEffect(() => {
+    onYouLeftRef.current = onYouLeft;
+  }, [onYouLeft]);
 
   useEffect(() => {
     sharingRef.current = sharing;
@@ -473,7 +458,6 @@ export function useWebRTC(
     (remoteSocketId: string, remoteUsername: string): RTCPeerConnection => {
       const pc = new RTCPeerConnection({
         iceServers: ICE_SERVERS,
-        // FIX 3: explicit unified-plan for older iOS Safari
         sdpSemantics: "unified-plan" as any,
       });
 
@@ -485,7 +469,6 @@ export function useWebRTC(
           socketRef.current.emit("ice-candidate", { to: remoteSocketId, candidate });
       };
 
-      // FIX 3: Separate video and audio into different streams
       const videoStream = new MediaStream();
       const audioStream = new MediaStream();
 
@@ -496,10 +479,7 @@ export function useWebRTC(
         } else if (track.kind === "audio") {
           audioStream.addTrack(track);
           updatePeer(remoteSocketId, { audioStream });
-          // Route audio through a dedicated hidden <audio> element.
-          // The <video> element for this peer MUST be rendered muted.
           createAudioElement(remoteSocketId, audioStream);
-          // Still build an analyser for VAD
           if (audioCtxRef.current) {
             const analyser = buildAnalyser(audioCtxRef.current, audioStream);
             if (analyser) remoteAnalysers.current.set(remoteSocketId, analyser);
@@ -550,9 +530,18 @@ export function useWebRTC(
       pcsRef.current.delete(socketId);
     }
     remoteAnalysers.current.delete(socketId);
-    // FIX 3: clean up the dedicated audio element for this peer
     removeAudioElement(socketId);
     setPeers((prev) => prev.filter((p) => p.socketId !== socketId));
+  }, []);
+
+  // ── Internal cleanup (without emitting leave-room) ─────────────────────────
+  const _hardCleanup = useCallback(() => {
+    pcsRef.current.forEach((pc) => pc.close());
+    pcsRef.current.clear();
+    cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
+    screenStreamRef.current?.getTracks().forEach((t) => t.stop());
+    cleanupAllAudioElements();
+    socketRef.current?.disconnect();
   }, []);
 
   // ── Main effect ────────────────────────────────────────────────────────────
@@ -567,7 +556,6 @@ export function useWebRTC(
         stream = await navigator.mediaDevices.getUserMedia({
           video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
           audio: {
-            // FIX 3: Aggressive echo cancellation constraints
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true,
@@ -638,11 +626,6 @@ export function useWebRTC(
         setIsConnecting(false);
       });
 
-      // ── FIX 4: Handle server-side join rejection ───────────────────────────
-      // Emitted by the server when the meeting document cannot be found.
-      // Previously the client would hang indefinitely on the connecting spinner
-      // because the server silently dropped the join request. Now we surface
-      // the error immediately so the UI can show a proper message.
       socket.on("join-error", ({ message }: { message: string }) => {
         setError(message);
         setIsConnecting(false);
@@ -752,28 +735,44 @@ export function useWebRTC(
         setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
       });
 
-      // ── FIX 1: meeting-ended broadcast ────────────────────────────────────
-      /**
-       * Received by ALL participants (including the host who triggered it).
-       * Clean up everything locally then call the onMeetingEnded callback
-       * which the component wires to navigate({ to: "/dashboard" }).
-       */
-      socket.on("meeting-ended", ({ reason }: { reason: string }) => {
-        console.log(`[Meeting] Ended: ${reason}`);
-        // Stop all media immediately
+      // ── meeting-ended: server tells everyone the meeting was ended by host ─
+      // The payload now includes `hostUsername` so the component can show
+      // personalised messages. We do NOT navigate here — the component's
+      // onMeetingEndedWithInfo callback controls the dialog, and navigation
+      // happens when the user dismisses the dialog.
+      socket.on(
+        "meeting-ended",
+        ({ reason, hostUsername }: { reason: string; hostUsername: string }) => {
+          console.log(`[Meeting] Ended by ${hostUsername}: ${reason}`);
+          // Stop media & close connections immediately
+          cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
+          screenStreamRef.current?.getTracks().forEach((t) => t.stop());
+          pcsRef.current.forEach((pc) => pc.close());
+          pcsRef.current.clear();
+          cleanupAllAudioElements();
+          socket.disconnect();
+          // Notify component to show the appropriate dialog
+          onMeetingEndedWithInfoRef.current?.({ hostUsername });
+          // Legacy DOM event for any other listeners
+          window.dispatchEvent(
+            new CustomEvent("LuminaMeet:meeting-ended", { detail: { reason, hostUsername } }),
+          );
+        },
+      );
+
+      // ── you-left: server confirms this socket intentionally left ──────────
+      // Fires only when leaveRoom() was called (not on tab close / crash).
+      // The component shows the "You left" dialog; navigation is inside it.
+      socket.on("you-left", () => {
+        console.log("[Meeting] You left intentionally");
+        // Stop media immediately
         cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
         screenStreamRef.current?.getTracks().forEach((t) => t.stop());
-        // Close all peer connections
         pcsRef.current.forEach((pc) => pc.close());
         pcsRef.current.clear();
-        // Remove all hidden audio elements
         cleanupAllAudioElements();
-        // Disconnect socket (but don't emit anything — server already knows)
-        socket.disconnect();
-        // Navigate away via the callback the component passed in
-        onMeetingEndedRef.current?.();
-        // Fallback DOM event for any other listeners
-        window.dispatchEvent(new CustomEvent("LuminaMeet:meeting-ended", { detail: { reason } }));
+        // DON'T disconnect here — leaveRoom() will do it after emitting leave-room
+        onYouLeftRef.current?.();
       });
 
       socket.on("host-action", ({ action }: any) => {
@@ -802,7 +801,6 @@ export function useWebRTC(
         setIsConnecting(false);
         setIsWaiting(true);
       });
-
       socket.on("admitted", () => {
         setIsWaiting(false);
         setIsConnecting(false);
@@ -1015,7 +1013,7 @@ export function useWebRTC(
       cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
       screenStreamRef.current?.getTracks().forEach((t) => t.stop());
       socketRef.current?.disconnect();
-      cleanupAllAudioElements(); // FIX 3: remove all hidden audio elements
+      cleanupAllAudioElements();
       if (vadTimerRef.current) clearInterval(vadTimerRef.current);
       if (localSpeakingDebounce.current) clearTimeout(localSpeakingDebounce.current);
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
@@ -1154,20 +1152,27 @@ export function useWebRTC(
     }
   }, [_stopSharingCleanup]);
 
+  /**
+   * leaveRoom — intentional participant leave.
+   *
+   * Emits "leave-room" FIRST so the server sends back "you-left" (which
+   * triggers the "You left" dialog in the component). Then disconnects.
+   * Media cleanup happens in the "you-left" handler above.
+   */
   const leaveRoom = useCallback(() => {
-    pcsRef.current.forEach((pc) => pc.close());
-    pcsRef.current.clear();
-    cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
-    screenStreamRef.current?.getTracks().forEach((t) => t.stop());
-    cleanupAllAudioElements();
-    socketRef.current?.disconnect();
+    socketRef.current?.emit("leave-room");
+    // Short delay so "you-left" can be received before disconnect
+    setTimeout(() => {
+      socketRef.current?.disconnect();
+    }, 150);
   }, []);
 
-  // FIX 1: endMeetingForAll
-  // Host emits "end-meeting" socket event. The server's teardownRoom()
-  // broadcasts "meeting-ended" to every socket in the room (including this
-  // host). All clients receive it and call onMeetingEnded() → navigate away.
-  // Do NOT call leaveRoom() here — the "meeting-ended" handler does cleanup.
+  /**
+   * endMeetingForAll — host only.
+   * Emits "end-meeting" to the server. Server calls teardownRoom() which
+   * broadcasts "meeting-ended" to everyone (including this host). The
+   * "meeting-ended" handler above fires onMeetingEndedWithInfo.
+   */
   const endMeetingForAll = useCallback(() => {
     socketRef.current?.emit("end-meeting");
   }, []);
@@ -1273,10 +1278,12 @@ export function useWebRTC(
     setLocalHandRaised(true);
     socketRef.current?.emit("raise-hand");
   }, [localHandRaised]);
+
   const lowerHand = useCallback(() => {
     setLocalHandRaised(false);
     socketRef.current?.emit("lower-hand");
   }, []);
+
   const lowerPeerHand = useCallback((socketId: string) => {
     socketRef.current?.emit("host-lower-hand", { targetSocketId: socketId });
   }, []);
@@ -1330,11 +1337,13 @@ export function useWebRTC(
     myVoteRef.current = undefined;
     socketRef.current?.emit("poll-create", { question, options });
   }, []);
+
   const votePoll = useCallback((optionIndex: number) => {
     myVoteRef.current = optionIndex;
     setCurrentPoll((prev) => (prev ? { ...prev, myVote: optionIndex } : prev));
     socketRef.current?.emit("poll-vote", { optionIndex });
   }, []);
+
   const closePoll = useCallback(() => {
     socketRef.current?.emit("poll-close");
   }, []);

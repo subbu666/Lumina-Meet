@@ -6,6 +6,14 @@
  * FIX B: handleLeaveConfirm uses endMeetingForAll() + fire-and-forget HTTP for host.
  * FIX C: RemoteVideoTile <video> has muted attribute to prevent mobile echo/feedback.
  *
+ * NEW PATCHES (Post-Meeting Modals):
+ * PATCH 1: Three new modal components — MeetingEndedByHostModal, MeetingEndedByYouModal, YouLeftModal.
+ * PATCH 2: New state variables — meetingEndedInfo, showYouLeftModal.
+ * PATCH 3: useWebRTC() accepts onMeetingEndedWithInfo + onYouLeft callbacks.
+ * PATCH 4: handleLeaveConfirm — non-host calls leaveRoom only (onYouLeft triggers YouLeftModal).
+ * PATCH 5: All three modals integrated into JSX AnimatePresence block.
+ * PATCH 6: host-removed listener no longer calls onLeave directly (lets YouLeftModal handle it).
+ *
  * LOBBY FIXES in this version vs previous:
  *
  * FIX 1 — Spinner guard was wrong:
@@ -873,6 +881,8 @@ function Room({
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   const [showLeaveModal, setShowLeaveModal] = useState(false);
   const [transferTarget, setTransferTarget] = useState<RemotePeer | null>(null);
+  const [meetingEndedInfo, setMeetingEndedInfo] = useState<{ hostUsername: string } | null>(null);
+  const [showYouLeftModal, setShowYouLeftModal] = useState(false);
 
   // Lobby state
   const [toastQueue, setToastQueue] = useState<PendingParticipant[]>([]);
@@ -921,11 +931,22 @@ function Room({
   } = useAmbientSound();
 
   // ════════════════════════════════════════════════════════════════════════════
-  // CHANGE A: useWebRTC call with onMeetingEnded callback
+  // CHANGE A: useWebRTC call with onMeetingEnded + onYouLeft callbacks
   // ════════════════════════════════════════════════════════════════════════════
-  const webrtc = useWebRTC(id, username, SOCKET_URL, userId, () => {
-    onLeave();
-  });
+  const webrtc = useWebRTC(
+    id,
+    username,
+    SOCKET_URL,
+    userId,
+    // onMeetingEndedWithInfo — called when host ends for all
+    (info) => {
+      setMeetingEndedInfo(info);
+    },
+    // onYouLeft — called when THIS user intentionally leaves
+    () => {
+      setShowYouLeftModal(true);
+    },
+  );
 
   const {
     localStream,
@@ -1018,11 +1039,11 @@ function Room({
   useEffect(() => {
     const handler = () => {
       leaveRoom();
-      onLeave();
+      // leaveRoom() emits "leave-room" → server sends "you-left" → YouLeftModal
     };
     window.addEventListener("Lumina Meet:host-removed", handler);
     return () => window.removeEventListener("Lumina Meet:host-removed", handler);
-  }, [leaveRoom, onLeave]);
+  }, [leaveRoom]);
 
   // ── Lobby toast management ──────────────────────────────────────────────────
   useEffect(() => {
@@ -1286,17 +1307,17 @@ function Room({
   }, [agendaIn, setAgenda, activePanel]);
 
   // ════════════════════════════════════════════════════════════════════════════
-  // CHANGE B: handleLeaveConfirm — host path uses endMeetingForAll
+  // CHANGE B: handleLeaveConfirm — non-host path calls leaveRoom only
   // ════════════════════════════════════════════════════════════════════════════
   const handleLeaveConfirm = useCallback(async () => {
+    setShowLeaveModal(false);
     if (isHost) {
       endMeetingForAll();
       apiClient.post(`/meeting/${id}/end`).catch(() => {});
     } else {
       leaveRoom();
-      onLeave();
     }
-  }, [isHost, id, endMeetingForAll, leaveRoom, onLeave]);
+  }, [isHost, id, endMeetingForAll, leaveRoom]);
 
   const handleTransfer = useCallback(
     (mode: "full" | "sub") => {
@@ -2074,6 +2095,41 @@ function Room({
             peer={transferTarget}
             onTransfer={handleTransfer}
             onClose={() => setTransferTarget(null)}
+          />
+        )}
+
+        {/* Host ended for all — shown to host */}
+        {meetingEndedInfo && username === meetingEndedInfo.hostUsername && (
+          <MeetingEndedByYouModal
+            onDismiss={() => {
+              setMeetingEndedInfo(null);
+              onLeave();
+            }}
+          />
+        )}
+
+        {/* Host ended for all — shown to participants */}
+        {meetingEndedInfo && username !== meetingEndedInfo.hostUsername && (
+          <MeetingEndedByHostModal
+            hostUsername={meetingEndedInfo.hostUsername}
+            onDismiss={() => {
+              setMeetingEndedInfo(null);
+              onLeave();
+            }}
+          />
+        )}
+
+        {/* Participant left intentionally */}
+        {showYouLeftModal && (
+          <YouLeftModal
+            onDismiss={() => {
+              setShowYouLeftModal(false);
+              onLeave();
+            }}
+            onRejoin={() => {
+              setShowYouLeftModal(false);
+              navigate({ to: `/meeting/${id}` });
+            }}
           />
         )}
       </AnimatePresence>
@@ -4329,6 +4385,427 @@ function ChatPanel({
         </p>
       </div>
     </motion.aside>
+  );
+}
+
+// ─── MeetingEndedByHostModal (shown to ALL participants except host) ──────────
+
+function MeetingEndedByHostModal({
+  hostUsername,
+  onDismiss,
+}: {
+  hostUsername: string;
+  onDismiss: () => void;
+}) {
+  // Auto-dismiss and navigate after 8 seconds
+  useEffect(() => {
+    const t = setTimeout(onDismiss, 8000);
+    return () => clearTimeout(t);
+  }, [onDismiss]);
+
+  return createPortal(
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90 backdrop-blur-xl"
+    >
+      {/* Ambient orbs */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <motion.div
+          className="absolute -top-40 left-1/2 -translate-x-1/2 h-[500px] w-[500px] rounded-full opacity-25"
+          style={{ background: "radial-gradient(circle, oklch(0.82 0.16 210), transparent 70%)" }}
+          animate={{ scale: [1, 1.2, 1] }}
+          transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
+        />
+        <motion.div
+          className="absolute bottom-0 left-1/4 h-80 w-80 rounded-full opacity-15"
+          style={{ background: "radial-gradient(circle, oklch(0.65 0.22 280), transparent 70%)" }}
+          animate={{ scale: [1, 1.15, 1] }}
+          transition={{ duration: 8, repeat: Infinity, ease: "easeInOut", delay: 2 }}
+        />
+      </div>
+
+      <motion.div
+        initial={{ opacity: 0, scale: 0.8, y: 32 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.85, y: 20 }}
+        transition={{ type: "spring", damping: 20, stiffness: 280 }}
+        className="relative mx-4 w-full max-w-lg"
+      >
+        {/* Glow ring */}
+        <div className="absolute -inset-2 rounded-[2.5rem] bg-gradient-to-br from-[var(--neon-secondary)]/40 via-[var(--neon-primary)]/20 to-[var(--neon-accent)]/30 blur-2xl" />
+
+        <div className="relative overflow-hidden glass-strong rounded-[2rem] border border-[var(--neon-secondary)]/25">
+          {/* Top bar */}
+          <div className="h-1 bg-gradient-to-r from-[var(--neon-primary)] via-[var(--neon-secondary)] to-[var(--neon-accent)]" />
+
+          <div className="px-10 pt-10 pb-8 text-center">
+            {/* Icon */}
+            <motion.div
+              initial={{ scale: 0, rotate: -20 }}
+              animate={{ scale: 1, rotate: 0 }}
+              transition={{ type: "spring", damping: 14, stiffness: 260, delay: 0.1 }}
+              className="mx-auto mb-7 relative flex h-24 w-24 items-center justify-center"
+            >
+              <motion.div
+                className="absolute inset-0 rounded-full"
+                style={{
+                  background:
+                    "radial-gradient(circle, oklch(0.82 0.16 210 / 0.35), transparent 70%)",
+                }}
+                animate={{ scale: [1, 1.4, 1], opacity: [0.6, 0.15, 0.6] }}
+                transition={{ duration: 2.5, repeat: Infinity }}
+              />
+              <div className="relative flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-[oklch(0.55_0.22_210)] to-[oklch(0.45_0.18_260)] shadow-[0_0_50px_-8px_oklch(0.82_0.16_210/0.7)]">
+                <PhoneOff className="h-11 w-11 text-white" />
+              </div>
+            </motion.div>
+
+            {/* Heading */}
+            <motion.h2
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+              className="text-3xl font-bold text-gradient mb-3 leading-tight"
+            >
+              Meeting ended
+            </motion.h2>
+
+            <motion.p
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+              className="text-base text-muted-foreground mb-1"
+            >
+              This meeting was ended by
+            </motion.p>
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.4, type: "spring", stiffness: 300 }}
+              className="inline-flex items-center gap-2 rounded-2xl border border-[var(--neon-primary)]/30 bg-[var(--neon-primary)]/10 px-5 py-2 mb-8"
+            >
+              <Crown className="h-4 w-4 text-[var(--neon-primary)]" />
+              <span className="text-lg font-semibold text-[var(--neon-primary)]">
+                {hostUsername}
+              </span>
+            </motion.div>
+
+            {/* Message */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.5 }}
+              className="mb-8 rounded-2xl border border-white/8 bg-white/4 px-5 py-4 text-sm text-muted-foreground leading-relaxed"
+            >
+              The host has closed this session for all participants. You can always start or join a
+              new meeting from your dashboard.
+            </motion.div>
+
+            {/* CTA */}
+            <motion.button
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.6 }}
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+              onClick={onDismiss}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[oklch(0.55_0.22_280)] to-[oklch(0.65_0.18_305)] py-3.5 text-base font-semibold text-white shadow-[0_8px_32px_-8px_oklch(0.65_0.22_280/0.5)] hover:opacity-95 transition"
+            >
+              Go to dashboard
+            </motion.button>
+
+            {/* Auto-dismiss indicator */}
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.8 }}
+              className="mt-3 text-[11px] text-muted-foreground/50"
+            >
+              Redirecting automatically in a few seconds…
+            </motion.p>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>,
+    document.body,
+  );
+}
+
+// ─── MeetingEndedByYouModal (shown ONLY to the host who ended it) ─────────────
+
+function MeetingEndedByYouModal({ onDismiss }: { onDismiss: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onDismiss, 8000);
+    return () => clearTimeout(t);
+  }, [onDismiss]);
+
+  return createPortal(
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90 backdrop-blur-xl"
+    >
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <motion.div
+          className="absolute top-0 left-0 right-0 h-[400px] w-full opacity-20"
+          style={{
+            background: "radial-gradient(ellipse at top, oklch(0.65 0.22 280), transparent 60%)",
+          }}
+          animate={{ opacity: [0.2, 0.35, 0.2] }}
+          transition={{ duration: 4, repeat: Infinity }}
+        />
+      </div>
+
+      <motion.div
+        initial={{ opacity: 0, scale: 0.82, y: 28 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.88, y: 16 }}
+        transition={{ type: "spring", damping: 20, stiffness: 280 }}
+        className="relative mx-4 w-full max-w-lg"
+      >
+        <div className="absolute -inset-2 rounded-[2.5rem] bg-gradient-to-br from-[oklch(0.72_0.22_35)]/35 via-[var(--neon-primary)]/15 to-[var(--neon-accent)]/25 blur-2xl" />
+
+        <div className="relative overflow-hidden glass-strong rounded-[2rem] border border-white/10">
+          {/* Shimmer top bar */}
+          <div className="h-1 bg-gradient-to-r from-[oklch(0.72_0.22_35)] via-[var(--neon-primary)] to-[var(--neon-accent)] shimmer" />
+
+          <div className="px-10 pt-10 pb-8 text-center">
+            {/* Checkmark / crown icon combo */}
+            <motion.div
+              initial={{ scale: 0, y: -20 }}
+              animate={{ scale: 1, y: 0 }}
+              transition={{ type: "spring", damping: 13, stiffness: 280, delay: 0.1 }}
+              className="mx-auto mb-7 relative flex h-24 w-24 items-center justify-center"
+            >
+              <motion.div
+                className="absolute inset-0 rounded-full"
+                style={{
+                  background:
+                    "radial-gradient(circle, oklch(0.65 0.22 280 / 0.4), transparent 70%)",
+                }}
+                animate={{ scale: [1, 1.5, 1], opacity: [0.5, 0.1, 0.5] }}
+                transition={{ duration: 3, repeat: Infinity }}
+              />
+              <div className="relative flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-[var(--neon-primary)] to-[var(--neon-accent)] shadow-[0_0_60px_-8px_oklch(0.65_0.22_280/0.8)]">
+                <CheckCircle2 className="h-11 w-11 text-white" />
+              </div>
+              {/* Small crown badge */}
+              <motion.div
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                transition={{ delay: 0.5, type: "spring", stiffness: 400 }}
+                className="absolute -top-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full bg-[oklch(0.72_0.22_35)] border-2 border-[#0b0f19]"
+              >
+                <Crown className="h-4 w-4 text-white" />
+              </motion.div>
+            </motion.div>
+
+            <motion.h2
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+              className="text-3xl font-bold text-gradient mb-3"
+            >
+              Meeting ended
+            </motion.h2>
+
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.3 }}
+              className="text-base text-muted-foreground mb-8"
+            >
+              You have successfully ended this meeting for all participants.
+              <br />
+              Everyone has been disconnected.
+            </motion.p>
+
+            {/* Stats-style row */}
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.4 }}
+              className="mb-8 flex items-center justify-center gap-3 rounded-2xl border border-white/8 bg-white/4 px-5 py-4"
+            >
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <CheckCircle2 className="h-4 w-4 text-[oklch(0.75_0.18_145)]" />
+                <span>Session closed</span>
+              </div>
+              <div className="h-4 w-px bg-white/10" />
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <ShieldCheck className="h-4 w-4 text-[var(--neon-secondary)]" />
+                <span>Data secured</span>
+              </div>
+            </motion.div>
+
+            <motion.button
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.5 }}
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+              onClick={onDismiss}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[var(--neon-primary)] to-[var(--neon-accent)] py-3.5 text-base font-semibold text-white shadow-[0_8px_32px_-8px_oklch(0.65_0.22_280/0.6)] hover:opacity-95 transition"
+            >
+              Go to dashboard
+            </motion.button>
+
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.7 }}
+              className="mt-3 text-[11px] text-muted-foreground/50"
+            >
+              Redirecting automatically in a few seconds…
+            </motion.p>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>,
+    document.body,
+  );
+}
+
+// ─── YouLeftModal (shown when participant intentionally leaves) ────────────────
+
+function YouLeftModal({ onDismiss, onRejoin }: { onDismiss: () => void; onRejoin: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onDismiss, 12000);
+    return () => clearTimeout(t);
+  }, [onDismiss]);
+
+  return createPortal(
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90 backdrop-blur-xl"
+    >
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <motion.div
+          className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 h-[600px] w-[600px] rounded-full opacity-10"
+          style={{ background: "radial-gradient(circle, oklch(0.75 0.18 305), transparent 70%)" }}
+          animate={{ scale: [1, 1.1, 1] }}
+          transition={{ duration: 5, repeat: Infinity }}
+        />
+      </div>
+
+      <motion.div
+        initial={{ opacity: 0, scale: 0.84, y: 24 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.9, y: 12 }}
+        transition={{ type: "spring", damping: 22, stiffness: 280 }}
+        className="relative mx-4 w-full max-w-lg"
+      >
+        <div className="absolute -inset-2 rounded-[2.5rem] bg-gradient-to-br from-[var(--neon-accent)]/30 via-[var(--neon-primary)]/10 to-[var(--neon-secondary)]/20 blur-2xl" />
+
+        <div className="relative overflow-hidden glass-strong rounded-[2rem] border border-white/10">
+          <div className="h-1 bg-gradient-to-r from-[var(--neon-accent)] via-[var(--neon-primary)] to-[var(--neon-secondary)]" />
+
+          <div className="px-10 pt-10 pb-8 text-center">
+            {/* Wave goodbye icon */}
+            <motion.div
+              initial={{ scale: 0, rotate: 20 }}
+              animate={{ scale: 1, rotate: 0 }}
+              transition={{ type: "spring", damping: 14, stiffness: 260, delay: 0.1 }}
+              className="mx-auto mb-7 relative flex h-24 w-24 items-center justify-center"
+            >
+              <motion.div
+                className="absolute inset-0 rounded-full"
+                style={{
+                  background:
+                    "radial-gradient(circle, oklch(0.75 0.18 305 / 0.35), transparent 70%)",
+                }}
+                animate={{ scale: [1, 1.4, 1], opacity: [0.4, 0.1, 0.4] }}
+                transition={{ duration: 2.5, repeat: Infinity }}
+              />
+              <div className="relative flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-[var(--neon-accent)] to-[var(--neon-primary)] shadow-[0_0_50px_-8px_oklch(0.75_0.18_305/0.6)]">
+                <motion.span
+                  className="text-4xl select-none"
+                  animate={{ rotate: [0, 18, -12, 18, 0] }}
+                  transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 1.5 }}
+                >
+                  👋
+                </motion.span>
+              </div>
+            </motion.div>
+
+            <motion.h2
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+              className="text-3xl font-bold text-gradient mb-3"
+            >
+              You left the meeting
+            </motion.h2>
+
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.3 }}
+              className="text-base text-muted-foreground mb-8 leading-relaxed"
+            >
+              No worries — the meeting is still in progress.
+              <br />
+              You can rejoin anytime using the same link.
+            </motion.p>
+
+            {/* Rejoin hint card */}
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.4 }}
+              className="mb-8 rounded-2xl border border-[var(--neon-accent)]/20 bg-[var(--neon-accent)]/6 px-5 py-4 text-sm text-muted-foreground text-left"
+            >
+              <div className="flex items-start gap-3">
+                <Sparkles className="h-4 w-4 text-[var(--neon-accent)] shrink-0 mt-0.5" />
+                <span className="leading-relaxed">
+                  Your session data, chat history, and meeting link remain active. Jump back in
+                  whenever you're ready.
+                </span>
+              </div>
+            </motion.div>
+
+            {/* Two CTAs */}
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.5 }}
+              className="flex gap-3"
+            >
+              <button
+                onClick={onDismiss}
+                className="flex-1 flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 py-3.5 text-sm font-semibold text-foreground hover:bg-white/10 transition"
+              >
+                Dashboard
+              </button>
+              <motion.button
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+                onClick={onRejoin}
+                className="flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[var(--neon-accent)] to-[var(--neon-primary)] py-3.5 text-sm font-semibold text-white shadow-[0_8px_30px_-8px_oklch(0.75_0.18_305/0.5)] hover:opacity-95 transition"
+              >
+                <LogIn className="h-4 w-4" /> Rejoin meeting
+              </motion.button>
+            </motion.div>
+
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.7 }}
+              className="mt-3 text-[11px] text-muted-foreground/50"
+            >
+              Going to dashboard automatically in a few seconds…
+            </motion.p>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>,
+    document.body,
   );
 }
 
