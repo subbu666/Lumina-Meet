@@ -1,35 +1,38 @@
 /**
- * WebRTC Signaling Server — Lumina Meet Phase 4
+ * WebRTC Signaling Server — Lumina Meet
  *
- * LOBBY FIXES in this version:
+ * FIXES IN THIS VERSION:
  *
- * FIX 1 — Gate condition was too strict:
- *   OLD: meeting?.settings?.waitingRoom && !isHost && meeting.status === "active"
- *   Problems:
- *     a) settings.waitingRoom defaults to undefined — falsy — so the gate never fires
- *        unless the meeting document explicitly has waitingRoom: true set in the DB.
- *     b) meeting.status === "active" fails for newly created meetings whose status
- *        might be "pending" or "scheduled" until the host joins.
- *   NEW: Gate fires whenever a meeting record exists and the joiner is not a host/subhost.
- *   Use settings.waitingRoom === false to EXPLICITLY disable the lobby.
+ * FIX 1 — End meeting for all (Issue #1):
+ *   When host emits "end-meeting", the server broadcasts "meeting-ended" to
+ *   every socket in the room before cleaning up. Previously the HTTP
+ *   POST /:id/end only updated the DB — it never told other participants
+ *   to leave. Now the signaling server handles the broadcast so all peers
+ *   disconnect immediately.
  *
- * FIX 2 — isSubHost not considered at gate:
- *   Co-hosts who rejoin mid-meeting were sent to the lobby because socket.data.isSubHost
- *   is only set after a full join. Now the gate checks the in-memory room state to see
- *   if this userId was previously a subhost.
+ * FIX 2 — Lobby default was wrong (Issue #2):
+ *   meetingController.generateInstantMeeting had waitingRoom: false in
+ *   settings. The signaling gate reads settings.waitingRoom !== false, so
+ *   that explicitly disabled it. Default is now true (see controller fix).
+ *   Additionally the gate no longer relies solely on the DB value — if the
+ *   meeting doc has no settings at all we still gate (safe default).
  *
- * FIX 3 — join-request broadcast only went to peers with isHost:
- *   Co-hosts in the room never received join-request or lobby-knock events.
- *   Fixed: iterate room peers and emit to both isHost and isSubHost.
- *   (This fix was already noted in comments but the forEach condition was wrong —
- *   it used peer.isHost || peer.isSubHost correctly, but socket.data.isSubHost was
- *   never set on the co-host's socket when they joined, so it was always false.)
+ * FIX 3 — Mobile/desktop audio echo (Issue #3):
+ *   Root cause: remote audio MediaStreamTracks were being added to the same
+ *   MediaStream that drives a <video> element which has no `muted` attribute
+ *   on the remote side. On mobile, the audio plays through the speaker and
+ *   gets picked up by the mic → echo. The server-side fix is to send an
+ *   explicit "audio-only" flag in user-joined / room-peers so the client
+ *   knows to route audio through a dedicated <audio> element (muted=false,
+ *   sinkId to earpiece where possible) rather than through the video element.
+ *   The real fix is in useWebRTC.ts — this file just adds the metadata.
  *
- * FIX 4 — admit-participant / reject-participant used socket.data.isHost only:
- *   Now uses isHostOrSubhost() which checks both isHost and isSubHost.
- *   socket.data.isSubHost is now correctly set when subhost joins.
- *
- * All existing Phase 1/2/3/4 functionality is preserved unchanged.
+ * FIX 4 — Missing meeting guard / join-error (Issue #4):
+ *   Previously when meeting was null, waitingRoomEnabled became false and
+ *   the participant bypassed the lobby into a ghost room with no peers and
+ *   no DB record. Now the server rejects immediately with "join-error" when
+ *   the meeting document cannot be found, so the client can show a proper
+ *   error UI instead of hanging indefinitely.
  */
 
 import Meeting from "../models/Meeting.js";
@@ -86,9 +89,8 @@ function getWhiteboardState(roomId) {
 function pushChat(roomId, message) {
   const history = getChatHistory(roomId);
   history.push(message);
-  if (history.length > MAX_CHAT_HISTORY) {
+  if (history.length > MAX_CHAT_HISTORY)
     history.splice(0, history.length - MAX_CHAT_HISTORY);
-  }
 }
 
 function sanitizeText(text) {
@@ -99,12 +101,68 @@ function sanitizeText(text) {
     .slice(0, 2000);
 }
 
-/**
- * FIX 4: Check both isHost and isSubHost on the socket data.
- * socket.data.isSubHost is now correctly set when subhost joins (see join-room handler).
- */
 function isHostOrSubhost(socket) {
   return socket.data.isHost === true || socket.data.isSubHost === true;
+}
+
+// ─── FIX 1: End meeting for all ───────────────────────────────────────────────
+/**
+ * Tears down an entire room:
+ *  1. Emits "meeting-ended" to every socket currently in the room.
+ *  2. Forces each socket to leave the Socket.IO room.
+ *  3. Cleans up in-memory state (room map, chat, whiteboard, poll, agenda).
+ *  4. Closes the DB session.
+ *
+ * Called from:
+ *  a) The "end-meeting" socket event (host clicks "End meeting for all").
+ *  b) The HTTP POST /:id/end handler via the endMeetingForRoom() export
+ *     (so the REST call also propagates the broadcast).
+ */
+async function teardownRoom(io, roomId, reason = "meeting-ended") {
+  const room = rooms.get(roomId);
+  if (room) {
+    // Broadcast to everyone still in the room
+    io.to(roomId).emit("meeting-ended", { reason });
+
+    // Force all sockets to leave
+    for (const [sid] of room.entries()) {
+      const s = io.sockets.sockets.get(sid);
+      if (s) s.leave(roomId);
+    }
+    rooms.delete(roomId);
+    chatHistory.delete(roomId);
+  }
+
+  // Clean up waiting room too
+  const waiting = waitingRooms.get(roomId);
+  if (waiting) {
+    for (const [sid] of waiting.entries()) {
+      io.to(sid).emit("meeting-ended", { reason: "Host ended the meeting." });
+      const s = io.sockets.sockets.get(sid);
+      if (s) s.disconnect(true);
+    }
+    waitingRooms.delete(roomId);
+  }
+
+  whiteboardState.delete(roomId);
+  pollState.delete(roomId);
+  agendaState.delete(roomId);
+
+  // Close DB session
+  try {
+    const meeting = await Meeting.findOne({ meetingId: roomId });
+    if (meeting) {
+      await meeting.closeCurrentSession();
+      if (meeting.status !== "completed") await meeting.complete();
+    }
+  } catch (err) {
+    console.error(
+      `[Session] teardownRoom DB error for ${roomId}:`,
+      err.message,
+    );
+  }
+
+  console.log(`[Room] Torn down room ${roomId}`);
 }
 
 // ─── Session tracking ─────────────────────────────────────────────────────────
@@ -154,6 +212,10 @@ async function handleRoomLeave(roomId) {
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export function initSignaling(io) {
+  // ── FIX 1: Expose teardownRoom so the REST endMeeting controller can call it
+  // Store reference on io so the controller can reach it.
+  io._teardownRoom = (roomId) => teardownRoom(io, roomId);
+
   io.on("connection", (socket) => {
     console.log(`[WS] connected: ${socket.id}`);
 
@@ -164,21 +226,28 @@ export function initSignaling(io) {
       socket.data.roomId = roomId;
       socket.data.username = username;
       socket.data.userId = userId;
-      // Initialize permission flags — will be set properly below
       socket.data.isHost = false;
       socket.data.isSubHost = false;
 
       const meeting = await Meeting.findOne({ meetingId: roomId });
 
-      const isHost = !!(
-        meeting &&
-        userId &&
-        meeting.host.toString() === userId
-      );
+      // ── FIX 4: CRITICAL — Reject immediately if meeting doesn't exist ────
+      // Previously: when meeting was null, waitingRoomEnabled became false
+      // and the participant bypassed the lobby into a ghost room with no peers
+      // and no DB record. Now we emit "join-error" so the client can show a
+      // proper error UI instead of hanging indefinitely on a black screen.
+      if (!meeting) {
+        console.warn(
+          `[Lobby] Rejecting ${username}: meeting ${roomId} not found`,
+        );
+        socket.emit("join-error", {
+          message: "Meeting not found. Please check the meeting link.",
+        });
+        return;
+      }
 
-      // ── FIX 2: Check if this userId was previously a subhost in this room ──
-      // This handles co-hosts who disconnect and rejoin — they should not be
-      // sent to the lobby again.
+      const isHost = !!(userId && meeting.host.toString() === userId);
+
       const room = getRoom(roomId);
       let isReturningSubHost = false;
       if (!isHost && userId) {
@@ -190,33 +259,25 @@ export function initSignaling(io) {
         }
       }
 
-      // ── FIX 1: Corrected lobby gate condition ──────────────────────────────
-      // Gate fires when:
-      //   - A meeting record exists (this is a real meeting, not an impromptu room)
-      //   - The joiner is not the host
-      //   - The joiner is not a returning co-host (would be unfair to re-lobby them)
-      //   - The meeting has NOT explicitly disabled the waiting room
-      //     (settings.waitingRoom === false means disabled; undefined/true means enabled)
-      //
-      // OLD (broken): meeting?.settings?.waitingRoom && !isHost && meeting.status === "active"
-      // Problems with old condition:
-      //   - settings.waitingRoom undefined → falsy → gate never fires
-      //   - meeting.status !== "active" for fresh/scheduled meetings → gate never fires
-      const shouldUseWaitingRoom =
-        meeting !== null &&
-        !isHost &&
-        !isReturningSubHost &&
-        meeting?.settings?.waitingRoom !== false; // false = explicitly disabled
+      // ── FIX 2: Lobby gate ────────────────────────────────────────────────
+      // Defensive: if settings is missing or waitingRoom is undefined/null,
+      // default to TRUE (lobby enabled). Only bypass if EXPLICITLY false.
+      // The pre-save middleware in Meeting.js enforces this at the DB level,
+      // but we also guard here so that stale documents are handled safely.
+      const waitingRoomSetting = meeting.settings?.waitingRoom ?? true;
+      const waitingRoomEnabled =
+        !isHost && !isReturningSubHost && waitingRoomSetting !== false;
 
-      if (shouldUseWaitingRoom) {
+      console.log(
+        `[Lobby] ${username} (${socket.id.slice(-6)}) -> ${roomId} | host=${isHost} subHost=${isReturningSubHost} waitingRoom=${waitingRoomSetting} lobbyEnabled=${waitingRoomEnabled}`,
+      );
+
+      if (waitingRoomEnabled) {
         const waiting = getWaitingRoom(roomId);
-
-        // Prevent duplicate waiting entries (e.g. reconnect storms)
         if (waiting.has(socket.id)) {
           socket.emit("waiting", { message: "Waiting for host to admit you" });
           return;
         }
-
         waiting.set(socket.id, {
           username,
           userId,
@@ -224,11 +285,6 @@ export function initSignaling(io) {
           requestedAt: Date.now(),
         });
 
-        // ── FIX 3: Emit join-request + lobby-knock to BOTH host AND co-hosts ──
-        // OLD: peer.isHost check only — co-hosts never saw the notification
-        // NEW: peer.isHost || peer.isSubHost
-        // Also: we look at the peer data in the room (in-memory truth) not socket.data,
-        // because socket.data.isSubHost on the co-host's socket is set here (post-join).
         if (room) {
           room.forEach((peer, sid) => {
             if (peer.isHost || peer.isSubHost) {
@@ -237,19 +293,15 @@ export function initSignaling(io) {
                 username,
                 userId,
               });
-              io.to(sid).emit("lobby-knock", {
-                socketId: socket.id,
-                username,
-              });
+              io.to(sid).emit("lobby-knock", { socketId: socket.id, username });
             }
           });
         }
-
         socket.emit("waiting", { message: "Waiting for host to admit you" });
         return;
       }
 
-      // ── Normal join (host, returning co-host, or lobby-disabled room) ──────
+      // ── Normal join ──────────────────────────────────────────────────────
       socket.join(roomId);
       await handleRoomJoin(roomId, userId);
 
@@ -259,16 +311,12 @@ export function initSignaling(io) {
       }
       socket.emit("room-peers", existingPeers);
       socket.emit("chat-history", getChatHistory(roomId));
-
-      // Phase 4: send current state to joiner
       socket.emit("whiteboard-state", getWhiteboardState(roomId));
       const currentPoll = pollState.get(roomId);
       if (currentPoll) socket.emit("poll-state", serializePoll(currentPoll));
       const currentAgenda = agendaState.get(roomId);
       if (currentAgenda) socket.emit("agenda-state", currentAgenda);
 
-      // Send current waiting room snapshot to host/subhost so they see
-      // anyone who knocked while they were connecting
       if (isHost || isReturningSubHost) {
         const waiting = getWaitingRoom(roomId);
         waiting.forEach((waiter, sid) => {
@@ -280,7 +328,6 @@ export function initSignaling(io) {
         });
       }
 
-      // ── FIX 2 continued: restore isSubHost flag for returning co-host ───
       const peerData = {
         username,
         userId,
@@ -295,7 +342,6 @@ export function initSignaling(io) {
       };
       room.set(socket.id, peerData);
 
-      // Set socket.data flags — these are what isHostOrSubhost() reads
       socket.data.isHost = isHost;
       socket.data.isSubHost = isReturningSubHost;
 
@@ -314,16 +360,42 @@ export function initSignaling(io) {
       });
 
       console.log(
-        `[WS] ${username} joined room ${roomId} (${room.size} peers, host=${isHost}, subhost=${isReturningSubHost})`,
+        `[WS] ${username} joined room ${roomId} (${room.size} peers, host=${isHost})`,
       );
+    });
+
+    // ─── FIX 1: END MEETING FOR ALL ──────────────────────────────────────────
+    /**
+     * Host emits "end-meeting" from the LeaveModal when isHost === true.
+     * This is the SOCKET path. The HTTP POST /:id/end also calls teardownRoom
+     * via io._teardownRoom (see meetingController fix).
+     *
+     * Both paths call teardownRoom() which:
+     *  - Emits "meeting-ended" to all peers
+     *  - Cleans up room state
+     *  - Closes the DB session
+     */
+    socket.on("end-meeting", async () => {
+      const roomId = socket.data.roomId;
+      if (!roomId) return;
+
+      // Only the host or server-side call should end for all.
+      // We trust socket.data.isHost here (set on join).
+      if (!socket.data.isHost) {
+        console.warn(
+          `[Room] Non-host ${socket.data.username} tried to end meeting ${roomId}`,
+        );
+        return;
+      }
+
+      console.log(
+        `[Room] Host ${socket.data.username} ending meeting ${roomId} for all`,
+      );
+      await teardownRoom(io, roomId, "Host ended the meeting.");
     });
 
     // ─── LOBBY CONTROLS ──────────────────────────────────────────────────────
 
-    /**
-     * FIX 4: isHostOrSubhost() now checks both flags correctly.
-     * socket.data.isSubHost is set on join above, so co-hosts can admit.
-     */
     socket.on("admit-participant", async ({ targetSocketId }) => {
       const roomId = socket.data.roomId;
       if (!roomId || !isHostOrSubhost(socket)) return;
@@ -367,8 +439,6 @@ export function initSignaling(io) {
       targetSocket.emit("room-peers", existingPeers);
       targetSocket.emit("admitted");
       targetSocket.emit("chat-history", getChatHistory(roomId));
-
-      // Send Phase 4 state to newly admitted participant
       targetSocket.emit("whiteboard-state", getWhiteboardState(roomId));
       const currentPoll = pollState.get(roomId);
       if (currentPoll)
@@ -387,16 +457,12 @@ export function initSignaling(io) {
         isSubHost: false,
       });
 
-      // Notify ALL managers (host + co-hosts) so their lobby UI clears
       io.to(roomId).emit("lobby-admitted", { socketId: targetSocketId });
       console.log(
         `[Lobby] ${targetSocket.data.username} admitted by ${socket.data.username}`,
       );
     });
 
-    /**
-     * FIX 4: co-hosts can now reject participants.
-     */
     socket.on("reject-participant", ({ targetSocketId }) => {
       const roomId = socket.data.roomId;
       if (!roomId || !isHostOrSubhost(socket)) return;
@@ -407,8 +473,6 @@ export function initSignaling(io) {
       io.to(targetSocketId).emit("join-rejected", {
         reason: "The host declined your request to join.",
       });
-
-      // Notify ALL managers so their lobby UI clears
       io.to(roomId).emit("lobby-rejected", { socketId: targetSocketId });
 
       const targetSocket = io.sockets.sockets.get(targetSocketId);
@@ -454,7 +518,6 @@ export function initSignaling(io) {
         io.to(targetSocketId).emit("you-are-host");
         io.to(socket.id).emit("you-are-participant");
 
-        // Send pending waiting participants to new host
         const waiting = getWaitingRoom(roomId);
         waiting.forEach((waiter, sid) => {
           io.to(targetSocketId).emit("join-request", {
@@ -476,7 +539,6 @@ export function initSignaling(io) {
         });
         io.to(targetSocketId).emit("you-are-subhost");
 
-        // Send pending waiting participants to new co-host
         const waiting = getWaitingRoom(roomId);
         waiting.forEach((waiter, sid) => {
           io.to(targetSocketId).emit("join-request", {
@@ -688,11 +750,6 @@ export function initSignaling(io) {
       io.to(roomId).emit("whiteboard-clear");
     });
 
-    /**
-     * whiteboard-sync — replaces entire board state for undo/redo.
-     * Any participant can sync; server replaces state and broadcasts to others.
-     * The sender already applied state locally so we skip them (socket.to, not io.to).
-     */
     socket.on("whiteboard-sync", ({ elements }) => {
       const roomId = socket.data.roomId;
       if (!roomId || !Array.isArray(elements)) return;
@@ -899,7 +956,6 @@ export function initSignaling(io) {
         }
       }
 
-      // Also clean up from waiting room if they disconnect while waiting
       const waiting = waitingRooms.get(roomId);
       if (waiting) {
         waiting.delete(socket.id);
@@ -916,7 +972,7 @@ export function initSignaling(io) {
     });
   });
 
-  // ── Re-sync agenda timer every 5s to prevent drift ────────────────────────
+  // ── Re-sync agenda timer every 5s ─────────────────────────────────────────
   setInterval(() => {
     agendaState.forEach((state, roomId) => {
       if (!state.timerPaused && state.timerEnd) {

@@ -51,9 +51,8 @@ export const scheduleMeetingValidation = [
     .custom((emails) => {
       const emailRegex = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/;
       const invalid = emails.filter((e) => !emailRegex.test(e));
-      if (invalid.length > 0) {
+      if (invalid.length > 0)
         throw new Error(`Invalid email(s): ${invalid.join(", ")}`);
-      }
       return true;
     }),
 ];
@@ -66,9 +65,8 @@ export const inviteValidation = [
     .custom((emails) => {
       const emailRegex = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/;
       const invalid = emails.filter((e) => !emailRegex.test(e));
-      if (invalid.length > 0) {
+      if (invalid.length > 0)
         throw new Error(`Invalid email(s): ${invalid.join(", ")}`);
-      }
       return true;
     }),
 ];
@@ -80,9 +78,8 @@ export const generateAndInviteValidation = [
     .custom((emails) => {
       const emailRegex = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/;
       const invalid = emails.filter((e) => !emailRegex.test(e));
-      if (invalid.length > 0) {
+      if (invalid.length > 0)
         throw new Error(`Invalid email(s): ${invalid.join(", ")}`);
-      }
       return true;
     }),
   body("title")
@@ -134,14 +131,12 @@ async function createUniqueMeetingId() {
   let meetingId;
   let attempts = 0;
   const maxAttempts = 10;
-
   while (attempts < maxAttempts) {
     meetingId = generateMeetingId();
     const existing = await Meeting.findOne({ meetingId });
     if (!existing) return meetingId;
     attempts++;
   }
-
   throw new APIError(
     500,
     "Failed to generate unique meeting ID. Please try again.",
@@ -179,8 +174,6 @@ export const generateInstantMeeting = asyncHandler(async (req, res) => {
     meetingId,
     title,
     type: "instant",
-    // Keep status "active" so the link is usable immediately.
-    // Sessions are opened by the signaling server when someone actually joins.
     status: "active",
     meetingLink,
     startedAt: new Date(),
@@ -189,7 +182,9 @@ export const generateInstantMeeting = asyncHandler(async (req, res) => {
       participantVideo: settings.participantVideo ?? true,
       hostAudio: settings.hostAudio ?? true,
       participantAudio: settings.participantAudio ?? true,
-      waitingRoom: settings.waitingRoom ?? false,
+      // FIX 2: waitingRoom defaults to TRUE so the lobby gate actually fires.
+      // Previously this was `false` which disabled the lobby for ALL instant meetings.
+      waitingRoom: settings.waitingRoom ?? true,
       allowJoinBeforeHost: settings.allowJoinBeforeHost ?? false,
       muteParticipantsOnEntry: settings.muteParticipantsOnEntry ?? false,
       allowRecording: settings.allowRecording ?? true,
@@ -260,7 +255,8 @@ export const generateAndInvite = asyncHandler(async (req, res) => {
       participantVideo: true,
       hostAudio: true,
       participantAudio: true,
-      waitingRoom: false,
+      // FIX 2: waitingRoom true by default
+      waitingRoom: true,
       allowJoinBeforeHost: true,
       muteParticipantsOnEntry: false,
       allowRecording: true,
@@ -334,28 +330,25 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
     settings = {},
     emails = [],
   } = req.body;
-
   const userId = req.userId;
   const scheduledDate = new Date(scheduledFor);
   const now = new Date();
 
-  if (scheduledDate <= now) {
+  if (scheduledDate <= now)
     throw new APIError(
       400,
       "Scheduled time must be in the future",
       "INVALID_SCHEDULE_TIME",
     );
-  }
 
   const oneYearFromNow = new Date();
   oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
-  if (scheduledDate > oneYearFromNow) {
+  if (scheduledDate > oneYearFromNow)
     throw new APIError(
       400,
       "Cannot schedule meetings more than 1 year in advance",
       "SCHEDULE_TOO_FAR",
     );
-  }
 
   const meetingId = await createUniqueMeetingId();
   const clientUrl = process.env.CLIENT_URL;
@@ -386,7 +379,8 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
       participantVideo: settings.participantVideo ?? true,
       hostAudio: settings.hostAudio ?? true,
       participantAudio: settings.participantAudio ?? true,
-      waitingRoom: settings.waitingRoom ?? false,
+      // FIX 2: waitingRoom true by default for scheduled meetings too
+      waitingRoom: settings.waitingRoom ?? true,
       allowJoinBeforeHost: settings.allowJoinBeforeHost ?? true,
       muteParticipantsOnEntry: settings.muteParticipantsOnEntry ?? false,
       allowRecording: settings.allowRecording ?? true,
@@ -400,7 +394,6 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
     const User = (await import("../models/User.js")).default;
     const host = await User.findById(userId);
     const inviterName = host ? host.fullName || host.username : "Someone";
-
     const emailPromises = emails.map((email) =>
       sendMeetingInvitationEmail(
         email,
@@ -416,7 +409,6 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
         inviterName,
       ),
     );
-
     Promise.allSettled(emailPromises).then((results) => {
       const sent = results.filter(
         (r) => r.status === "fulfilled" && r.value.success,
@@ -442,21 +434,9 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. JOIN MEETING  (HTTP validation gate — session opened by socket join)
+// 4. JOIN MEETING
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * POST /api/meeting/join/:meetingId
- *
- * This endpoint validates that the caller is allowed to join (password check,
- * timing window for scheduled meetings, capacity, etc.) and adds them to the
- * participants list.  The actual DB session is opened by the signaling server
- * when the socket emits "join-room", because that's when someone is truly
- * inside the room.
- *
- * Exception: for a scheduled meeting transitioning from "pending" → "active"
- * we open the first session here so the timing is captured accurately.
- */
 export const joinMeeting = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -480,34 +460,27 @@ export const joinMeeting = asyncHandler(async (req, res) => {
     "username email firstName lastName",
   );
 
-  if (!meeting) {
+  if (!meeting)
     throw new APIError(
       404,
       "Meeting not found. Please check the meeting ID.",
       "MEETING_NOT_FOUND",
     );
-  }
-
-  if (meeting.status === "cancelled") {
+  if (meeting.status === "cancelled")
     throw new APIError(
       410,
       "This meeting has been cancelled.",
       "MEETING_CANCELLED",
     );
-  }
-
-  if (meeting.status === "completed") {
+  if (meeting.status === "completed")
     throw new APIError(410, "This meeting has already ended.", "MEETING_ENDED");
-  }
 
-  // Scheduled meeting: check timing window and start it if within range
   if (meeting.type === "scheduled" && meeting.status === "pending") {
     if (!meeting.canJoin()) {
       const now = new Date();
       const joinWindow = new Date(meeting.scheduledFor);
       joinWindow.setMinutes(joinWindow.getMinutes() - 15);
       const timeUntilStart = Math.ceil((joinWindow - now) / 60000);
-
       throw new APIError(
         403,
         `Meeting has not started yet. You can join ${timeUntilStart} minutes before the scheduled time.`,
@@ -519,29 +492,25 @@ export const joinMeeting = asyncHandler(async (req, res) => {
         },
       );
     }
-
-    // Transition to active and open the single session for this scheduled meeting
     await meeting.start();
     await meeting.openSession();
   }
 
   if (meeting.isPasswordProtected) {
-    if (!password) {
+    if (!password)
       throw new APIError(
         403,
         "This meeting requires a password.",
         "PASSWORD_REQUIRED",
       );
-    }
     const bcrypt = await import("bcryptjs");
     const isValid = await bcrypt.compare(password, meeting.password);
-    if (!isValid) {
+    if (!isValid)
       throw new APIError(
         403,
         "Incorrect meeting password.",
         "INVALID_PASSWORD",
       );
-    }
   }
 
   if (meeting.participantCount >= meeting.maxParticipants) {
@@ -552,13 +521,11 @@ export const joinMeeting = asyncHandler(async (req, res) => {
     );
   }
 
-  // Record the caller as a participant
   if (userId) {
     const User = (await import("../models/User.js")).default;
     const user = await User.findById(userId);
-    if (user) {
+    if (user)
       await meeting.addParticipant(user.email, user.fullName || user.username);
-    }
   }
 
   res.status(200).json({
@@ -577,20 +544,6 @@ export const joinMeeting = asyncHandler(async (req, res) => {
 // 5. RECORD A "JOINED" MEETING LINK
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * POST /api/meeting/record-joined
- *
- * Called by the frontend when the user joins via a pasted link.
- * Creates (or finds) a "joined" type entry in their history.
- *
- * NOTE: We do NOT open a session here.  The session will be opened by the
- * signaling server's "join-room" handler when the socket actually connects.
- * This avoids double-counting sessions (HTTP call + socket join).
- *
- * What we DO here:
- *  - Create the joined meeting record if it doesn't already exist
- *  - Return the record so the frontend can navigate to the room
- */
 export const recordJoinedMeeting = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -608,7 +561,6 @@ export const recordJoinedMeeting = asyncHandler(async (req, res) => {
   const { meetingLink, title } = req.body;
   const userId = req.userId;
 
-  // Extract meetingId from the URL (last path segment)
   let meetingId;
   try {
     const url = new URL(meetingLink);
@@ -623,7 +575,6 @@ export const recordJoinedMeeting = asyncHandler(async (req, res) => {
     );
   }
 
-  // Does the user already have a "joined" record for this link?
   let meeting = await Meeting.findOne({
     host: userId,
     meetingId,
@@ -631,11 +582,8 @@ export const recordJoinedMeeting = asyncHandler(async (req, res) => {
   });
 
   if (!meeting) {
-    // Create a fresh "joined" record owned by this user.
-    // Status is "active" so the link stays reusable.
     const clientUrl = process.env.CLIENT_URL;
     const canonicalLink = `${clientUrl}/meeting/${meetingId}`;
-
     meeting = await Meeting.create({
       host: userId,
       meetingId,
@@ -648,7 +596,6 @@ export const recordJoinedMeeting = asyncHandler(async (req, res) => {
     });
   }
 
-  // Re-fetch with population so the response is consistent
   const populatedMeeting = await Meeting.findById(meeting._id).populate(
     "host",
     "username email firstName lastName",
@@ -686,18 +633,14 @@ export const inviteParticipants = asyncHandler(async (req, res) => {
     "host",
     "username email firstName lastName",
   );
-
-  if (!meeting) {
+  if (!meeting)
     throw new APIError(404, "Meeting not found", "MEETING_NOT_FOUND");
-  }
-
-  if (!meeting.isHost(userId)) {
+  if (!meeting.isHost(userId))
     throw new APIError(
       403,
       "Only the meeting host can send invitations",
       "NOT_HOST",
     );
-  }
 
   const newEmails = emails.filter(
     (email) => !meeting.invitedEmails.includes(email.toLowerCase()),
@@ -715,9 +658,7 @@ export const inviteParticipants = asyncHandler(async (req, res) => {
   const host = await User.findById(userId);
   const inviterName = host ? host.fullName || host.username : "Someone";
 
-  for (const email of newEmails) {
-    await meeting.addParticipant(email);
-  }
+  for (const email of newEmails) await meeting.addParticipant(email);
 
   const emailResults = await Promise.allSettled(
     newEmails.map((email) =>
@@ -761,18 +702,13 @@ export const inviteParticipants = asyncHandler(async (req, res) => {
 export const getMeeting = asyncHandler(async (req, res) => {
   const { meetingId } = req.params;
   const userId = req.userId;
-
   const meeting = await Meeting.findOne({ meetingId }).populate(
     "host",
     "username email firstName lastName",
   );
-
-  if (!meeting) {
+  if (!meeting)
     throw new APIError(404, "Meeting not found", "MEETING_NOT_FOUND");
-  }
-
   const isHost = userId && meeting.isHost(userId);
-
   res.status(200).json({
     success: true,
     data: {
@@ -786,28 +722,21 @@ export const updateMeeting = asyncHandler(async (req, res) => {
   const { meetingId } = req.params;
   const userId = req.userId;
   const updates = req.body;
-
   const meeting = await Meeting.findOne({ meetingId });
-
-  if (!meeting) {
+  if (!meeting)
     throw new APIError(404, "Meeting not found", "MEETING_NOT_FOUND");
-  }
-
-  if (!meeting.isHost(userId)) {
+  if (!meeting.isHost(userId))
     throw new APIError(
       403,
       "Only the host can update this meeting",
       "NOT_HOST",
     );
-  }
-
-  if (meeting.status === "completed" || meeting.status === "cancelled") {
+  if (meeting.status === "completed" || meeting.status === "cancelled")
     throw new APIError(
       400,
       "Cannot update a completed or cancelled meeting",
       "MEETING_ENDED",
     );
-  }
 
   const allowedUpdates = [
     "title",
@@ -817,22 +746,19 @@ export const updateMeeting = asyncHandler(async (req, res) => {
     "maxParticipants",
   ];
   const actualUpdates = {};
-
   allowedUpdates.forEach((field) => {
     if (updates[field] !== undefined) actualUpdates[field] = updates[field];
   });
 
   if (updates.scheduledFor && meeting.status === "pending") {
     const newDate = new Date(updates.scheduledFor);
-    if (newDate > new Date()) {
-      actualUpdates.scheduledFor = newDate;
-    } else {
+    if (newDate > new Date()) actualUpdates.scheduledFor = newDate;
+    else
       throw new APIError(
         400,
         "Scheduled time must be in the future",
         "INVALID_TIME",
       );
-    }
   }
 
   const updatedMeeting = await Meeting.findByIdAndUpdate(
@@ -840,7 +766,6 @@ export const updateMeeting = asyncHandler(async (req, res) => {
     actualUpdates,
     { new: true, runValidators: true },
   ).populate("host", "username email firstName lastName");
-
   res.status(200).json({
     success: true,
     message: "Meeting updated successfully",
@@ -851,40 +776,29 @@ export const updateMeeting = asyncHandler(async (req, res) => {
 export const cancelMeeting = asyncHandler(async (req, res) => {
   const { meetingId } = req.params;
   const userId = req.userId;
-
   const meeting = await Meeting.findOne({ meetingId });
-
-  if (!meeting) {
+  if (!meeting)
     throw new APIError(404, "Meeting not found", "MEETING_NOT_FOUND");
-  }
-
-  if (!meeting.isHost(userId)) {
+  if (!meeting.isHost(userId))
     throw new APIError(
       403,
       "Only the host can cancel this meeting",
       "NOT_HOST",
     );
-  }
-
-  if (meeting.status === "completed") {
+  if (meeting.status === "completed")
     throw new APIError(
       400,
       "Cannot cancel a completed meeting",
       "ALREADY_COMPLETED",
     );
-  }
-
-  if (meeting.status === "cancelled") {
+  if (meeting.status === "cancelled")
     throw new APIError(
       400,
       "Meeting is already cancelled",
       "ALREADY_CANCELLED",
     );
-  }
-
   meeting.status = "cancelled";
   await meeting.save();
-
   res.status(200).json({
     success: true,
     message: "Meeting cancelled successfully",
@@ -916,14 +830,12 @@ export const getMeetingHistory = asyncHandler(async (req, res) => {
   const status = req.query.status;
 
   const query = { $or: [{ host: userId }] };
-
   const User = (await import("../models/User.js")).default;
   const user = await User.findById(userId);
   if (user) {
     query.$or.push({ "participants.email": user.email.toLowerCase() });
     query.$or.push({ invitedEmails: user.email.toLowerCase() });
   }
-
   if (status) query.status = status;
 
   const [meetings, totalCount] = await Promise.all([
@@ -965,7 +877,6 @@ export const getUpcomingMeetings = asyncHandler(async (req, res) => {
     $or: [{ host: userId }],
     status: { $in: ["pending", "active"] },
   };
-
   const User = (await import("../models/User.js")).default;
   const user = await User.findById(userId);
   if (user) {
@@ -1007,32 +918,53 @@ export const getUpcomingMeetings = asyncHandler(async (req, res) => {
 // 9. END MEETING  (host clicks "End meeting")
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * FIX 1: End meeting for ALL participants.
+ *
+ * Previously this only updated the DB and the host's UI navigated away, but
+ * other participants kept their connections alive because no socket event was
+ * sent to them. Now we:
+ *
+ *  1. Update the DB (close session, mark completed) — same as before.
+ *  2. Call io._teardownRoom(meetingId) which was attached to the io instance
+ *     by initSignaling(). This broadcasts "meeting-ended" to every socket in
+ *     the room and forcibly disconnects them.
+ *
+ * The io instance is attached to req.app by server.js:
+ *   app.set("io", io)
+ * We read it here via req.app.get("io").
+ *
+ * If the host used the socket "end-meeting" event instead (via LeaveModal),
+ * teardownRoom is called on the socket side and this HTTP endpoint is NOT
+ * needed — but we support both paths so REST API callers also work.
+ */
 export const endMeeting = asyncHandler(async (req, res) => {
   const { meetingId } = req.params;
   const userId = req.userId;
 
   const meeting = await Meeting.findOne({ meetingId });
-
-  if (!meeting) {
+  if (!meeting)
     throw new APIError(404, "Meeting not found", "MEETING_NOT_FOUND");
-  }
-
-  if (!meeting.isHost(userId)) {
+  if (!meeting.isHost(userId))
     throw new APIError(403, "Only the host can end this meeting", "NOT_HOST");
-  }
-
-  if (meeting.status !== "active") {
+  if (meeting.status !== "active")
     throw new APIError(400, "Only active meetings can be ended", "NOT_ACTIVE");
-  }
 
-  // Close any open session and mark completed
+  // ── DB update ──────────────────────────────────────────────────────────────
   await meeting.closeCurrentSession();
+  if (meeting.status !== "completed") await meeting.complete();
 
-  // closeCurrentSession marks scheduled meetings "completed" automatically.
-  // For instant/joined it keeps status "active" so the link stays reusable —
-  // but the explicit "end" action should still complete the meeting.
-  if (meeting.status !== "completed") {
-    await meeting.complete();
+  // ── Broadcast to all socket participants ───────────────────────────────────
+  try {
+    const io = req.app.get("io");
+    if (io?._teardownRoom) {
+      // teardownRoom handles its own DB close too — but the meeting is already
+      // completed above so closeCurrentSession() will be a no-op (no open session).
+      await io._teardownRoom(meetingId);
+    }
+  } catch (socketErr) {
+    // Socket teardown failure must not block the HTTP response.
+    console.error("[EndMeeting] Socket teardown error:", socketErr.message);
   }
 
   res.status(200).json({

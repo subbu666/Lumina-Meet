@@ -11,6 +11,15 @@ import mongoose from "mongoose";
  *   "scheduled" — created via the schedule flow, has a scheduledFor date
  *   "joined"    — a foreign link the user joined (not hosted by them);
  *                 recorded in history so they can see it later
+ *
+ * FIXES IN THIS VERSION:
+ *
+ * FIX — Lobby default enforcement (Issue #2):
+ *   Added pre("save") and pre("findOneAndUpdate") middleware that ensures
+ *   settings.waitingRoom is NEVER silently coerced to false/undefined/null.
+ *   Only an explicit boolean `false` bypasses the lobby gate.
+ *   This is the last line of defence: even if a controller forgets to set
+ *   the default, the middleware corrects it before the document hits the DB.
  */
 const meetingSchema = new mongoose.Schema(
   {
@@ -213,6 +222,42 @@ meetingSchema.index({ meetingId: 1, status: 1 });
 meetingSchema.index({ scheduledFor: 1, status: 1 });
 meetingSchema.index({ createdAt: -1 });
 meetingSchema.index({ type: 1, status: 1 });
+
+// ─── Pre-save middleware: enforce waitingRoom default ─────────────────────────
+/**
+ * Last line of defence: even if a controller forgets to set the default,
+ * this middleware corrects it before the document hits the DB.
+ *
+ * Rules:
+ *  - If settings is missing entirely, create it with waitingRoom: true.
+ *  - If settings.waitingRoom is not a boolean (undefined, null, string, etc.),
+ *    coerce it to true.
+ *  - Only an explicit `false` is left untouched — that is the only valid way
+ *    to disable the lobby.
+ */
+meetingSchema.pre("save", function (next) {
+  if (!this.settings || typeof this.settings !== "object") {
+    this.settings = {};
+  }
+  if (typeof this.settings.waitingRoom !== "boolean") {
+    this.settings.waitingRoom = true;
+  }
+  next();
+});
+
+/**
+ * Same guard for findOneAndUpdate paths (used by updateMeeting controller,
+ * bulk-edit routes, etc.).  We only touch the nested settings field if it is
+ * actually present in the update payload — we don't want to accidentally
+ * override a settings object the caller intentionally omitted.
+ */
+meetingSchema.pre("findOneAndUpdate", function (next) {
+  const update = this.getUpdate();
+  if (update?.settings && typeof update.settings.waitingRoom !== "boolean") {
+    update.settings.waitingRoom = true;
+  }
+  next();
+});
 
 // ─── Virtuals ─────────────────────────────────────────────────────────────────
 meetingSchema.virtual("participantCount").get(function () {
