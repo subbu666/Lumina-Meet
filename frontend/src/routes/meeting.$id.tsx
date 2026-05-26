@@ -122,8 +122,8 @@ import {
 import { useAuthStore } from "@/store/authStore";
 import { NeonButton } from "@/components/ui-custom/NeonButton";
 import { cn } from "@/lib/utils";
+import {useWebRTC} from "@/hooks/useWebRTC";
 import {
-  useWebRTC,
   type RemotePeer,
   type ChatMessage,
   type ParticipantStatus,
