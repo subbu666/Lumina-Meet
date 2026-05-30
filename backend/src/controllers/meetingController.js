@@ -182,8 +182,6 @@ export const generateInstantMeeting = asyncHandler(async (req, res) => {
       participantVideo: settings.participantVideo ?? true,
       hostAudio: settings.hostAudio ?? true,
       participantAudio: settings.participantAudio ?? true,
-      // FIX 2: waitingRoom defaults to TRUE so the lobby gate actually fires.
-      // Previously this was `false` which disabled the lobby for ALL instant meetings.
       waitingRoom: settings.waitingRoom ?? true,
       allowJoinBeforeHost: settings.allowJoinBeforeHost ?? false,
       muteParticipantsOnEntry: settings.muteParticipantsOnEntry ?? false,
@@ -255,7 +253,6 @@ export const generateAndInvite = asyncHandler(async (req, res) => {
       participantVideo: true,
       hostAudio: true,
       participantAudio: true,
-      // FIX 2: waitingRoom true by default
       waitingRoom: true,
       allowJoinBeforeHost: true,
       muteParticipantsOnEntry: false,
@@ -379,7 +376,6 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
       participantVideo: settings.participantVideo ?? true,
       hostAudio: settings.hostAudio ?? true,
       participantAudio: settings.participantAudio ?? true,
-      // FIX 2: waitingRoom true by default for scheduled meetings too
       waitingRoom: settings.waitingRoom ?? true,
       allowJoinBeforeHost: settings.allowJoinBeforeHost ?? true,
       muteParticipantsOnEntry: settings.muteParticipantsOnEntry ?? false,
@@ -436,6 +432,23 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // 4. JOIN MEETING
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// CHANGES vs original:
+//
+// ── NEW: Expiry check for scheduled meetings ────────────────────────────────
+//   A scheduled meeting is considered EXPIRED when:
+//     now > scheduledFor + duration (minutes)
+//   i.e. the entire meeting window has passed.
+//
+//   When expired AND still "pending" we auto-cancel it (saves DB clutter) and
+//   return a 410 MEETING_EXPIRED error so the frontend can show a clear
+//   "This meeting has expired" screen instead of silently connecting or
+//   showing a generic error.
+//
+//   The expiry window uses `meeting.duration` (default 60 min) so hosts who
+//   set a 3-hour meeting get the full window.
+//
+// ── UNCHANGED: everything else (password, waiting room, participant limits) ──
 
 export const joinMeeting = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
@@ -474,6 +487,38 @@ export const joinMeeting = asyncHandler(async (req, res) => {
     );
   if (meeting.status === "completed")
     throw new APIError(410, "This meeting has already ended.", "MEETING_ENDED");
+
+  // ── NEW: Scheduled meeting expiry enforcement ─────────────────────────────
+  // Only applies to scheduled meetings that are still "pending" (never activated).
+  // If the meeting was already made "active" by a previous join we skip this —
+  // the host can end it manually via the room controls.
+  if (
+    meeting.type === "scheduled" &&
+    meeting.status === "pending" &&
+    meeting.scheduledFor
+  ) {
+    const now = new Date();
+    const durationMs = (meeting.duration ?? 60) * 60 * 1000;
+    const expiresAt = new Date(meeting.scheduledFor.getTime() + durationMs);
+
+    if (now > expiresAt) {
+      // Auto-cancel the meeting so it won't keep showing as "pending" forever
+      meeting.status = "cancelled";
+      meeting.completedAt = now;
+      await meeting.save();
+
+      throw new APIError(
+        410,
+        "This meeting's scheduled time has passed and it was never started. The link has expired.",
+        "MEETING_EXPIRED",
+        {
+          scheduledFor: meeting.scheduledFor,
+          expiredAt: expiresAt.toISOString(),
+        },
+      );
+    }
+  }
+  // ── END NEW ───────────────────────────────────────────────────────────────
 
   if (meeting.type === "scheduled" && meeting.status === "pending") {
     if (!meeting.canJoin()) {
@@ -915,29 +960,9 @@ export const getUpcomingMeetings = asyncHandler(async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 9. END MEETING  (host clicks "End meeting")
+// 9. END MEETING
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * FIX 1: End meeting for ALL participants.
- *
- * Previously this only updated the DB and the host's UI navigated away, but
- * other participants kept their connections alive because no socket event was
- * sent to them. Now we:
- *
- *  1. Update the DB (close session, mark completed) — same as before.
- *  2. Call io._teardownRoom(meetingId) which was attached to the io instance
- *     by initSignaling(). This broadcasts "meeting-ended" to every socket in
- *     the room and forcibly disconnects them.
- *
- * The io instance is attached to req.app by server.js:
- *   app.set("io", io)
- * We read it here via req.app.get("io").
- *
- * If the host used the socket "end-meeting" event instead (via LeaveModal),
- * teardownRoom is called on the socket side and this HTTP endpoint is NOT
- * needed — but we support both paths so REST API callers also work.
- */
 export const endMeeting = asyncHandler(async (req, res) => {
   const { meetingId } = req.params;
   const userId = req.userId;
@@ -950,20 +975,15 @@ export const endMeeting = asyncHandler(async (req, res) => {
   if (meeting.status !== "active")
     throw new APIError(400, "Only active meetings can be ended", "NOT_ACTIVE");
 
-  // ── DB update ──────────────────────────────────────────────────────────────
   await meeting.closeCurrentSession();
   if (meeting.status !== "completed") await meeting.complete();
 
-  // ── Broadcast to all socket participants ───────────────────────────────────
   try {
     const io = req.app.get("io");
     if (io?._teardownRoom) {
-      // teardownRoom handles its own DB close too — but the meeting is already
-      // completed above so closeCurrentSession() will be a no-op (no open session).
       await io._teardownRoom(meetingId);
     }
   } catch (socketErr) {
-    // Socket teardown failure must not block the HTTP response.
     console.error("[EndMeeting] Socket teardown error:", socketErr.message);
   }
 

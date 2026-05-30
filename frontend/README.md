@@ -39,6 +39,7 @@ src/
 │   └── useAmbientSound.ts       
 │   └── useNoiseSuppression.ts    
 │   └── useBackgroundBlur.ts            
+│   └── useRecording.ts            
 │
 ├── routes/
 │   ├── __root.tsx              # Shell, providers, global overlays

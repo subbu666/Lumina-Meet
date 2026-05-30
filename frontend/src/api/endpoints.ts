@@ -1,4 +1,5 @@
 export const API_ENDPOINTS = {
+  // ── Auth ───────────────────────────────────────────────────────────────────
   SIGNUP: "/api/auth/signup",
   LOGIN: "/api/auth/login",
   VERIFY_OTP: "/api/auth/verify-otp",
@@ -7,6 +8,8 @@ export const API_ENDPOINTS = {
   FORGOT_PASSWORD: "/api/auth/forgot-password",
   RESET_PASSWORD: "/api/auth/reset-password",
   ME: "/api/auth/me",
+
+  // ── Meetings ───────────────────────────────────────────────────────────────
   GENERATE_MEETING: "/api/meeting/generate",
   SCHEDULE_MEETING: "/api/meeting/schedule",
   INVITE: "/api/meeting/invite",
@@ -14,5 +17,13 @@ export const API_ENDPOINTS = {
   /** Generates a new instant meeting then emails the given list in one request */
   GENERATE_AND_INVITE: "/api/meeting/generate-and-invite",
   MEETING_HISTORY: "/api/meeting/history",
-  RECORD_JOINED_MEETING: "/meeting/record-joined",
+  RECORD_JOINED_MEETING: "/api/meeting/record-joined",
+
+  // ── Recordings ─────────────────────────────────────────────────────────────
+  /** Get Cloudinary signed upload params — POST { meetingId, mode, durationSec, fileType } */
+  RECORDING_SIGNATURE: "/api/meeting/recording/signature",
+  /** Save recording metadata after Cloudinary upload — POST { meetingId, publicId, mode, durationSec, fileSizeBytes, mimeType } */
+  RECORDING_SAVE: "/api/meeting/recording/save",
+  /** All recordings for the current user (dashboard Recordings tab) — GET */
+  USER_RECORDINGS: "/api/meeting/recordings",
 } as const;

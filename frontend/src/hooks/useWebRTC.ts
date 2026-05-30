@@ -56,6 +56,10 @@ export interface ChatMessage {
   timestamp: number;
   replyTo: { id: string; username: string; text: string } | null;
   reactions: Record<string, Set<string>>;
+  /** null = visible to everyone in the room */
+  recipients: string[] | null;
+  /** true when this message was sent to a subset of participants */
+  isPrivate: boolean;
 }
 
 export interface ReactionEvent {
@@ -165,7 +169,11 @@ export interface UseWebRTCReturn {
   speakingPeerId: string | null;
   messages: ChatMessage[];
   typingPeers: TypingPeer[];
-  sendChatMessage: (text: string, replyTo?: ChatMessage | null) => void;
+  sendChatMessage: (
+    text: string,
+    replyTo?: ChatMessage | null,
+    recipients?: string[] | null,
+  ) => void;
   sendChatReaction: (messageId: string, emoji: string) => void;
   setTyping: (isTyping: boolean) => void;
   unreadCount: number;
@@ -224,6 +232,7 @@ export interface UseWebRTCReturn {
   activeSpotlightId: string | null;
   lobbyKnockCount: number;
   clearLobbyKnockCount: () => void;
+  socketRef: React.MutableRefObject<Socket | null>;
 }
 
 // ─── ICE servers ──────────────────────────────────────────────────────────────
@@ -880,9 +889,19 @@ export function useWebRTC(
       socket.on("chat-message", (msg: any) => {
         setMessages((prev) => {
           if (prev.some((m) => m.id === msg.id)) return prev;
-          return [...prev, { ...msg, reactions: {} }];
+          return [
+            ...prev,
+            {
+              ...msg,
+              reactions: {},
+              isPrivate: msg.isPrivate ?? false,
+              recipients: msg.recipients ?? null,
+            },
+          ];
         });
-        if (!chatOpenRef.current && msg.socketId !== socket.id) setUnreadCount((n) => n + 1);
+        if (!chatOpenRef.current && msg.socketId !== socket.id) {
+          setUnreadCount((n) => n + 1);
+        }
         setTypingPeers((prev) => prev.filter((p) => p.socketId !== msg.socketId));
       });
 
@@ -1215,24 +1234,29 @@ export function useWebRTC(
 
   // ── Chat ───────────────────────────────────────────────────────────────────
 
-  const sendChatMessage = useCallback((text: string, replyTo?: ChatMessage | null) => {
-    const socket = socketRef.current;
-    if (!socket || !text.trim()) return;
-    socket.emit("chat-message", {
-      text: text.trim(),
-      replyTo: replyTo
-        ? { id: replyTo.id, username: replyTo.username, text: replyTo.text.slice(0, 100) }
-        : null,
-    });
-    if (isTypingRef.current) {
-      socket.emit("chat-typing", { isTyping: false });
-      isTypingRef.current = false;
-    }
-    if (typingTimerRef.current) {
-      clearTimeout(typingTimerRef.current);
-      typingTimerRef.current = null;
-    }
-  }, []);
+  const sendChatMessage = useCallback(
+    (text: string, replyTo?: ChatMessage | null, recipients?: string[] | null) => {
+      const socket = socketRef.current;
+      if (!socket || !text.trim()) return;
+      socket.emit("chat-message", {
+        text: text.trim(),
+        replyTo: replyTo
+          ? { id: replyTo.id, username: replyTo.username, text: replyTo.text.slice(0, 100) }
+          : null,
+        // undefined / null → broadcast to room; string[] → private
+        recipients: recipients?.length ? recipients : null,
+      });
+      if (isTypingRef.current) {
+        socket.emit("chat-typing", { isTyping: false });
+        isTypingRef.current = false;
+      }
+      if (typingTimerRef.current) {
+        clearTimeout(typingTimerRef.current);
+        typingTimerRef.current = null;
+      }
+    },
+    [],
+  );
 
   const sendChatReaction = useCallback((messageId: string, emoji: string) => {
     socketRef.current?.emit("chat-reaction", { messageId, emoji });
@@ -1473,5 +1497,6 @@ export function useWebRTC(
     activeSpotlightId,
     lobbyKnockCount,
     clearLobbyKnockCount,
+    socketRef,
   };
 }

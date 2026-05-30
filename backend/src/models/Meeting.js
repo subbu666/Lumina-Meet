@@ -1,25 +1,14 @@
 import mongoose from "mongoose";
 
 /**
- * Meeting Model
- * Stores video meeting sessions with scheduling, participant tracking,
- * and per-usage session history so the dashboard can show how many
- * times a link was used and the duration of each use.
+ * Meeting Model — Lumina Meet
  *
- * Types:
- *   "instant"   — created by the host via "Instant meeting" button
- *   "scheduled" — created via the schedule flow, has a scheduledFor date
- *   "joined"    — a foreign link the user joined (not hosted by them);
- *                 recorded in history so they can see it later
+ * ADDED IN THIS VERSION:
+ *   recordings[] subdocument — stores per-recording metadata after
+ *   each Cloudinary upload. Powers the dashboard Recordings tab and
+ *   the recording-ready email.
  *
- * FIXES IN THIS VERSION:
- *
- * FIX — Lobby default enforcement (Issue #2):
- *   Added pre("save") and pre("findOneAndUpdate") middleware that ensures
- *   settings.waitingRoom is NEVER silently coerced to false/undefined/null.
- *   Only an explicit boolean `false` bypasses the lobby gate.
- *   This is the last line of defence: even if a controller forgets to set
- *   the default, the middleware corrects it before the document hits the DB.
+ * All other fields/methods/virtuals are unchanged from the previous version.
  */
 const meetingSchema = new mongoose.Schema(
   {
@@ -50,7 +39,6 @@ const meetingSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      // "joined" = user joined someone else's meeting; we store it for history
       enum: ["instant", "scheduled", "joined"],
       required: true,
       default: "instant",
@@ -81,54 +69,92 @@ const meetingSchema = new mongoose.Schema(
     },
 
     // ─── Per-usage sessions ──────────────────────────────────────────────────
-    /**
-     * Each time someone joins this meeting link a new session document is
-     * pushed here.  When the meeting ends (host clicks "End" or last
-     * participant disconnects) the open session is closed with leftAt and
-     * durationMin computed server-side.
-     *
-     * Enabled for: instant, joined
-     * Disabled for: scheduled (single-use by design)
-     *
-     * This is what powers the hierarchical history in the dashboard:
-     *   Video Lecture – 1   [instant]
-     *     └ 21 May 2026, 9:19 PM  ·  30m
-     *     └ 21 May 2026, 9:16 PM  ·  2h
-     *     └ 21 May 2026, 9:01 PM  ·  45m
-     */
     sessions: [
       {
-        /** Unique ID for this usage, used as React key and for lookups */
         sessionId: {
           type: String,
           required: true,
         },
-        /** When the first participant (usually the host) joined */
         joinedAt: {
           type: Date,
           required: true,
           default: () => new Date(),
         },
-        /** When the last participant left / host ended the meeting */
         leftAt: {
           type: Date,
           default: null,
         },
-        /**
-         * Pre-computed duration in whole minutes so the API response is
-         * cheap to read without arithmetic on the client.
-         * Set to 0 while the session is still open (leftAt is null).
-         */
         durationMin: {
           type: Number,
           default: 0,
           min: 0,
         },
-        /** How many distinct participants joined in this session */
         participantCount: {
           type: Number,
           default: 0,
           min: 0,
+        },
+      },
+    ],
+
+    // ─── Recordings ──────────────────────────────────────────────────────────
+    /**
+     * Each entry is created by recordingController.saveRecording() after the
+     * frontend finishes uploading to Cloudinary.
+     *
+     * mode values:
+     *   "screen_voice" — screen video + microphone audio
+     *   "screen"       — screen video only
+     *   "voice"        — microphone audio only
+     */
+    recordings: [
+      {
+        /** Unique ID generated server-side (rec-{ts}-{rand}) */
+        recordingId: {
+          type: String,
+          required: true,
+        },
+        /** Who triggered the recording (host or co-host userId) */
+        recordedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          default: null,
+        },
+        mode: {
+          type: String,
+          enum: ["screen_voice", "screen", "voice"],
+          required: true,
+        },
+        /** Direct Cloudinary delivery URL (HTTPS, auto-format) */
+        cloudinaryUrl: {
+          type: String,
+          required: true,
+        },
+        /** Cloudinary public_id — needed for deletion or transformations */
+        cloudinaryPublicId: {
+          type: String,
+          required: true,
+        },
+        /** Video thumbnail URL (null for voice-only recordings) */
+        thumbnailUrl: {
+          type: String,
+          default: null,
+        },
+        /** Recording length in whole seconds */
+        durationSec: {
+          type: Number,
+          required: true,
+          min: 1,
+        },
+        /** Raw blob size in bytes as reported by the MediaRecorder Blob */
+        fileSizeBytes: {
+          type: Number,
+          required: true,
+          min: 1,
+        },
+        createdAt: {
+          type: Date,
+          default: () => new Date(),
         },
       },
     ],
@@ -222,19 +248,10 @@ meetingSchema.index({ meetingId: 1, status: 1 });
 meetingSchema.index({ scheduledFor: 1, status: 1 });
 meetingSchema.index({ createdAt: -1 });
 meetingSchema.index({ type: 1, status: 1 });
+// Index for recordings tab query (host + has recordings)
+meetingSchema.index({ host: 1, "recordings.0": 1 });
 
 // ─── Pre-save middleware: enforce waitingRoom default ─────────────────────────
-/**
- * Last line of defence: even if a controller forgets to set the default,
- * this middleware corrects it before the document hits the DB.
- *
- * Rules:
- *  - If settings is missing entirely, create it with waitingRoom: true.
- *  - If settings.waitingRoom is not a boolean (undefined, null, string, etc.),
- *    coerce it to true.
- *  - Only an explicit `false` is left untouched — that is the only valid way
- *    to disable the lobby.
- */
 meetingSchema.pre("save", function (next) {
   if (!this.settings || typeof this.settings !== "object") {
     this.settings = {};
@@ -245,12 +262,6 @@ meetingSchema.pre("save", function (next) {
   next();
 });
 
-/**
- * Same guard for findOneAndUpdate paths (used by updateMeeting controller,
- * bulk-edit routes, etc.).  We only touch the nested settings field if it is
- * actually present in the update payload — we don't want to accidentally
- * override a settings object the caller intentionally omitted.
- */
 meetingSchema.pre("findOneAndUpdate", function (next) {
   const update = this.getUpdate();
   if (update?.settings && typeof update.settings.waitingRoom !== "boolean") {
@@ -276,17 +287,17 @@ meetingSchema.virtual("isScheduled").get(function () {
   return this.type === "scheduled" && this.scheduledFor > new Date();
 });
 
-/** Total combined duration (minutes) across all closed sessions */
 meetingSchema.virtual("totalDurationMin").get(function () {
   return this.sessions.reduce((sum, s) => sum + (s.durationMin ?? 0), 0);
 });
 
-/**
- * Whether this meeting type supports multiple sessions.
- * instant and joined links can be reused; scheduled meetings cannot.
- */
 meetingSchema.virtual("supportsMultipleSessions").get(function () {
   return this.type === "instant" || this.type === "joined";
+});
+
+/** Total number of recordings for this meeting */
+meetingSchema.virtual("recordingCount").get(function () {
+  return (this.recordings || []).length;
 });
 
 // ─── Instance methods ─────────────────────────────────────────────────────────
@@ -362,14 +373,7 @@ meetingSchema.methods.complete = async function () {
 
 // ─── Session helpers ──────────────────────────────────────────────────────────
 
-/**
- * Open a new session when the meeting starts (first participant joins).
- * For scheduled meetings, only one session is allowed — if one already
- * exists this is a no-op and the existing session is returned.
- * Returns the new (or existing) session document.
- */
 meetingSchema.methods.openSession = async function () {
-  // Scheduled meetings: single-use — don't open a second session
   if (this.type === "scheduled" && this.sessions.length > 0) {
     return this.sessions[this.sessions.length - 1];
   }
@@ -392,12 +396,6 @@ meetingSchema.methods.openSession = async function () {
   return this.sessions[this.sessions.length - 1];
 };
 
-/**
- * Close the most-recent open session (leftAt === null).
- * Computes durationMin and saves the document.
- * For instant/joined meetings the meeting stays "active" so the link
- * can be reused; for scheduled meetings it is marked "completed".
- */
 meetingSchema.methods.closeCurrentSession = async function () {
   const open = [...this.sessions].reverse().find((s) => s.leftAt == null);
   if (!open) return this;
@@ -406,21 +404,15 @@ meetingSchema.methods.closeCurrentSession = async function () {
   open.leftAt = now;
   open.durationMin = Math.round((now - open.joinedAt) / 60_000);
 
-  // Scheduled meetings are single-use — mark completed
   if (this.type === "scheduled") {
     this.status = "completed";
     this.completedAt = now;
   }
-  // instant / joined stay active for reuse
 
   await this.save();
   return this;
 };
 
-/**
- * Increment participant count on the current open session.
- * Call this whenever a new socket joins the room.
- */
 meetingSchema.methods.incrementSessionParticipants = async function () {
   const open = [...this.sessions].reverse().find((s) => s.leftAt == null);
   if (open) {
@@ -451,6 +443,7 @@ meetingSchema.methods.toPublicObject = function () {
     sessions: this.sessions,
     totalDurationMin: this.totalDurationMin,
     supportsMultipleSessions: this.supportsMultipleSessions,
+    recordingCount: this.recordingCount,
   };
 };
 
@@ -463,6 +456,7 @@ meetingSchema.methods.toHostObject = function () {
     startedAt: this.startedAt,
     completedAt: this.completedAt,
     recordingUrl: this.recordingUrl,
+    recordings: this.recordings,
   };
 };
 

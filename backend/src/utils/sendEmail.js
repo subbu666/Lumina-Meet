@@ -990,9 +990,355 @@ export const sendMeetingReminderEmail = async (
   });
 };
 
+/**
+ * sendRecordingReadyEmail — ADD THIS FUNCTION TO YOUR EXISTING sendEmail.js
+ *
+ * Paste this entire function at the bottom of your sendEmail.js file,
+ * just before the `export default { ... }` line.
+ * Also add it to the default export object.
+ *
+ * It uses the same shell(), iconCircle(), ctaButton(), divider(), detailRow(),
+ * surfaceBox(), badge(), and T tokens already defined at the top of sendEmail.js.
+ */
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. RECORDING READY EMAIL
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const sendRecordingReadyEmail = async (toEmail, recordingData) => {
+  const {
+    hostName = "there",
+    meetingTitle,
+    meetingId,
+    mode,
+    durationSec,
+    cloudinaryUrl,
+    thumbnailUrl,
+    recordedAt,
+  } = recordingData;
+
+  const modeLabels = {
+    screen_voice: "Screen + Voice",
+    screen: "Screen Only",
+    voice: "Voice Only",
+  };
+  const modeLabel = modeLabels[mode] || mode;
+
+  const formatDur = (s) => {
+    if (s < 60) return `${s} seconds`;
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return rem === 0 ? `${m} min` : `${m}m ${rem}s`;
+  };
+
+  const recordedAtStr = new Date(recordedAt).toLocaleString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
+
+  const preview = `Your "${meetingTitle}" recording is ready — ${formatDur(durationSec)}`;
+
+  // Mode-based accent color (we use inline hex since T tokens are defined in the outer file)
+  const accentColors = {
+    screen_voice: {
+      from: "#6366f1",
+      to: "#a78bfa",
+      text: "#a5b4fc",
+      glow: "rgba(99,102,241,0.35)",
+    },
+    screen: {
+      from: "#0ea5e9",
+      to: "#22d3ee",
+      text: "#7dd3fc",
+      glow: "rgba(14,165,233,0.35)",
+    },
+    voice: {
+      from: "#a78bfa",
+      to: "#f472b6",
+      text: "#c4b5fd",
+      glow: "rgba(167,139,250,0.35)",
+    },
+  };
+  const ac = accentColors[mode] || accentColors.screen_voice;
+
+  const inner = `
+    <!-- ══ HEADER ══ -->
+    <tr>
+      <td class="hdr" style="padding:48px 40px 36px;text-align:center;background:linear-gradient(160deg,rgba(99,102,241,0.18) 0%,rgba(167,139,250,0.10) 55%,transparent 100%);border-radius:24px 24px 0 0;">
+
+        <!-- Animated recording dot icon circle -->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 20px;">
+          <tr>
+            <td align="center" valign="middle"
+              style="
+                width:64px;height:64px;
+                background:linear-gradient(135deg,${ac.from},${ac.to});
+                border-radius:20px;
+                box-shadow:0 12px 36px ${ac.glow};
+                font-size:30px;
+                text-align:center;
+                vertical-align:middle;
+                line-height:64px;
+                mso-line-height-rule:exactly;
+              ">&#127902;</td>
+          </tr>
+        </table>
+
+        <!-- Badge -->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 14px;">
+          <tr>
+            <td style="background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.30);border-radius:100px;padding:7px 18px;">
+              <p style="margin:0;font-size:12px;font-weight:700;color:${ac.text};letter-spacing:0.8px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;white-space:nowrap;">&#9679;&nbsp; Recording Ready</p>
+            </td>
+          </tr>
+        </table>
+
+        <p class="title-text" style="margin:0 0 8px 0;font-size:26px;font-weight:800;color:#e8eaff;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;letter-spacing:-0.5px;">Your recording is ready</p>
+        <p style="margin:0;font-size:14px;color:rgba(255,255,255,0.50);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Securely stored and ready to share</p>
+      </td>
+    </tr>
+
+    <!-- ══ BODY ══ -->
+    <tr>
+      <td class="body" style="padding:36px 40px;">
+
+        <!-- Greeting -->
+        <p style="margin:0 0 8px 0;font-size:18px;font-weight:800;color:#e8eaff;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Hi ${hostName} 🎉</p>
+        <p class="body-text" style="margin:0 0 28px 0;font-size:15px;color:rgba(255,255,255,0.55);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.75;">
+          Your Lumina Meet recording from <strong style="color:${ac.text};">${meetingTitle}</strong> has been processed and is now available. Click below to view or share it.
+        </p>
+
+        <!-- Thumbnail (video only) -->
+        ${
+          thumbnailUrl
+            ? `
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom:24px;">
+          <tr>
+            <td style="border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,0.08);">
+              <a href="${cloudinaryUrl}" style="display:block;position:relative;line-height:0;">
+                <img src="${thumbnailUrl}" alt="Recording thumbnail" width="100%" style="border-radius:15px;display:block;max-height:200px;object-fit:cover;width:100%;" />
+                <!-- Play button overlay (table-based, Outlook-safe) -->
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+                  style="position:absolute;top:0;left:0;right:0;bottom:0;">
+                  <tr>
+                    <td align="center" valign="middle" style="background:rgba(0,0,0,0.35);">
+                      <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                        <tr>
+                          <td align="center" valign="middle"
+                            style="width:56px;height:56px;background:linear-gradient(135deg,${ac.from},${ac.to});border-radius:50%;font-size:22px;text-align:center;line-height:56px;mso-line-height-rule:exactly;">
+                            &#9654;
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </a>
+            </td>
+          </tr>
+        </table>`
+            : ""
+        }
+
+        <!-- Recording details card -->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+          style="background:#161836;border:1px solid #252850;border-radius:18px;margin-bottom:24px;overflow:hidden;">
+          <tr>
+            <td style="padding:16px 20px;border-bottom:1px solid #252850;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td class="detail-icon" valign="middle" style="width:48px;padding-right:12px;vertical-align:middle;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" valign="middle"
+                          style="width:40px;height:40px;background:rgba(99,102,241,0.15);border-radius:10px;font-size:18px;text-align:center;vertical-align:middle;line-height:40px;mso-line-height-rule:exactly;">
+                          &#127909;
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td class="detail-pad" valign="middle" style="vertical-align:middle;">
+                    <p style="margin:0 0 2px 0;font-size:10px;font-weight:700;color:rgba(255,255,255,0.40);text-transform:uppercase;letter-spacing:1.5px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Meeting</p>
+                    <p style="margin:0;font-size:14px;font-weight:700;color:#e8eaff;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">${meetingTitle}</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 20px;border-bottom:1px solid #252850;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td class="detail-icon" valign="middle" style="width:48px;padding-right:12px;vertical-align:middle;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" valign="middle"
+                          style="width:40px;height:40px;background:rgba(99,102,241,0.15);border-radius:10px;font-size:18px;text-align:center;vertical-align:middle;line-height:40px;mso-line-height-rule:exactly;">
+                          &#127902;
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td class="detail-pad" valign="middle" style="vertical-align:middle;">
+                    <p style="margin:0 0 2px 0;font-size:10px;font-weight:700;color:rgba(255,255,255,0.40);text-transform:uppercase;letter-spacing:1.5px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Recording Type</p>
+                    <p style="margin:0;font-size:14px;font-weight:700;color:${ac.text};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">${modeLabel}</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 20px;border-bottom:1px solid #252850;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td class="detail-icon" valign="middle" style="width:48px;padding-right:12px;vertical-align:middle;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" valign="middle"
+                          style="width:40px;height:40px;background:rgba(16,185,129,0.15);border-radius:10px;font-size:18px;text-align:center;vertical-align:middle;line-height:40px;mso-line-height-rule:exactly;">
+                          &#9200;
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td class="detail-pad" valign="middle" style="vertical-align:middle;">
+                    <p style="margin:0 0 2px 0;font-size:10px;font-weight:700;color:rgba(255,255,255,0.40);text-transform:uppercase;letter-spacing:1.5px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Duration</p>
+                    <p style="margin:0;font-size:14px;font-weight:700;color:#e8eaff;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">${formatDur(durationSec)}</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 20px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td class="detail-icon" valign="middle" style="width:48px;padding-right:12px;vertical-align:middle;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" valign="middle"
+                          style="width:40px;height:40px;background:rgba(245,158,11,0.15);border-radius:10px;font-size:18px;text-align:center;vertical-align:middle;line-height:40px;mso-line-height-rule:exactly;">
+                          &#128197;
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td class="detail-pad" valign="middle" style="vertical-align:middle;">
+                    <p style="margin:0 0 2px 0;font-size:10px;font-weight:700;color:rgba(255,255,255,0.40);text-transform:uppercase;letter-spacing:1.5px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Recorded On</p>
+                    <p style="margin:0;font-size:14px;font-weight:700;color:#e8eaff;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">${recordedAtStr}</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+
+        <!-- Primary CTA -->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+          <tr>
+            <td align="center" style="padding:0;">
+              <!--[if mso]>
+              <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word"
+                href="${cloudinaryUrl}" style="height:54px;v-text-anchor:middle;width:400px;" arcsize="15%"
+                strokecolor="${ac.to}" fillcolor="${ac.from}">
+                <w:anchorlock/>
+                <center style="color:#ffffff;font-family:sans-serif;font-size:16px;font-weight:800;">&#9654;&nbsp;&nbsp;Watch Recording</center>
+              </v:roundrect>
+              <![endif]-->
+              <!--[if !mso]><!-->
+              <a href="${cloudinaryUrl}" class="btn-cta"
+                style="
+                  display:inline-block;
+                  width:100%;
+                  max-width:400px;
+                  padding:18px 24px;
+                  background:linear-gradient(135deg,${ac.from},${ac.to});
+                  color:#ffffff;
+                  font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;
+                  font-size:16px;
+                  font-weight:800;
+                  text-align:center;
+                  text-decoration:none;
+                  border-radius:14px;
+                  box-shadow:0 10px 32px ${ac.glow};
+                  letter-spacing:0.4px;
+                  box-sizing:border-box;
+                ">&#9654;&nbsp;&nbsp;Watch Recording</a>
+              <!--<![endif]-->
+            </td>
+          </tr>
+        </table>
+
+        <!-- Link fallback -->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:14px;">
+          <tr>
+            <td style="background:#161836;border:1px solid #252850;border-radius:12px;padding:14px 18px;text-align:center;">
+              <p style="margin:0 0 6px 0;font-size:10px;font-weight:700;color:rgba(255,255,255,0.40);text-transform:uppercase;letter-spacing:1.5px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Or paste this link</p>
+              <p style="margin:0;font-size:12px;color:#818cf8;font-family:'Courier New',Courier,monospace;word-break:break-all;">${cloudinaryUrl}</p>
+            </td>
+          </tr>
+        </table>
+
+        <!-- Note about dashboard -->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px;">
+          <tr>
+            <td style="background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.15);border-radius:14px;padding:16px 20px;">
+              <p style="margin:0;font-size:13px;color:rgba(255,255,255,0.55);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.7;">
+                &#128204;&nbsp; You can also find all your recordings in the <strong style="color:${ac.text};">Recordings</strong> tab on your Lumina Meet dashboard.
+              </p>
+            </td>
+          </tr>
+        </table>
+
+      </td>
+    </tr>
+
+    <tr>
+      <td style="padding:0 36px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+          <tr>
+            <td style="height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.10),transparent);font-size:0;line-height:0;">&nbsp;</td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+
+    <!-- ══ FOOTER ══ -->
+    <tr>
+      <td class="ftr" style="padding:22px 40px 30px;text-align:center;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 14px;">
+          <tr>
+            <td style="width:6px;height:6px;background:${ac.from};border-radius:50%;"></td>
+            <td style="width:8px;"></td>
+            <td style="width:6px;height:6px;background:${ac.to};border-radius:50%;opacity:0.6;"></td>
+            <td style="width:8px;"></td>
+            <td style="width:6px;height:6px;background:${ac.from};border-radius:50%;opacity:0.35;"></td>
+          </tr>
+        </table>
+        <p style="margin:0;font-size:12px;color:rgba(255,255,255,0.25);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.8;">
+          This email was sent to ${toEmail} because you recorded a Lumina Meet session.<br>
+          Recordings are stored securely. Manage your <a href="#" style="color:rgba(255,255,255,0.40);text-decoration:underline;">notification preferences</a>.
+        </p>
+      </td>
+    </tr>`;
+
+  return sendEmail({
+    to: toEmail,
+    subject: `Recording Ready: ${meetingTitle} — Lumina Meet`,
+    html: shell(inner, preview),
+    text: `Hi ${hostName},\n\nYour "${meetingTitle}" recording is ready!\n\nType: ${modeLabel}\nDuration: ${formatDur(durationSec)}\n\nWatch it here: ${cloudinaryUrl}\n\nThis link will also appear in your Recordings tab on the dashboard.`,
+  });
+};
+
 export default {
   sendOTPEmail,
   sendMeetingInvitationEmail,
   sendPasswordResetEmail,
   sendMeetingReminderEmail,
+  sendRecordingReadyEmail,
 };

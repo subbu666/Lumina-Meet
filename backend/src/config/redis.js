@@ -1,8 +1,8 @@
-import Redis from 'ioredis';
+import Redis from "ioredis";
 
 /**
  * Redis Client with In-Memory Fallback
- * 
+ *
  * Features:
  * - Redis connection with automatic retry
  * - In-memory Map fallback when Redis is unavailable
@@ -32,10 +32,10 @@ const memoryFallback = {
     let expiryMs = null;
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
-      if (arg === 'EX' && args[i + 1]) {
+      if (arg === "EX" && args[i + 1]) {
         expiryMs = parseInt(args[i + 1]) * 1000;
       }
-      if (arg === 'PX' && args[i + 1]) {
+      if (arg === "PX" && args[i + 1]) {
         expiryMs = parseInt(args[i + 1]);
       }
     }
@@ -52,7 +52,7 @@ const memoryFallback = {
       expiryTimers.set(key, timer);
     }
 
-    return 'OK';
+    return "OK";
   },
 
   async del(key) {
@@ -104,14 +104,14 @@ const memoryFallback = {
 
   // Health check
   async ping() {
-    return 'PONG';
+    return "PONG";
   },
 
   // Stats for monitoring
   getStats() {
     return {
       keys: memoryStore.size,
-      mode: 'in-memory-fallback',
+      mode: "in-memory-fallback",
     };
   },
 };
@@ -125,7 +125,7 @@ const initRedis = async () => {
 
   // If no Redis URL provided, use fallback immediately
   if (!redisUrl) {
-    console.log('⚠️ No REDIS_URL found. Using in-memory fallback.');
+    console.log("⚠️ No REDIS_URL found. Using in-memory fallback.");
     useFallback = true;
     return memoryFallback;
   }
@@ -140,36 +140,37 @@ const initRedis = async () => {
         return delay;
       },
       reconnectOnError(err) {
-        const targetErrors = ['ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET'];
-        return targetErrors.some(e => err.message.includes(e));
+        const targetErrors = ["ECONNREFUSED", "ETIMEDOUT", "ECONNRESET"];
+        return targetErrors.some((e) => err.message.includes(e));
       },
     });
 
     // Event handlers
-    redisClient.on('connect', () => {
-      console.log('✅ Redis Connected');
+    redisClient.on("connect", () => {
+      console.log("✅ Redis Connected");
       useFallback = false;
     });
 
-    redisClient.on('error', (err) => {
-      if (!useFallback && err.code === 'ECONNREFUSED') {
-        console.warn('⚠️ Redis Connection Failed. Switching to in-memory fallback.');
+    redisClient.on("error", (err) => {
+      if (!useFallback && err.code === "ECONNREFUSED") {
+        console.warn(
+          "⚠️ Redis Connection Failed. Switching to in-memory fallback.",
+        );
         useFallback = true;
       }
     });
 
-    redisClient.on('close', () => {
-      console.warn('⚠️ Redis Connection Closed.');
+    redisClient.on("close", () => {
+      console.warn("⚠️ Redis Connection Closed.");
       useFallback = true;
     });
 
     // Attempt connection
     await redisClient.connect();
     return redisClient;
-
   } catch (error) {
-    console.warn('⚠️ Redis initialization failed:', error.message);
-    console.log('📦 Using in-memory fallback for caching.');
+    console.warn("⚠️ Redis initialization failed:", error.message);
+    console.log("📦 Using in-memory fallback for caching.");
     useFallback = true;
     return memoryFallback;
   }
@@ -197,16 +198,16 @@ const isFallbackMode = () => useFallback;
 const closeRedis = async () => {
   if (redisClient && !useFallback) {
     await redisClient.quit();
-    console.log('🔌 Redis Connection Closed');
+    console.log("🔌 Redis Connection Closed");
   }
   // Clear all in-memory timers
-  expiryTimers.forEach(timer => clearTimeout(timer));
+  expiryTimers.forEach((timer) => clearTimeout(timer));
   memoryStore.clear();
   expiryTimers.clear();
 };
 
 // Handle graceful shutdown
-process.on('SIGINT', closeRedis);
-process.on('SIGTERM', closeRedis);
+process.on("SIGINT", closeRedis);
+process.on("SIGTERM", closeRedis);
 
 export { initRedis, getRedis, isFallbackMode, closeRedis };

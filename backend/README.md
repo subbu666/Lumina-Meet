@@ -83,6 +83,7 @@ src/
 ├── controllers/
 │   ├── authController.js  # Signup, login, OTP, password reset, profile
 │   └── meetingController.js # CRUD, scheduling, invites, history
+│   └── recordingController.js 
 │
 ├── middlewares/
 │   ├── authMiddleware.js  # JWT verification, role checks

@@ -20,6 +20,13 @@ import {
   recordJoinedMeetingValidation,
   historyValidation,
 } from "../controllers/meetingController.js";
+import {
+  getUploadSignature,
+  saveRecording,
+  getUserRecordings,
+  signatureValidation,
+  saveRecordingValidation,
+} from "../controllers/recordingController.js";
 import { authenticate } from "../middlewares/authMiddleware.js";
 import {
   meetingRateLimiter,
@@ -29,7 +36,6 @@ import {
 const router = Router();
 
 // ── Instant meeting ───────────────────────────────────────────────────────────
-// Title is now required in the body (collected by the modal before API call).
 router.post(
   "/generate",
   authenticate,
@@ -38,9 +44,8 @@ router.post(
   generateInstantMeeting,
 );
 
-// ── Generate + invite in one shot (dashboard "Send invites") ──────────────────
-// MUST be registered before '/:meetingId' routes to avoid Express treating
-// "generate-and-invite" as a meetingId param.
+// ── Generate + invite in one shot ─────────────────────────────────────────────
+// MUST be before /:meetingId routes — avoids Express treating "generate-and-invite" as a param.
 router.post(
   "/generate-and-invite",
   authenticate,
@@ -59,8 +64,6 @@ router.post(
 );
 
 // ── Record a "joined" meeting link in the user's history ─────────────────────
-// Called by the frontend when the user joins someone else's meeting via a
-// pasted link so it shows up in their history with the "Joined" badge.
 router.post(
   "/record-joined",
   authenticate,
@@ -68,6 +71,35 @@ router.post(
   recordJoinedMeetingValidation,
   recordJoinedMeeting,
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RECORDING ENDPOINTS
+// Must be registered before /history, /upcoming, and /:meetingId to avoid
+// Express treating "recording" as a meetingId param.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET  /api/meeting/recordings         — all recordings for the current user (dashboard tab)
+router.get("/recordings", authenticate, getUserRecordings);
+
+// POST /api/meeting/recording/signature — get Cloudinary signed upload params
+router.post(
+  "/recording/signature",
+  authenticate,
+  meetingRateLimiter,
+  signatureValidation,
+  getUploadSignature,
+);
+
+// POST /api/meeting/recording/save      — save recording metadata + send email
+router.post(
+  "/recording/save",
+  authenticate,
+  meetingRateLimiter,
+  saveRecordingValidation,
+  saveRecording,
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ── Join meeting (public or authenticated) ────────────────────────────────────
 router.post("/join/:meetingId", joinMeetingValidation, joinMeeting);

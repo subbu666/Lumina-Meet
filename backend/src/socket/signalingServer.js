@@ -576,11 +576,16 @@ export function initSignaling(io) {
 
     // ─── CHAT ─────────────────────────────────────────────────────────────────
 
-    socket.on("chat-message", ({ text, replyTo }) => {
+    socket.on("chat-message", ({ text, replyTo, recipients }) => {
       const roomId = socket.data.roomId;
       if (!roomId) return;
       const clean = sanitizeText(text);
       if (!clean) return;
+
+      // recipients: undefined | null → everyone
+      // recipients: string[]          → only those socket IDs + sender
+      const isPrivate = Array.isArray(recipients) && recipients.length > 0;
+
       const message = {
         id: `${socket.id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         socketId: socket.id,
@@ -588,9 +593,23 @@ export function initSignaling(io) {
         text: clean,
         timestamp: Date.now(),
         replyTo: replyTo ?? null,
+        // Store recipients on the message so chat-history replay can filter correctly
+        recipients: isPrivate ? [socket.id, ...recipients] : null,
+        isPrivate,
       };
-      pushChat(roomId, message);
-      io.to(roomId).emit("chat-message", message);
+
+      if (isPrivate) {
+        // Send only to the allowed set (sender + named recipients)
+        const targets = new Set([socket.id, ...recipients]);
+        targets.forEach((sid) => {
+          io.to(sid).emit("chat-message", message);
+        });
+        // Private messages are NOT pushed to the shared chat history
+        // so late joiners don't see them
+      } else {
+        pushChat(roomId, message);
+        io.to(roomId).emit("chat-message", message);
+      }
     });
 
     socket.on("chat-reaction", ({ messageId, emoji }) => {
