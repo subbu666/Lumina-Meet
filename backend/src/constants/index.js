@@ -29,6 +29,36 @@ export const MAX_MEETING_PARTICIPANTS = 100;
 export const MEETING_JOIN_WINDOW_MINUTES = 15; // Can join 15 min before scheduled
 export const MAX_INVITES_PER_REQUEST = 50;
 
+// ─── Recording Limits ─────────────────────────────────────────────────────────
+/**
+ * MAX_RECORDING_DURATION_SEC — hard cap enforced on both client and server.
+ *
+ * 5 minutes chosen for the following reasons:
+ *   • Cloudinary free tier: 10 GB storage, 20 GB bandwidth/month.
+ *     A 15-min screen+voice recording at 2800 kbps ≈ 315 MB — leaves
+ *     comfortable room for multiple recordings without hitting the quota.
+ *   • Resume project framing: 15 min is long enough to demonstrate any
+ *     real meeting scenario; longer recordings add no showcase value.
+ *   • MediaRecorder memory: keeping blobs in-memory for >5 min risks
+ *     OOM on low-end devices / mobile browsers.
+ *   • UX: users are nudged toward focused, purposeful recordings rather
+ *     than leaving the recorder running accidentally.
+ *
+ * The server re-validates durationSec on /recording/signature so a
+ * tampered client cannot bypass the cap.
+ */
+export const MAX_RECORDING_DURATION_SEC = 5 * 60; // 300 seconds = 5 minutes
+export const MAX_RECORDING_DURATION_MIN = 5; // human-readable label used in UI strings
+
+/**
+ * WARNING_BEFORE_LIMIT_SEC — how many seconds before the limit the
+ * useRecording hook fires the onApproachingLimit callback so the UI
+ * can show a soft warning banner before the hard stop fires.
+ */
+export const RECORDING_WARNING_BEFORE_SEC = 60; // warn at 4:00 remaining
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Rate Limiting
 export const RATE_LIMIT_WINDOW_MS = 60000; // 1 minute
 export const AUTH_RATE_LIMIT_MAX = 5;
@@ -135,6 +165,9 @@ export const ERROR_CODES = {
   INVALID_PASSWORD: "INVALID_PASSWORD",
   NOT_HOST: "NOT_HOST",
 
+  // Recording
+  RECORDING_LIMIT_EXCEEDED: "RECORDING_LIMIT_EXCEEDED",
+
   // General
   VALIDATION_ERROR: "VALIDATION_ERROR",
   NOT_FOUND: "NOT_FOUND",
@@ -171,4 +204,7 @@ export default {
   CORS_OPTIONS,
   HTTP_STATUS,
   ERROR_CODES,
+  MAX_RECORDING_DURATION_SEC,
+  MAX_RECORDING_DURATION_MIN,
+  RECORDING_WARNING_BEFORE_SEC,
 };

@@ -1,11 +1,19 @@
 /**
  * RecordingModals — Lumina Meet
  *
- * Two modals:
- *  1. RecordingOptionsModal  — picks Screen / Voice / Both, requires canManage
- *  2. RecordingLinkModal     — shown post-upload, animated timer + final link
+ * Three modals + one inline banner:
+ *  1. RecordingOptionsModal   — picks Screen / Voice / Both.
+ *                               Now includes a pre-recording note about the
+ *                               15-minute limit.
+ *  2. RecordingLinkModal      — shown post-upload, animated timer + final link.
+ *  3. RecordingLimitModal     — jaw-dropping full-screen modal shown when the
+ *                               15-minute hard cap is hit and the recorder
+ *                               is force-stopped.
+ *  4. RecordingWarningBanner  — small inline toast shown at the 14-minute mark
+ *                               (1 minute left warning). Exported for use in
+ *                               meeting.$id.tsx.
  *
- * Matches existing okclh design tokens from styles.css exactly.
+ * Matches existing oklch design tokens from styles.css exactly.
  */
 
 import { createPortal } from "react-dom";
@@ -21,21 +29,29 @@ import {
   Copy,
   ExternalLink,
   Mail,
-  Loader2,
   Circle,
+  Clock,
+  AlertTriangle,
+  StopCircle,
+  Timer,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NeonButton } from "@/components/ui-custom/NeonButton";
 import type { RecordingMode, RecordingEntry } from "@/hooks/useRecording";
-import { estimatedUploadSec } from "@/hooks/useRecording";
+import {
+  estimatedUploadSec,
+  MAX_RECORDING_DURATION_MIN,
+  MAX_RECORDING_DURATION_SEC,
+  RECORDING_WARNING_BEFORE_SEC,
+} from "@/hooks/useRecording";
 
-// ─── Recording Options Modal ───────────────────────────────────────────────
+// ─── Recording Options Modal ──────────────────────────────────────────────────
 
 interface RecordingOptionsModalProps {
   open: boolean;
   onClose: () => void;
   onStart: (mode: RecordingMode) => void;
-  isSharing: boolean; // whether screen share is active
+  isSharing: boolean;
 }
 
 const RECORDING_OPTIONS: {
@@ -47,7 +63,6 @@ const RECORDING_OPTIONS: {
   glow: string;
   border: string;
   textColor: string;
-  requiresSharing?: boolean;
 }[] = [
   {
     mode: "screen_voice",
@@ -182,7 +197,7 @@ export function RecordingOptionsModal({
                 </div>
 
                 {/* Options */}
-                <div className="space-y-3 mb-7">
+                <div className="space-y-3 mb-5">
                   {RECORDING_OPTIONS.map((opt) => {
                     const isActive = selected === opt.mode;
                     const isHovered = hovering === opt.mode;
@@ -239,14 +254,12 @@ export function RecordingOptionsModal({
 
                         {/* Text */}
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-0.5">
-                            <p
-                              className="font-semibold text-sm transition-colors duration-200"
-                              style={isActive ? { color: opt.textColor } : {}}
-                            >
-                              {opt.label}
-                            </p>
-                          </div>
+                          <p
+                            className="font-semibold text-sm transition-colors duration-200 mb-0.5"
+                            style={isActive ? { color: opt.textColor } : {}}
+                          >
+                            {opt.label}
+                          </p>
                           <p className="text-xs text-muted-foreground leading-relaxed">
                             {opt.desc}
                           </p>
@@ -275,6 +288,22 @@ export function RecordingOptionsModal({
                       </motion.button>
                     );
                   })}
+                </div>
+
+                {/* ── Pre-recording duration note ─────────────────────────────
+                    Always visible so the user knows the limit BEFORE clicking
+                    Start. Uses an amber/warning tone distinct from the info
+                    note below it.
+                ─────────────────────────────────────────────────────────────── */}
+                <div className="flex items-start gap-2.5 rounded-xl border border-[oklch(0.8_0.18_80/0.35)] bg-[oklch(0.8_0.18_80/0.07)] px-4 py-3 mb-3">
+                  <Timer className="h-3.5 w-3.5 text-[oklch(0.85_0.18_80)] shrink-0 mt-0.5" />
+                  <p className="text-[12px] text-[oklch(0.85_0.15_80)] leading-relaxed">
+                    <span className="font-semibold">
+                      Recording length is capped at {MAX_RECORDING_DURATION_MIN} minutes.
+                    </span>{" "}
+                    The recorder will stop automatically and your clip will be saved when the limit
+                    is reached. You'll get a warning 1 minute before.
+                  </p>
                 </div>
 
                 {/* Info note */}
@@ -317,14 +346,325 @@ export function RecordingOptionsModal({
   );
 }
 
-// ─── Recording Link Generation Modal ──────────────────────────────────────
+// ─── Recording Limit Exceeded Modal ──────────────────────────────────────────
+/**
+ * Shown when the 15-minute hard cap is hit and the recorder is force-stopped.
+ * Designed to be impossible to miss — full-screen takeover with dramatic
+ * animations — while staying tasteful and on-brand.
+ */
+
+interface RecordingLimitModalProps {
+  open: boolean;
+  onClose: () => void;
+  recordingMode: RecordingMode;
+}
+
+export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingLimitModalProps) {
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [open, onClose]);
+
+  const modeLabel =
+    recordingMode === "screen_voice"
+      ? "Screen + Voice"
+      : recordingMode === "screen"
+        ? "Screen"
+        : "Voice";
+
+  return createPortal(
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/92 backdrop-blur-2xl"
+          onClick={onClose}
+        >
+          {/* ── Dramatic ambient background ─────────────────────────────── */}
+          <div className="pointer-events-none absolute inset-0 overflow-hidden">
+            {/* Large pulsing red orb */}
+            <motion.div
+              className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-[700px] w-[700px] rounded-full"
+              style={{
+                background: "radial-gradient(circle, oklch(0.55 0.28 25 / 0.35), transparent 65%)",
+              }}
+              animate={{ scale: [1, 1.15, 1], opacity: [0.5, 0.8, 0.5] }}
+              transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
+            />
+            {/* Secondary purple orb for contrast */}
+            <motion.div
+              className="absolute -top-40 -right-40 h-96 w-96 rounded-full opacity-25"
+              style={{
+                background: "radial-gradient(circle, oklch(0.65 0.22 280), transparent 70%)",
+              }}
+              animate={{ scale: [1, 1.2, 1] }}
+              transition={{ duration: 4, repeat: Infinity, delay: 1 }}
+            />
+            <motion.div
+              className="absolute -bottom-40 -left-40 h-96 w-96 rounded-full opacity-20"
+              style={{
+                background: "radial-gradient(circle, oklch(0.72 0.22 35), transparent 70%)",
+              }}
+              animate={{ scale: [1, 1.2, 1] }}
+              transition={{ duration: 5, repeat: Infinity, delay: 0.5 }}
+            />
+
+            {/* Scanline shimmer across the whole screen */}
+            <motion.div
+              className="absolute inset-x-0 h-px bg-gradient-to-r from-transparent via-[oklch(0.72_0.22_35/0.6)] to-transparent"
+              animate={{ top: ["-2px", "100vh"] }}
+              transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+            />
+          </div>
+
+          <motion.div
+            initial={{ opacity: 0, scale: 0.82, y: 40 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.88, y: 20 }}
+            transition={{ type: "spring", damping: 18, stiffness: 260 }}
+            className="relative mx-4 w-full max-w-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Halo glow */}
+            <motion.div
+              className="absolute -inset-4 rounded-[3rem] blur-3xl"
+              style={{
+                background:
+                  "linear-gradient(135deg, oklch(0.72 0.28 25 / 0.5), oklch(0.65 0.22 280 / 0.3))",
+              }}
+              animate={{ opacity: [0.6, 1, 0.6] }}
+              transition={{ duration: 2, repeat: Infinity }}
+            />
+
+            {/* Card */}
+            <div className="relative overflow-hidden glass-strong rounded-[2.5rem] border border-[oklch(0.72_0.22_35/0.5)]">
+              {/* Top danger line — animated shimmer */}
+              <div
+                className="h-1 shimmer"
+                style={{
+                  background:
+                    "linear-gradient(90deg, oklch(0.65 0.22 280), oklch(0.72 0.28 25), oklch(0.8 0.18 80), oklch(0.72 0.28 25), oklch(0.65 0.22 280))",
+                  backgroundSize: "200% 100%",
+                }}
+              />
+
+              <div className="px-10 pt-10 pb-8 text-center">
+                {/* ── Icon ─────────────────────────────────────────────── */}
+                <div className="relative mx-auto mb-7 flex h-28 w-28 items-center justify-center">
+                  {/* Pulsing outer rings */}
+                  {[0, 1, 2].map((i) => (
+                    <motion.div
+                      key={i}
+                      className="absolute inset-0 rounded-full border border-[oklch(0.72_0.28_25/0.4)]"
+                      animate={{ scale: [1, 1.6 + i * 0.3], opacity: [0.6, 0] }}
+                      transition={{
+                        duration: 1.8,
+                        repeat: Infinity,
+                        delay: i * 0.5,
+                        ease: "easeOut",
+                      }}
+                    />
+                  ))}
+
+                  {/* Inner circle */}
+                  <motion.div
+                    className="relative flex h-full w-full items-center justify-center rounded-full"
+                    style={{
+                      background:
+                        "linear-gradient(135deg, oklch(0.55 0.28 15), oklch(0.72 0.25 35))",
+                      boxShadow:
+                        "0 0 60px -8px oklch(0.72 0.28 25 / 0.8), inset 0 1px 0 oklch(1 0 0 / 0.15)",
+                    }}
+                    animate={{
+                      boxShadow: [
+                        "0 0 40px -8px oklch(0.72 0.28 25 / 0.6)",
+                        "0 0 80px -4px oklch(0.72 0.28 25 / 0.9)",
+                        "0 0 40px -8px oklch(0.72 0.28 25 / 0.6)",
+                      ],
+                    }}
+                    transition={{ duration: 1.5, repeat: Infinity }}
+                  >
+                    <StopCircle className="h-12 w-12 text-white" />
+                  </motion.div>
+                </div>
+
+                {/* ── Headline ──────────────────────────────────────────── */}
+                <motion.h2
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.1 }}
+                  className="text-3xl font-bold mb-2 leading-tight"
+                  style={{
+                    background: "linear-gradient(135deg, oklch(0.9 0.2 35), oklch(0.95 0.1 60))",
+                    WebkitBackgroundClip: "text",
+                    WebkitTextFillColor: "transparent",
+                  }}
+                >
+                  Recording Limit Reached
+                </motion.h2>
+
+                {/* ── Sub-headline ──────────────────────────────────────── */}
+                <motion.p
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.18 }}
+                  className="text-base text-muted-foreground mb-6 leading-relaxed"
+                >
+                  Your {modeLabel} recording has hit the{" "}
+                  <span className="font-semibold text-[oklch(0.85_0.18_80)]">
+                    {MAX_RECORDING_DURATION_MIN}-minute limit
+                  </span>{" "}
+                  and has been automatically stopped. Don't worry — everything recorded so far is
+                  being saved to your cloud.
+                </motion.p>
+
+                {/* ── Info cards ───────────────────────────────────────── */}
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.26 }}
+                  className="grid grid-cols-2 gap-3 mb-6"
+                >
+                  <div className="rounded-2xl border border-[oklch(0.75_0.18_145/0.3)] bg-[oklch(0.75_0.18_145/0.07)] px-4 py-3 text-left">
+                    <div className="flex items-center gap-2 mb-1">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-[oklch(0.75_0.18_145)]" />
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-[oklch(0.75_0.18_145)]">
+                        Recording saved
+                      </p>
+                    </div>
+                    <p className="text-[12px] text-muted-foreground leading-relaxed">
+                      Your full {MAX_RECORDING_DURATION_MIN}-min clip is uploading to Cloudinary
+                      now.
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-[oklch(0.8_0.18_80/0.3)] bg-[oklch(0.8_0.18_80/0.07)] px-4 py-3 text-left">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Clock className="h-3.5 w-3.5 text-[oklch(0.85_0.18_80)]" />
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-[oklch(0.85_0.18_80)]">
+                        New recording
+                      </p>
+                    </div>
+                    <p className="text-[12px] text-muted-foreground leading-relaxed">
+                      You can start a fresh recording immediately after this.
+                    </p>
+                  </div>
+                </motion.div>
+
+                {/* ── Why the limit? note ───────────────────────────────── */}
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.32 }}
+                  className="flex items-start gap-2.5 rounded-xl border border-[oklch(0.72_0.28_25/0.2)] bg-[oklch(0.72_0.28_25/0.05)] px-4 py-3 mb-7 text-left"
+                >
+                  <AlertTriangle className="h-3.5 w-3.5 text-[oklch(0.82_0.2_35)] shrink-0 mt-0.5" />
+                  <p className="text-[12px] text-muted-foreground leading-relaxed">
+                    The {MAX_RECORDING_DURATION_MIN}-minute cap keeps recordings concise and within
+                    your free-tier cloud storage allowance. For longer sessions, consider splitting
+                    into multiple recordings.
+                  </p>
+                </motion.div>
+
+                {/* ── CTA ──────────────────────────────────────────────── */}
+                <motion.button
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.38 }}
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={onClose}
+                  className="w-full flex items-center justify-center gap-2 rounded-2xl py-3.5 text-base font-semibold text-white transition"
+                  style={{
+                    background: "linear-gradient(135deg, oklch(0.55 0.28 15), oklch(0.72 0.22 35))",
+                    boxShadow: "0 8px 40px -8px oklch(0.72 0.28 25 / 0.6)",
+                  }}
+                >
+                  Got it — dismiss
+                </motion.button>
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>,
+    document.body,
+  );
+}
+
+// ─── Recording Warning Banner ─────────────────────────────────────────────────
+/**
+ * Inline toast rendered inside the meeting room (not a portal) at the 14:00
+ * mark. Small, non-blocking, auto-dismisses after 8 seconds.
+ * Pass it directly in meeting.$id.tsx, positioned near the header or footer.
+ */
+
+interface RecordingWarningBannerProps {
+  show: boolean;
+  onDismiss: () => void;
+}
+
+export function RecordingWarningBanner({ show, onDismiss }: RecordingWarningBannerProps) {
+  // Auto-dismiss after 8 seconds
+  useEffect(() => {
+    if (!show) return;
+    const t = setTimeout(onDismiss, 8000);
+    return () => clearTimeout(t);
+  }, [show, onDismiss]);
+
+  return (
+    <AnimatePresence>
+      {show && (
+        <motion.div
+          initial={{ opacity: 0, y: -20, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: -16, scale: 0.96 }}
+          transition={{ type: "spring", damping: 22, stiffness: 320 }}
+          className="fixed top-[72px] left-1/2 -translate-x-1/2 z-[9980] pointer-events-auto"
+        >
+          <div
+            className="flex items-center gap-3 rounded-2xl border px-4 py-2.5 shadow-2xl backdrop-blur-xl"
+            style={{
+              background: "oklch(0.12 0.04 40 / 0.92)",
+              borderColor: "oklch(0.72 0.28 35 / 0.5)",
+              boxShadow: "0 8px 40px -8px oklch(0.72 0.28 25 / 0.5)",
+            }}
+          >
+            {/* Pulsing dot */}
+            <div className="relative flex h-2.5 w-2.5 shrink-0">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[oklch(0.72_0.28_35)] opacity-60" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[oklch(0.82_0.25_35)]" />
+            </div>
+
+            <p className="text-sm font-medium text-[oklch(0.92_0.12_60)]">
+              <span className="font-bold text-[oklch(0.85_0.22_45)]">1 minute left</span> —
+              recording will auto-stop at {MAX_RECORDING_DURATION_MIN} min
+            </p>
+
+            <button
+              onClick={onDismiss}
+              className="ml-1 text-muted-foreground hover:text-foreground transition shrink-0"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+// ─── Recording Link Generation Modal ─────────────────────────────────────────
 
 interface RecordingLinkModalProps {
   open: boolean;
   onClose: () => void;
   mode: RecordingMode;
   durationSec: number;
-  uploadProgress: number; // 0–100
+  uploadProgress: number;
   isUploading: boolean;
   recording: RecordingEntry | null;
   error: string | null;
@@ -344,31 +684,28 @@ const MODE_LABELS: Record<RecordingMode, string> = {
   voice: "Voice Only",
 };
 
-const MODE_COLORS: Record<
-  RecordingMode,
-  { from: string; to: string; glow: string; text: string }
-> = {
-  screen_voice: {
-    from: "oklch(0.55 0.22 280)",
-    to: "oklch(0.65 0.18 305)",
-    glow: "oklch(0.65 0.22 280 / 0.4)",
-    text: "oklch(0.82 0.16 280)",
-  },
-  screen: {
-    from: "oklch(0.55 0.18 210)",
-    to: "oklch(0.65 0.16 240)",
-    glow: "oklch(0.65 0.18 210 / 0.4)",
-    text: "oklch(0.82 0.16 210)",
-  },
-  voice: {
-    from: "oklch(0.65 0.18 305)",
-    to: "oklch(0.72 0.22 35)",
-    glow: "oklch(0.75 0.18 305 / 0.4)",
-    text: "oklch(0.85 0.16 305)",
-  },
-};
+const MODE_COLORS: Record<RecordingMode, { from: string; to: string; glow: string; text: string }> =
+  {
+    screen_voice: {
+      from: "oklch(0.55 0.22 280)",
+      to: "oklch(0.65 0.18 305)",
+      glow: "oklch(0.65 0.22 280 / 0.4)",
+      text: "oklch(0.82 0.16 280)",
+    },
+    screen: {
+      from: "oklch(0.55 0.18 210)",
+      to: "oklch(0.65 0.16 240)",
+      glow: "oklch(0.65 0.18 210 / 0.4)",
+      text: "oklch(0.82 0.16 210)",
+    },
+    voice: {
+      from: "oklch(0.65 0.18 305)",
+      to: "oklch(0.72 0.22 35)",
+      glow: "oklch(0.75 0.18 305 / 0.4)",
+      text: "oklch(0.85 0.16 305)",
+    },
+  };
 
-// Phase labels while uploading
 const UPLOAD_PHASES = [
   { threshold: 0, label: "Preparing recording…" },
   { threshold: 10, label: "Compressing file…" },
@@ -403,7 +740,6 @@ export function RecordingLinkModal({
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const colors = MODE_COLORS[mode];
 
-  // Kick off the visual countdown when upload starts
   useEffect(() => {
     if (!open || !isUploading) {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -442,16 +778,9 @@ export function RecordingLinkModal({
     });
   };
 
-  const totalEstimate = estimatedUploadSec(mode, durationSec);
-
-  // Circumference for SVG timer ring
   const R = 56;
   const C = 2 * Math.PI * R;
-  const progressArc = isUploading
-    ? C - (uploadProgress / 100) * C
-    : recording
-      ? 0
-      : C;
+  const progressArc = isUploading ? C - (uploadProgress / 100) * C : recording ? 0 : C;
 
   return createPortal(
     <AnimatePresence>
@@ -463,7 +792,6 @@ export function RecordingLinkModal({
           className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90 backdrop-blur-xl"
           onClick={!isUploading ? onClose : undefined}
         >
-          {/* Ambient bg */}
           <div className="pointer-events-none absolute inset-0 overflow-hidden">
             <motion.div
               className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-[600px] w-[600px] rounded-full opacity-10"
@@ -483,7 +811,6 @@ export function RecordingLinkModal({
             className="relative mx-4 w-full max-w-md"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Glow halo */}
             <div
               className="absolute -inset-2 rounded-[2.5rem] blur-2xl opacity-30"
               style={{
@@ -491,7 +818,6 @@ export function RecordingLinkModal({
               }}
             />
 
-            {/* Card */}
             <div className="relative overflow-hidden glass-strong rounded-[2rem] border border-white/10">
               <div
                 className="h-px shimmer"
@@ -502,8 +828,10 @@ export function RecordingLinkModal({
 
               <div className="p-8 text-center">
                 {/* Visual timer ring */}
-                <div className="relative mx-auto mb-6 flex items-center justify-center" style={{ width: 140, height: 140 }}>
-                  {/* Outer pulse ring */}
+                <div
+                  className="relative mx-auto mb-6 flex items-center justify-center"
+                  style={{ width: 140, height: 140 }}
+                >
                   {isUploading && (
                     <motion.div
                       className="absolute inset-0 rounded-full border-2"
@@ -513,13 +841,16 @@ export function RecordingLinkModal({
                     />
                   )}
 
-                  {/* SVG Progress ring */}
                   <svg
                     width="140"
                     height="140"
-                    style={{ position: "absolute", top: 0, left: 0, transform: "rotate(-90deg)" }}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      transform: "rotate(-90deg)",
+                    }}
                   >
-                    {/* Track */}
                     <circle
                       cx="70"
                       cy="70"
@@ -528,7 +859,6 @@ export function RecordingLinkModal({
                       stroke="rgba(255,255,255,0.06)"
                       strokeWidth="6"
                     />
-                    {/* Progress arc */}
                     <motion.circle
                       cx="70"
                       cy="70"
@@ -546,7 +876,6 @@ export function RecordingLinkModal({
                     />
                   </svg>
 
-                  {/* Center content */}
                   <div className="relative z-10 flex flex-col items-center justify-center">
                     {isUploading && !recording && !error && (
                       <>
@@ -573,9 +902,7 @@ export function RecordingLinkModal({
                         <CheckCircle2 className="h-10 w-10" style={{ color: colors.text }} />
                       </motion.div>
                     )}
-                    {error && !isUploading && (
-                      <X className="h-8 w-8 text-[oklch(0.78_0.2_35)]" />
-                    )}
+                    {error && !isUploading && <X className="h-8 w-8 text-[oklch(0.78_0.2_35)]" />}
                   </div>
                 </div>
 
@@ -598,7 +925,6 @@ export function RecordingLinkModal({
                       {getPhase(uploadProgress)}
                     </motion.p>
 
-                    {/* Progress bar */}
                     <div className="h-1.5 w-full rounded-full bg-white/8 overflow-hidden mb-3">
                       <motion.div
                         className="h-full rounded-full"
@@ -612,7 +938,6 @@ export function RecordingLinkModal({
                       />
                     </div>
 
-                    {/* Recording metadata chips */}
                     <div className="flex items-center justify-center gap-3 mt-4">
                       <span className="text-[11px] rounded-full border border-white/10 bg-white/5 px-3 py-1 text-muted-foreground">
                         {MODE_LABELS[mode]}
@@ -622,7 +947,6 @@ export function RecordingLinkModal({
                       </span>
                     </div>
 
-                    {/* Estimated time left */}
                     <p className="mt-3 text-[11px] text-muted-foreground/50">
                       Estimated {formatDur(Math.max(0, timerLeft))} remaining
                     </p>
@@ -658,7 +982,6 @@ export function RecordingLinkModal({
                       Your recording has been saved to the cloud
                     </motion.p>
 
-                    {/* Metadata pills */}
                     <motion.div
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -679,7 +1002,6 @@ export function RecordingLinkModal({
                       ))}
                     </motion.div>
 
-                    {/* Link box */}
                     <motion.div
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -712,7 +1034,6 @@ export function RecordingLinkModal({
                       </motion.button>
                     </motion.div>
 
-                    {/* Email confirmation */}
                     <motion.div
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}

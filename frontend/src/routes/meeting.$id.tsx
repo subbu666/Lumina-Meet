@@ -125,7 +125,12 @@ import {
 import { useAmbientSound, type SoundscapeId } from "@/hooks/useAmbientSound";
 // ── RECORDING imports ─────────────────────────────────────────────────────────
 import { useRecording } from "@/hooks/useRecording";
-import { RecordingOptionsModal, RecordingLinkModal } from "@/components/modals/RecordingModals";
+import {
+  RecordingOptionsModal,
+  RecordingLinkModal,
+  RecordingLimitModal,
+  RecordingWarningBanner,
+} from "@/components/modals/RecordingModals";
 import { apiClient } from "@/api/apiClient";
 
 // ─── Route ────────────────────────────────────────────────────────────────────
@@ -949,6 +954,8 @@ function Room({
   // ── Recording modal state ─────────────────────────────────────────────────
   const [showRecordingOptions, setShowRecordingOptions] = useState(false);
   const [showRecordingLink, setShowRecordingLink] = useState(false);
+  const [showRecordingLimit, setShowRecordingLimit] = useState(false);
+  const [showRecordingWarning, setShowRecordingWarning] = useState(false);
 
   // ── Refs ──────────────────────────────────────────────────────────────────
   const layoutBtnRef = useRef<HTMLButtonElement>(null);
@@ -1083,7 +1090,18 @@ function Room({
     isUploading,
     lastRecording,
     error: recordingError,
-  } = useRecording(id, localStream, recordingEmit);
+  } = useRecording(id, localStream, recordingEmit, {
+    // Fires at the 14-minute mark (RECORDING_WARNING_BEFORE_SEC = 60 s before limit).
+    // Shows the amber banner for 8 seconds so the host has time to wrap up.
+    onApproachingLimit: () => setShowRecordingWarning(true),
+
+    // Fires at the 15-minute mark when the recorder is force-stopped.
+    // Opens the jaw-dropping limit modal immediately before the upload begins.
+    onLimitExceeded: () => {
+      setShowRecordingWarning(false); // dismiss the banner if still visible
+      setShowRecordingLimit(true);
+    },
+  });
 
   // Auto-open link modal when upload starts or completes
   useEffect(() => {
@@ -2308,7 +2326,30 @@ function Room({
             userEmail={user?.email ?? ""}
           />
         )}
+
+        {/* ── Recording limit exceeded modal ────────────────────────────── */}
+        {/* Shown when the 15-minute hard cap fires. Appears BEFORE the
+            upload modal so the user sees the dramatic "limit reached"
+            screen first, then the normal upload progress once they dismiss. */}
+        {showRecordingLimit && (
+          <RecordingLimitModal
+            open={showRecordingLimit}
+            onClose={() => setShowRecordingLimit(false)}
+            recordingMode={recordingMode ?? "screen_voice"}
+          />
+        )}
       </AnimatePresence>
+
+      {/* ── Recording 1-minute warning banner ─────────────────────────────── */}
+      {/* Rendered OUTSIDE AnimatePresence so it can self-animate independently.
+          Positioned just below the header (top-[72px]) via its own fixed CSS.
+          Only visible to the host/co-host who is actively recording. */}
+      {canManage && (
+        <RecordingWarningBanner
+          show={showRecordingWarning}
+          onDismiss={() => setShowRecordingWarning(false)}
+        />
+      )}
     </div>
   );
 }

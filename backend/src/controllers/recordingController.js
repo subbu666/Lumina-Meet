@@ -8,6 +8,11 @@
  *      directly without routing the binary through our server.
  *    — Auth required (host or co-host only enforced client-side; backend
  *      verifies the user is authenticated and is associated with the meeting).
+ *    — SERVER-SIDE LIMIT: rejects any request where durationSec exceeds
+ *      MAX_RECORDING_DURATION_SEC (900 s = 15 min). The client enforces
+ *      the same limit and auto-stops the MediaRecorder, but we double-check
+ *      here so a tampered client cannot bypass the cap and upload an
+ *      oversized file to our Cloudinary account.
  *
  *  POST /api/meeting/recording/save
  *    — Called after the Cloudinary upload completes.
@@ -31,6 +36,10 @@ import Meeting from "../models/Meeting.js";
 import { APIError, asyncHandler } from "../middlewares/errorHandler.js";
 import { sendRecordingReadyEmail } from "../utils/sendEmail.js";
 import { body, validationResult } from "express-validator";
+import {
+  MAX_RECORDING_DURATION_SEC,
+  MAX_RECORDING_DURATION_MIN,
+} from "../constants/index.js";
 
 // ─── Validation rules ─────────────────────────────────────────────────────────
 
@@ -40,8 +49,10 @@ export const signatureValidation = [
     .isIn(["screen_voice", "voice", "screen"])
     .withMessage("mode must be screen_voice | voice | screen"),
   body("durationSec")
-    .isInt({ min: 1, max: 14400 })
-    .withMessage("durationSec must be 1–14400"),
+    .isInt({ min: 1, max: MAX_RECORDING_DURATION_SEC })
+    .withMessage(
+      `durationSec must be between 1 and ${MAX_RECORDING_DURATION_SEC} (${MAX_RECORDING_DURATION_MIN} minutes)`,
+    ),
   body("fileType").trim().notEmpty().withMessage("fileType is required"),
 ];
 
@@ -51,7 +62,11 @@ export const saveRecordingValidation = [
   body("mode")
     .isIn(["screen_voice", "voice", "screen"])
     .withMessage("invalid mode"),
-  body("durationSec").isInt({ min: 1 }).withMessage("durationSec must be >= 1"),
+  body("durationSec")
+    .isInt({ min: 1, max: MAX_RECORDING_DURATION_SEC })
+    .withMessage(
+      `durationSec must be between 1 and ${MAX_RECORDING_DURATION_SEC}`,
+    ),
   body("fileSizeBytes")
     .isInt({ min: 1 })
     .withMessage("fileSizeBytes must be >= 1"),
@@ -104,10 +119,29 @@ function getResourceType(mode, fileType) {
  * Returns everything the frontend needs to upload directly to Cloudinary.
  * The signature covers timestamp + public_id (+ transformation for video).
  * `folder` is intentionally excluded — public_id already contains the path.
+ *
+ * LIMIT ENFORCEMENT:
+ * The express-validator rule above already rejects durationSec >
+ * MAX_RECORDING_DURATION_SEC with a 400. We add a secondary explicit guard
+ * inside the handler body so the error code is unambiguous for the client
+ * (RECORDING_LIMIT_EXCEEDED vs a generic validation array).
  */
 export const getUploadSignature = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
+    // Surface a clean, dedicated error when only the duration field failed.
+    const durationError = errors.array().find((e) => e.path === "durationSec");
+
+    if (durationError) {
+      return res.status(400).json({
+        success: false,
+        message: `Recording exceeds the ${MAX_RECORDING_DURATION_MIN}-minute limit.`,
+        code: "RECORDING_LIMIT_EXCEEDED",
+        limitSec: MAX_RECORDING_DURATION_SEC,
+        limitMin: MAX_RECORDING_DURATION_MIN,
+      });
+    }
+
     return res.status(400).json({
       success: false,
       message: "Validation failed",
@@ -132,6 +166,19 @@ export const getUploadSignature = asyncHandler(async (req, res) => {
   }
 
   const { meetingId, mode, durationSec, fileType } = req.body;
+
+  // ── Secondary hard guard (belt-and-suspenders after express-validator) ──
+  // Catches edge cases where the validator was somehow bypassed or durationSec
+  // was coerced to a float that slipped through isInt().
+  if (Number(durationSec) > MAX_RECORDING_DURATION_SEC) {
+    return res.status(400).json({
+      success: false,
+      message: `Recording duration ${durationSec}s exceeds the ${MAX_RECORDING_DURATION_MIN}-minute (${MAX_RECORDING_DURATION_SEC}s) limit.`,
+      code: "RECORDING_LIMIT_EXCEEDED",
+      limitSec: MAX_RECORDING_DURATION_SEC,
+      limitMin: MAX_RECORDING_DURATION_MIN,
+    });
+  }
 
   // Verify meeting exists and user is authenticated
   const meeting = await Meeting.findOne({ meetingId });

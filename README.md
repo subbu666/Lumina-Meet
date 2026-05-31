@@ -36,8 +36,6 @@
 
 Lumina Meet is a full-stack video conferencing platform built for real collaboration. The browser-to-browser video layer uses **real WebRTC** peer connections coordinated by a Socket.IO signaling server. On top of that foundation sits a complete feature set: voice activity detection, screen sharing, noise suppression, background blur, ambient soundscapes, a collaborative whiteboard, live polls, meeting agendas, cloud recording, a lobby system, private chat, spatial layout mode, and granular host controls.
 
-Demo OTP for any signup / reset flow: **`123456`**
-
 ---
 
 ## Monorepo Structure
@@ -705,15 +703,15 @@ Thumbnail is `null` for `voice` recordings (`resourceType: raw`).
 
 ## Scripts
 
-### Frontend (`client/`)
+### Frontend (`frontend/`)
 
 | Command           | Description                             |
 | ----------------- | --------------------------------------- |
-| `bun dev`         | Dev server with HMR at `localhost:5173` |
-| `bun run build`   | Production build                        |
-| `bun run preview` | Preview production build locally        |
+| `npm dev`         | Dev server with HMR at `localhost:5173` |
+| `npm run build`   | Production build                        |
+| `npm run preview` | Preview production build locally        |
 
-### Backend (`server/`)
+### Backend (`backend/`)
 
 | Command       | Description                     |
 | ------------- | ------------------------------- |
