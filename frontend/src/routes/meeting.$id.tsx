@@ -125,6 +125,7 @@ import {
 import { useAmbientSound, type SoundscapeId } from "@/hooks/useAmbientSound";
 // ── RECORDING imports ─────────────────────────────────────────────────────────
 import { useRecording } from "@/hooks/useRecording";
+import { TileGenerativeAvatar } from "@/components/ui-custom/GenerativeAvatar";
 import {
   RecordingOptionsModal,
   RecordingLinkModal,
@@ -3820,11 +3821,7 @@ function LocalVideoTile({
           hasLiveVideo ? "opacity-100" : "opacity-0",
         )}
       />
-      {!hasLiveVideo && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[oklch(0.25_0.08_280)] to-[oklch(0.18_0.05_310)]">
-          <Avatar name={username} hue={280} size={72} />
-        </div>
-      )}
+      {!hasLiveVideo && <TileGenerativeAvatar username={username} speaking={isSpeaking} />}
       {status && (
         <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-black/60 backdrop-blur px-2 py-0.5">
           <span
@@ -3919,11 +3916,7 @@ function RemoteVideoTile({
           ? "border-[var(--neon-secondary)] shadow-[0_0_24px_4px_oklch(0.82_0.16_210/0.4)]"
           : "border-white/10",
       )}
-      style={{
-        background: hasVideo
-          ? undefined
-          : `linear-gradient(135deg, oklch(0.25 0.08 ${hue}), oklch(0.18 0.05 ${hue + 30}))`,
-      }}
+      style={{}}
     >
       {/* FIX C: muted — audio rendered by the dedicated <audio> element in useWebRTC */}
       {peer.stream && (
@@ -3938,11 +3931,7 @@ function RemoteVideoTile({
           )}
         />
       )}
-      {!hasVideo && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <Avatar name={peer.username} hue={hue} size={72} />
-        </div>
-      )}
+      {!hasVideo && <TileGenerativeAvatar username={peer.username} speaking={isSpeaking} />}
       <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-black/60 backdrop-blur px-2 py-0.5">
         <span
           className="h-1.5 w-1.5 rounded-full"
