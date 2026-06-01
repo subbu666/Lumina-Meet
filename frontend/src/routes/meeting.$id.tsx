@@ -1,7 +1,7 @@
 /**
  * meeting.$id.tsx — Lumina Meet
  *
- * FULLY REFACTORED — All patches merged (original + Patch 1-4).
+ * FULLY REFACTORED — All patches merged (original + Patch 1-5 including PreJoinLobby).
  *
  * PATCHES INCLUDED (original set):
  * ─ FIX A   useWebRTC() onMeetingEnded callback for host "end for all" nav
@@ -17,12 +17,19 @@
  *               • CircleDot / StopCircle controls in footer
  *               • REC live-indicator chip in header
  *
- * NEW PATCHES (v2 integration):
+ * v2 patches:
  * ─ PATCH 1   Destructure requestMicOn/requestCamOn/requestMicCamOn/hostPermissionRequest/
  *             respondToPermissionRequest from webrtc
  * ─ PATCH 2   permissionToasts state + LuminaMeet:permission-result event listener
  * ─ PATCH 3   HostPermissionDialog (participant view) + PermissionResponseToastLayer (host view)
  * ─ PATCH 4   Per-peer "ask to unmute / ask to turn camera on" buttons in ParticipantsPanel
+ *
+ * PreJoinLobby patches:
+ * ─ PATCH 1   Import PreJoinLobby
+ * ─ PATCH 2   PreJoinConfig type
+ * ─ PATCH 3   MeetingRoom gates on preJoinConfig state — shows PreJoinLobby first
+ * ─ PATCH 4   Room accepts initialStream / initialMic / initialCam props
+ * ─ PATCH 5   useWebRTC receives initialStream, initialMic, initialCam
  */
 
 import { createPortal } from "react-dom";
@@ -98,7 +105,6 @@ import {
   Lock,
   CircleDot,
   StopCircle,
-  // NEW — permission UI icons
   Bell,
   ThumbsUp,
   ThumbsDown,
@@ -128,6 +134,9 @@ import {
   RecordingWarningBanner,
 } from "@/components/modals/RecordingModals";
 import { apiClient } from "@/api/apiClient";
+
+// ── PREJOIN PATCH 1: Import PreJoinLobby ──────────────────────────────────────
+import { PreJoinLobby } from "@/components/ui-custom/PreJoinLobby";
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
@@ -211,6 +220,14 @@ interface PermissionResponseToast {
   fromUsername: string;
   type: "mic" | "cam" | "both";
   accepted: boolean;
+}
+
+// ── PREJOIN PATCH 2: PreJoinConfig type ──────────────────────────────────────
+interface PreJoinConfig {
+  /** The stream handed off from the device-check lobby */
+  stream: MediaStream | null;
+  micEnabled: boolean;
+  camEnabled: boolean;
 }
 
 // ─── Portal Dropdown ──────────────────────────────────────────────────────────
@@ -786,7 +803,7 @@ function LobbyManagerPanel({
   );
 }
 
-// ─── HostPermissionDialog (PATCH 3) ──────────────────────────────────────────
+// ─── HostPermissionDialog ─────────────────────────────────────────────────────
 // Shown to the PARTICIPANT when the host requests their mic/cam be turned on.
 
 function HostPermissionDialog({
@@ -827,7 +844,6 @@ function HostPermissionDialog({
         <div className="relative glass-strong rounded-3xl border border-white/10 p-8 text-center overflow-hidden">
           <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[var(--neon-primary)] to-transparent" />
 
-          {/* Pulsing icon */}
           <motion.div
             animate={{ scale: [1, 1.08, 1] }}
             transition={{ duration: 2, repeat: Infinity }}
@@ -836,7 +852,6 @@ function HostPermissionDialog({
             {iconMap[request.type]}
           </motion.div>
 
-          {/* Bell badge */}
           <div className="mb-3 flex items-center justify-center gap-2">
             <Bell className="h-3.5 w-3.5 text-[var(--neon-primary)] animate-pulse" />
             <span className="text-[11px] uppercase tracking-wider text-[var(--neon-primary)] font-semibold">
@@ -878,7 +893,7 @@ function HostPermissionDialog({
   );
 }
 
-// ─── PermissionResponseToastLayer (PATCH 3) ───────────────────────────────────
+// ─── PermissionResponseToastLayer ────────────────────────────────────────────
 // Shown to the HOST after a participant responds (accepted/declined) to their request.
 
 function PermissionResponseToastLayer({
@@ -906,7 +921,6 @@ function PermissionResponseToast({
   toast: PermissionResponseToast;
   onDismiss: () => void;
 }) {
-  // Auto-dismiss after 5s
   useEffect(() => {
     const t = setTimeout(onDismiss, 5000);
     return () => clearTimeout(t);
@@ -990,6 +1004,9 @@ function MeetingRoom() {
     return () => clearInterval(t);
   }, []);
 
+  // ── PREJOIN PATCH 3: preJoinConfig state ─────────────────────────────────
+  const [preJoinConfig, setPreJoinConfig] = useState<PreJoinConfig | null>(null);
+
   if (!user) {
     return (
       <div className="flex min-h-screen items-center justify-center px-4">
@@ -1006,12 +1023,29 @@ function MeetingRoom() {
   if (scheduledFor && scheduledFor > now)
     return <CountdownScreen scheduledFor={scheduledFor} now={now} meetingId={id} />;
 
+  // ── PREJOIN PATCH 3: Show PreJoinLobby until user clicks "Join now" ──────
+  if (!preJoinConfig) {
+    return (
+      <PreJoinLobby
+        meetingId={id}
+        username={user.username}
+        onJoin={(stream, micEnabled, camEnabled) => {
+          setPreJoinConfig({ stream, micEnabled, camEnabled });
+        }}
+        onCancel={() => navigate({ to: "/dashboard" })}
+      />
+    );
+  }
+
   return (
     <Room
       id={id}
       username={user.username}
       userId={user.id}
       user={user}
+      initialStream={preJoinConfig.stream}
+      initialMic={preJoinConfig.micEnabled}
+      initialCam={preJoinConfig.camEnabled}
       onLeave={() => navigate({ to: "/dashboard" })}
     />
   );
@@ -1076,17 +1110,24 @@ function CountdownScreen({
 
 // ─── Room ─────────────────────────────────────────────────────────────────────
 
+// ── PREJOIN PATCH 4: Room accepts initialStream / initialMic / initialCam ────
 function Room({
   id,
   username,
   userId,
   user,
+  initialStream = null,
+  initialMic = true,
+  initialCam = true,
   onLeave,
 }: {
   id: string;
   username: string;
   userId: string;
   user: { email?: string; [key: string]: any };
+  initialStream?: MediaStream | null;
+  initialMic?: boolean;
+  initialCam?: boolean;
   onLeave: () => void;
 }) {
   const navigate = useNavigate();
@@ -1109,7 +1150,7 @@ function Room({
   const [denyTarget, setDenyTarget] = useState<PendingParticipant | null>(null);
   const dismissedToastsRef = useRef<Set<string>>(new Set());
 
-  // ── PATCH 2: Permission state ─────────────────────────────────────────────
+  // ── Permission state ──────────────────────────────────────────────────────
   const [permissionToasts, setPermissionToasts] = useState<PermissionResponseToast[]>([]);
 
   // ── Whiteboard state ──────────────────────────────────────────────────────
@@ -1144,7 +1185,6 @@ function Room({
   const [showRecordingLimit, setShowRecordingLimit] = useState(false);
   const [showRecordingWarning, setShowRecordingWarning] = useState(false);
 
-  // Add:
   const handleApproachingLimit = useCallback(() => {
     setShowRecordingWarning(true);
   }, []);
@@ -1170,9 +1210,7 @@ function Room({
     toggleSoundscape,
   } = useAmbientSound();
 
-  // ── useWebRTC ─────────────────────────────────────────────────────────────
-  // NOTE: socketRef is intentionally NOT destructured — the recording emit
-  // path uses window.__luminaSocket instead (stale-closure crash fix).
+  // ── PREJOIN PATCH 5: useWebRTC receives initialStream, initialMic, initialCam
   const webrtc = useWebRTC(
     id,
     username,
@@ -1180,6 +1218,9 @@ function Room({
     userId,
     (info) => setMeetingEndedInfo(info),
     () => setShowYouLeftModal(true),
+    initialStream,
+    initialMic,
+    initialCam,
   );
 
   const {
@@ -1261,7 +1302,6 @@ function Room({
     activeSpotlightId,
     lobbyKnockCount,
     clearLobbyKnockCount,
-    // ── PATCH 1: new permission-management values ──────────────────────────
     requestMicOn,
     requestCamOn,
     requestMicCamOn,
@@ -1285,8 +1325,8 @@ function Room({
     lastRecording,
     error: recordingError,
   } = useRecording(id, localStream, recordingEmit, {
-    onApproachingLimit: handleApproachingLimit, // ← stable
-    onLimitExceeded: handleLimitExceeded, // ← stable
+    onApproachingLimit: handleApproachingLimit,
+    onLimitExceeded: handleLimitExceeded,
   });
 
   // Auto-open link modal when upload starts or completes
@@ -1322,7 +1362,7 @@ function Room({
     return () => window.removeEventListener("Lumina Meet:host-removed", handler);
   }, [leaveRoom]);
 
-  // ── PATCH 2: Listen for permission responses from participants ────────────
+  // Listen for permission responses from participants
   useEffect(() => {
     const handler = (e: Event) => {
       const { fromUsername, type, accepted } = (e as CustomEvent).detail;
@@ -2506,7 +2546,7 @@ function Room({
           />
         )}
 
-        {/* ── PATCH 3: Host permission request dialog (participant view) ── */}
+        {/* Host permission request dialog (participant view) */}
         {hostPermissionRequest && (
           <HostPermissionDialog
             request={hostPermissionRequest}
@@ -2519,12 +2559,12 @@ function Room({
       {/* Recording 1-minute warning banner */}
       {canManage && (
         <RecordingWarningBanner
-          show={showRecordingWarning && canManage} // gate moved into the prop
-          onDismiss={handleDismissWarning} // stable ref
+          show={showRecordingWarning && canManage}
+          onDismiss={handleDismissWarning}
         />
       )}
 
-      {/* ── PATCH 3: Permission response toasts (host view) ─────────────── */}
+      {/* Permission response toasts (host view) */}
       <PermissionResponseToastLayer
         toasts={permissionToasts}
         onDismiss={(id) => setPermissionToasts((prev) => prev.filter((t) => t.id !== id))}
@@ -4233,9 +4273,7 @@ function ParticipantsPanel({
   onMuteAll: () => void;
   onCamOffAll: () => void;
   onTransferHost: (peer: RemotePeer) => void;
-  /** PATCH 4: request participant to unmute */
   onRequestMicOn: (socketId: string) => void;
-  /** PATCH 4: request participant to turn camera on */
   onRequestCamOn: (socketId: string) => void;
   onClose: () => void;
 }) {
@@ -4378,7 +4416,7 @@ function ParticipantsPanel({
                   <VideoOff className="h-3.5 w-3.5 text-[oklch(0.72_0.22_35)]" />
                 )}
 
-                {/* ── PATCH 4: Ask to unmute / turn camera on ────────────────── */}
+                {/* PATCH 4: Ask to unmute / turn camera on */}
                 {canManage && !p.isHost && (
                   <>
                     {!p.mic && (
@@ -5039,7 +5077,6 @@ function MeetingEndedByHostModal({
     document.body,
   );
 }
-
 function MeetingEndedByYouModal({ onDismiss }: { onDismiss: () => void }) {
   useEffect(() => {
     const t = setTimeout(onDismiss, 8000);

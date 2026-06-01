@@ -1,32 +1,23 @@
 /**
  * useWebRTC — Lumina Meet
  *
- * CHANGES IN THIS VERSION (on top of previous fixes):
+ * CHANGES IN THIS VERSION (PreJoinLobby integration):
  *
- * NEW — Meeting-ended dialogs:
- *   The "meeting-ended" event now carries { reason, hostUsername }.
- *   Instead of immediately calling onMeetingEnded() (which navigated to
- *   dashboard), we now call onMeetingEndedWithInfo({ hostUsername }) so the
- *   component can show a beautiful dialog FIRST and navigate after the user
- *   dismisses it (or after an auto-close timeout).
+ * NEW — Pre-acquired stream support:
+ *   Accepts three new optional parameters:
+ *     initialStream?: MediaStream | null
+ *     initialMic?: boolean
+ *     initialCam?: boolean
  *
- * NEW — "You left" dialog:
- *   leaveRoom() now emits "leave-room" to the server BEFORE disconnecting.
- *   The server emits "you-left" back. The hook surfaces this via the new
- *   onYouLeft() callback so the component can show the "you left" dialog.
+ *   When initialStream is provided (from PreJoinLobby), the hook skips the
+ *   getUserMedia call entirely and uses the handed-off stream directly.
+ *   This means the camera LED never flashes twice and device permissions are
+ *   only requested once — in the pre-join screen.
  *
- *   Callback signatures:
- *     onMeetingEndedWithInfo?: (info: { hostUsername: string }) => void
- *     onYouLeft?: () => void
+ *   initialMic / initialCam seed the mic/cam state so the footer controls
+ *   already reflect whatever the user set in the pre-join lobby.
  *
- *   The component wires these to set local state that controls which dialog
- *   is shown. Navigation happens inside the dialog's "Go to dashboard" button.
- *
- * NEW — Host Permission Dialogs (Feature 2):
- *   Hosts can request individual participants to turn their mic or cam back on.
- *   Participants receive a dialog and decide whether to accept or decline.
- *   New hook returns: requestMicOn, requestCamOn, requestMicCamOn,
- *   hostPermissionRequest, respondToPermissionRequest.
+ * All other behaviour is unchanged from the previous version.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -62,9 +53,7 @@ export interface ChatMessage {
   timestamp: number;
   replyTo: { id: string; username: string; text: string } | null;
   reactions: Record<string, Set<string>>;
-  /** null = visible to everyone in the room */
   recipients: string[] | null;
-  /** true when this message was sent to a subset of participants */
   isPrivate: boolean;
 }
 
@@ -150,12 +139,10 @@ export interface TilePosition {
   y: number;
 }
 
-// ─── New: info passed when meeting is ended by host ───────────────────────────
 export interface MeetingEndedInfo {
   hostUsername: string;
 }
 
-// ─── New: host permission request type (Feature 2) ───────────────────────────
 export interface HostPermissionRequest {
   type: "mic" | "cam" | "both";
   fromSocketId: string;
@@ -246,11 +233,9 @@ export interface UseWebRTCReturn {
   lobbyKnockCount: number;
   clearLobbyKnockCount: () => void;
   socketRef: React.MutableRefObject<Socket | null>;
-  // ── Feature 2: Host Permission Dialogs ──────────────────────────────────
   requestMicOn: (socketId: string) => void;
   requestCamOn: (socketId: string) => void;
   requestMicCamOn: (socketId: string) => void;
-  /** Incoming permission request from host (for non-host participants) */
   hostPermissionRequest: HostPermissionRequest | null;
   respondToPermissionRequest: (accepted: boolean) => void;
 }
@@ -382,26 +367,31 @@ export function useWebRTC(
   username: string,
   socketUrl: string,
   userId?: string,
-  /**
-   * Called when the host ends the meeting for all.
-   * Receives the host's username so the component can display:
-   *   - host:        "You ended this meeting"
-   *   - participants: "Meeting ended by <hostUsername>"
-   * Navigation should happen INSIDE the dialog, not immediately here.
-   */
   onMeetingEndedWithInfo?: (info: MeetingEndedInfo) => void,
-  /**
-   * Called when THIS user intentionally leaves (leaveRoom() was called).
-   * Navigation should happen INSIDE the "you left" dialog.
-   */
   onYouLeft?: () => void,
+  /**
+   * NEW — Pre-acquired stream from PreJoinLobby.
+   * When provided, useWebRTC skips getUserMedia entirely.
+   */
+  initialStream?: MediaStream | null,
+  /**
+   * NEW — Initial mic state from PreJoinLobby toggle.
+   * Seeds the mic state so the footer reflects the user's pre-join choice.
+   */
+  initialMic?: boolean,
+  /**
+   * NEW — Initial cam state from PreJoinLobby toggle.
+   * Seeds the cam state so the footer reflects the user's pre-join choice.
+   */
+  initialCam?: boolean,
 ): UseWebRTCReturn {
   // ── Core state ─────────────────────────────────────────────────────────────
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [localCameraStream, setLocalCameraStream] = useState<MediaStream | null>(null);
   const [peers, setPeers] = useState<RemotePeer[]>([]);
-  const [mic, setMic] = useState(true);
-  const [cam, setCam] = useState(true);
+  // ▼ CHANGED: seed mic/cam from initialMic / initialCam (default true)
+  const [mic, setMic] = useState(initialMic ?? true);
+  const [cam, setCam] = useState(initialCam ?? true);
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(true);
@@ -409,7 +399,6 @@ export function useWebRTC(
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speakingPeerId, setSpeakingPeerId] = useState<string | null>(null);
 
-  // ── Phase 2 state ──────────────────────────────────────────────────────────
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [typingPeers, setTypingPeers] = useState<TypingPeer[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -417,14 +406,12 @@ export function useWebRTC(
   const [localHandRaised, setLocalHandRaised] = useState(false);
   const [reactions, setReactions] = useState<ReactionEvent[]>([]);
 
-  // ── Phase 3 state ──────────────────────────────────────────────────────────
   const [isHost, setIsHost] = useState(false);
   const [isSubHost, setIsSubHost] = useState(false);
   const [isWaiting, setIsWaiting] = useState(false);
   const [pendingParticipants, setPendingParticipants] = useState<PendingParticipant[]>([]);
   const [lobbyKnockCount, setLobbyKnockCount] = useState(0);
 
-  // ── Phase 4 state ──────────────────────────────────────────────────────────
   const [whiteboardElements, setWhiteboardElements] = useState<WhiteboardElement[]>([]);
   const [whiteboardCursors, setWhiteboardCursors] = useState<WhiteboardCursor[]>([]);
   const [currentPoll, setCurrentPoll] = useState<Poll | null>(null);
@@ -434,7 +421,6 @@ export function useWebRTC(
   const [spotlightId, setSpotlightId] = useState<string | null>(null);
   const [autoSpotlight, setAutoSpotlight] = useState(false);
 
-  // ── Feature 2 state: host permission dialogs ───────────────────────────────
   const [hostPermissionRequest, setHostPermissionRequest] = useState<HostPermissionRequest | null>(
     null,
   );
@@ -459,7 +445,6 @@ export function useWebRTC(
   const myVoteRef = useRef<number | undefined>(undefined);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Keep callback refs stable
   const onMeetingEndedWithInfoRef = useRef(onMeetingEndedWithInfo);
   const onYouLeftRef = useRef(onYouLeft);
   useEffect(() => {
@@ -473,7 +458,6 @@ export function useWebRTC(
     sharingRef.current = sharing;
   }, [sharing]);
 
-  // ── Phase 4 sub-hooks ──────────────────────────────────────────────────────
   const { noiseSuppressionEnabled, noiseSuppressionSupported, toggleNoiseSuppression } =
     useNoiseSuppression(cameraStreamRef, pcsRef);
 
@@ -482,8 +466,6 @@ export function useWebRTC(
     setBackgroundMode,
     isProcessing: isBlurProcessing,
   } = useBackgroundBlur(cameraStreamRef, pcsRef, localVideoRef);
-
-  // ── Helpers ────────────────────────────────────────────────────────────────
 
   const updatePeer = useCallback((socketId: string, patch: Partial<RemotePeer>) => {
     setPeers((prev) => prev.map((p) => (p.socketId === socketId ? { ...p, ...patch } : p)));
@@ -569,16 +551,6 @@ export function useWebRTC(
     setPeers((prev) => prev.filter((p) => p.socketId !== socketId));
   }, []);
 
-  // ── Internal cleanup (without emitting leave-room) ─────────────────────────
-  const _hardCleanup = useCallback(() => {
-    pcsRef.current.forEach((pc) => pc.close());
-    pcsRef.current.clear();
-    cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
-    screenStreamRef.current?.getTracks().forEach((t) => t.stop());
-    cleanupAllAudioElements();
-    socketRef.current?.disconnect();
-  }, []);
-
   // ── Main effect ────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -587,30 +559,44 @@ export function useWebRTC(
 
     const init = async () => {
       let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-            sampleRate: 48000,
-            channelCount: 1,
-          },
+
+      // ▼ CHANGED: use pre-acquired stream if provided, otherwise getUserMedia
+      if (initialStream) {
+        stream = initialStream;
+        // Honour mic/cam state set in the pre-join lobby
+        stream.getAudioTracks().forEach((t) => {
+          t.enabled = initialMic ?? true;
         });
-      } catch {
+        // If cam was disabled in pre-join, video tracks were already stopped;
+        // if enabled, they are live. Nothing extra needed.
+      } else {
+        // Original acquisition path (unchanged)
         try {
           stream = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-            video: false,
+            video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+              sampleRate: 48000,
+              channelCount: 1,
+            },
           });
         } catch {
-          stream = new MediaStream();
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+              video: false,
+            });
+          } catch {
+            stream = new MediaStream();
+          }
         }
       }
 
       if (cancelled) {
-        stream.getTracks().forEach((t) => t.stop());
+        // Only stop if we acquired the stream ourselves
+        if (!initialStream) stream.getTracks().forEach((t) => t.stop());
         return;
       }
 
@@ -619,6 +605,7 @@ export function useWebRTC(
       setLocalStream(stream);
       setLocalCameraStream(stream);
 
+      // ── VAD ──
       const audioCtx = new AudioContext();
       audioCtxRef.current = audioCtx;
       const localAnalyser = buildAnalyser(audioCtx, stream);
@@ -649,6 +636,9 @@ export function useWebRTC(
         reconnectionDelay: 1000,
       });
       socketRef.current = socket;
+
+      // Expose for recording module
+      (window as any).__luminaSocket = socket;
 
       socket.on("connect", () => {
         if (cancelled) return;
@@ -770,43 +760,28 @@ export function useWebRTC(
         setPendingParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
       });
 
-      // ── meeting-ended: server tells everyone the meeting was ended by host ─
-      // The payload now includes `hostUsername` so the component can show
-      // personalised messages. We do NOT navigate here — the component's
-      // onMeetingEndedWithInfo callback controls the dialog, and navigation
-      // happens when the user dismisses the dialog.
       socket.on(
         "meeting-ended",
         ({ reason, hostUsername }: { reason: string; hostUsername: string }) => {
-          console.log(`[Meeting] Ended by ${hostUsername}: ${reason}`);
-          // Stop media & close connections immediately
           cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
           screenStreamRef.current?.getTracks().forEach((t) => t.stop());
           pcsRef.current.forEach((pc) => pc.close());
           pcsRef.current.clear();
           cleanupAllAudioElements();
           socket.disconnect();
-          // Notify component to show the appropriate dialog
           onMeetingEndedWithInfoRef.current?.({ hostUsername });
-          // Legacy DOM event for any other listeners
           window.dispatchEvent(
             new CustomEvent("LuminaMeet:meeting-ended", { detail: { reason, hostUsername } }),
           );
         },
       );
 
-      // ── you-left: server confirms this socket intentionally left ──────────
-      // Fires only when leaveRoom() was called (not on tab close / crash).
-      // The component shows the "You left" dialog; navigation is inside it.
       socket.on("you-left", () => {
-        console.log("[Meeting] You left intentionally");
-        // Stop media immediately
         cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
         screenStreamRef.current?.getTracks().forEach((t) => t.stop());
         pcsRef.current.forEach((pc) => pc.close());
         pcsRef.current.clear();
         cleanupAllAudioElements();
-        // DON'T disconnect here — leaveRoom() will do it after emitting leave-room
         onYouLeftRef.current?.();
       });
 
@@ -830,15 +805,11 @@ export function useWebRTC(
         if (action === "remove") window.dispatchEvent(new CustomEvent("Lumina Meet:host-removed"));
       });
 
-      // ── Feature 2: Host asked this participant to turn mic/cam back on ────
       socket.on("host-permission-request", (req: HostPermissionRequest) => {
         pendingPermissionRef.current = req;
         setHostPermissionRequest(req);
       });
 
-      // ── Feature 2: Host received the participant's response ───────────────
-      // Only fires on the host's socket. Surfaced via a custom DOM event so
-      // the component can listen and show an appropriate toast/notification.
       socket.on(
         "permission-response-result",
         ({ fromSocketId, fromUsername, type, accepted }: any) => {
@@ -849,8 +820,6 @@ export function useWebRTC(
           );
         },
       );
-
-      // ── Phase 3: Lobby ─────────────────────────────────────────────────────
 
       socket.on("waiting", () => {
         setIsConnecting(false);
@@ -871,7 +840,6 @@ export function useWebRTC(
       socket.on("lobby-knock", ({ username: knocker }: { socketId: string; username: string }) => {
         playLobbyKnockSound();
         setLobbyKnockCount((n) => n + 1);
-        console.log(`[Lobby] ${knocker} is knocking`);
       });
 
       socket.on("lobby-admitted", ({ socketId: admittedId }: { socketId: string }) => {
@@ -925,8 +893,6 @@ export function useWebRTC(
           );
         }
       });
-
-      // ── Phase 2: Chat ──────────────────────────────────────────────────────
 
       socket.on("chat-history", (history: any[]) => {
         setMessages(history.map((m) => ({ ...m, reactions: {} })));
@@ -991,8 +957,7 @@ export function useWebRTC(
         }, REACTION_LIFETIME_MS);
       });
 
-      // ── Phase 4: Whiteboard ────────────────────────────────────────────────
-
+      // ── Whiteboard ─────────────────────────────────────────────────────────
       socket.on("whiteboard-state", (elements: WhiteboardElement[]) => {
         setWhiteboardElements(elements ?? []);
       });
@@ -1030,8 +995,7 @@ export function useWebRTC(
         }, 3000);
       });
 
-      // ── Phase 4: Polls ─────────────────────────────────────────────────────
-
+      // ── Polls ──────────────────────────────────────────────────────────────
       socket.on("poll-state", (poll: any) => {
         setCurrentPoll({ ...poll, myVote: myVoteRef.current });
       });
@@ -1048,8 +1012,7 @@ export function useWebRTC(
         myVoteRef.current = undefined;
       });
 
-      // ── Phase 4: Agenda ────────────────────────────────────────────────────
-
+      // ── Agenda ─────────────────────────────────────────────────────────────
       socket.on("agenda-state", (state: AgendaState) => setAgendaState(state));
       socket.on("agenda-tick", (state: AgendaState) => setAgendaState(state));
       socket.on("agenda-complete", () => setAgendaState(null));
@@ -1075,7 +1038,10 @@ export function useWebRTC(
       cleanupFn?.();
       pcsRef.current.forEach((pc) => pc.close());
       pcsRef.current.clear();
-      cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
+      // ▼ CHANGED: only stop tracks if we own the stream (no initialStream hand-off)
+      if (!initialStream) {
+        cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
+      }
       screenStreamRef.current?.getTracks().forEach((t) => t.stop());
       socketRef.current?.disconnect();
       cleanupAllAudioElements();
@@ -1084,6 +1050,7 @@ export function useWebRTC(
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
       remoteAnalysers.current.clear();
       audioCtxRef.current?.close();
+      (window as any).__luminaSocket = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId, username, socketUrl, userId]);
@@ -1217,32 +1184,16 @@ export function useWebRTC(
     }
   }, [_stopSharingCleanup]);
 
-  /**
-   * leaveRoom — intentional participant leave.
-   *
-   * Emits "leave-room" FIRST so the server sends back "you-left" (which
-   * triggers the "You left" dialog in the component). Then disconnects.
-   * Media cleanup happens in the "you-left" handler above.
-   */
   const leaveRoom = useCallback(() => {
     socketRef.current?.emit("leave-room");
-    // Short delay so "you-left" can be received before disconnect
     setTimeout(() => {
       socketRef.current?.disconnect();
     }, 150);
   }, []);
 
-  /**
-   * endMeetingForAll — host only.
-   * Emits "end-meeting" to the server. Server calls teardownRoom() which
-   * broadcasts "meeting-ended" to everyone (including this host). The
-   * "meeting-ended" handler above fires onMeetingEndedWithInfo.
-   */
   const endMeetingForAll = useCallback(() => {
     socketRef.current?.emit("end-meeting");
   }, []);
-
-  // ── Host controls ──────────────────────────────────────────────────────────
 
   const muteAll = useCallback(() => {
     peers.forEach((p) =>
@@ -1278,8 +1229,6 @@ export function useWebRTC(
     socketRef.current?.emit("transfer-host", { targetSocketId: socketId, mode });
   }, []);
 
-  // ── Feature 2: Host permission request controls ────────────────────────────
-
   const requestMicOn = useCallback((socketId: string) => {
     socketRef.current?.emit("request-mic-on", { targetSocketId: socketId });
   }, []);
@@ -1301,7 +1250,6 @@ export function useWebRTC(
         type: req.type,
         accepted,
       });
-      // If accepted, actually turn on the device(s)
       if (accepted) {
         const stream = cameraStreamRef.current;
         if (!stream) return;
@@ -1313,7 +1261,6 @@ export function useWebRTC(
           socketRef.current.emit("media-state", { mic: true });
         }
         if (req.type === "cam" || req.type === "both") {
-          // toggleCam() handles re-acquiring the camera track
           void toggleCam();
         }
       }
@@ -1322,8 +1269,6 @@ export function useWebRTC(
     },
     [toggleCam],
   );
-
-  // ── Chat ───────────────────────────────────────────────────────────────────
 
   const sendChatMessage = useCallback(
     (text: string, replyTo?: ChatMessage | null, recipients?: string[] | null) => {
@@ -1334,7 +1279,6 @@ export function useWebRTC(
         replyTo: replyTo
           ? { id: replyTo.id, username: replyTo.username, text: replyTo.text.slice(0, 100) }
           : null,
-        // undefined / null → broadcast to room; string[] → private
         recipients: recipients?.length ? recipients : null,
       });
       if (isTypingRef.current) {
@@ -1412,8 +1356,6 @@ export function useWebRTC(
     socketRef.current?.emit("reaction", { emoji });
   }, []);
 
-  // ── Phase 4: Whiteboard ────────────────────────────────────────────────────
-
   const drawWhiteboardElement = useCallback((element: WhiteboardElement) => {
     setWhiteboardElements((prev) => {
       const idx = prev.findIndex((e) => e.id === element.id);
@@ -1446,8 +1388,6 @@ export function useWebRTC(
     socketRef.current?.emit("whiteboard-cursor", { x, y });
   }, []);
 
-  // ── Phase 4: Polls ─────────────────────────────────────────────────────────
-
   const createPoll = useCallback((question: string, options: string[]) => {
     myVoteRef.current = undefined;
     socketRef.current?.emit("poll-create", { question, options });
@@ -1466,8 +1406,6 @@ export function useWebRTC(
     setCurrentPoll(null);
     socketRef.current?.emit("poll-dismiss");
   }, []);
-
-  // ── Phase 4: Agenda ────────────────────────────────────────────────────────
 
   const setAgenda = useCallback((items: Array<{ title: string; durationSec: number }>) => {
     socketRef.current?.emit("agenda-set", { items });
@@ -1488,8 +1426,6 @@ export function useWebRTC(
     socketRef.current?.emit("agenda-timer-pause");
   }, []);
 
-  // ── Phase 4: Spatial layout ────────────────────────────────────────────────
-
   const setTilePosition = useCallback((id: string, pos: TilePosition) => {
     setTilePositionsState((prev) => {
       const next = new Map(prev);
@@ -1498,12 +1434,8 @@ export function useWebRTC(
     });
   }, []);
 
-  // ── Phase 4: Spotlight ─────────────────────────────────────────────────────
-
   const activeSpotlightId =
     spotlightId ?? (autoSpotlight ? (isSpeaking ? "local" : speakingPeerId) : null);
-
-  // ── Lobby helpers ──────────────────────────────────────────────────────────
 
   const clearLobbyKnockCount = useCallback(() => {
     setLobbyKnockCount(0);
@@ -1589,7 +1521,6 @@ export function useWebRTC(
     lobbyKnockCount,
     clearLobbyKnockCount,
     socketRef,
-    // Feature 2: Host Permission Dialogs
     requestMicOn,
     requestCamOn,
     requestMicCamOn,
