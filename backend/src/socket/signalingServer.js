@@ -17,6 +17,11 @@
  *   This piggybacks on the existing "leave-room" socket event that leaveRoom()
  *   emits; if leaveRoom() only disconnects the socket we fire it on disconnect
  *   when data.intentionalLeave is true.
+ *
+ * NEW — Host Permission Dialogs (Feature 2):
+ *   Hosts can request individual participants to turn their mic or cam back on.
+ *   Three new socket events: request-mic-on, request-cam-on, request-mic-cam-on.
+ *   Participant response is relayed back to the host via permission-response.
  */
 
 import Meeting from "../models/Meeting.js";
@@ -572,6 +577,56 @@ export function initSignaling(io) {
 
     socket.on("host-action", ({ action, targetSocketId }) => {
       io.to(targetSocketId).emit("host-action", { action });
+    });
+
+    // ─── HOST PERMISSION REQUESTS (mic-on / cam-on) ───────────────────────────
+    // Host asks a specific participant to turn their mic or cam back on.
+    // We relay the request to the target; they decide via a dialog.
+
+    socket.on("request-mic-on", ({ targetSocketId }) => {
+      if (!socket.data.roomId || !isHostOrSubhost(socket)) return;
+      const room = rooms.get(socket.data.roomId);
+      if (!room?.has(targetSocketId)) return;
+      io.to(targetSocketId).emit("host-permission-request", {
+        type: "mic",
+        fromSocketId: socket.id,
+        fromUsername: socket.data.username,
+      });
+    });
+
+    socket.on("request-cam-on", ({ targetSocketId }) => {
+      if (!socket.data.roomId || !isHostOrSubhost(socket)) return;
+      const room = rooms.get(socket.data.roomId);
+      if (!room?.has(targetSocketId)) return;
+      io.to(targetSocketId).emit("host-permission-request", {
+        type: "cam",
+        fromSocketId: socket.id,
+        fromUsername: socket.data.username,
+      });
+    });
+
+    // Also support requesting BOTH at once
+    socket.on("request-mic-cam-on", ({ targetSocketId }) => {
+      if (!socket.data.roomId || !isHostOrSubhost(socket)) return;
+      const room = rooms.get(socket.data.roomId);
+      if (!room?.has(targetSocketId)) return;
+      io.to(targetSocketId).emit("host-permission-request", {
+        type: "both",
+        fromSocketId: socket.id,
+        fromUsername: socket.data.username,
+      });
+    });
+
+    // Participant's response comes back here → relayed to host
+    socket.on("permission-response", ({ toSocketId, type, accepted }) => {
+      const roomId = socket.data.roomId;
+      if (!roomId) return;
+      io.to(toSocketId).emit("permission-response-result", {
+        fromSocketId: socket.id,
+        fromUsername: socket.data.username,
+        type, // "mic" | "cam" | "both"
+        accepted,
+      });
     });
 
     // ─── CHAT ─────────────────────────────────────────────────────────────────
