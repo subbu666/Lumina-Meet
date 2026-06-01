@@ -662,9 +662,9 @@ export function PreJoinLobby({ meetingId, username, onJoin, onCancel }: PreJoinL
                     Quick tips
                   </p>
                   {[
-                    "Press Space to quickly unmute",
-                    "Raise hand with Alt + H",
-                    "Screen share with Alt + S",
+                    "Select an Option and use space to toggle it on/off",
+                    "Test your mic and camera before joining",
+                    "Sit facing a window or light source for best video quality",
                   ].map((tip) => (
                     <div key={tip} className="flex items-center gap-2">
                       <span className="h-1 w-1 rounded-full bg-[var(--neon-primary)]/50 shrink-0" />
