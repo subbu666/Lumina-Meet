@@ -258,37 +258,30 @@ const otpRow = (code, bgFrom, bgTo, borderColor, glowColor) => {
  * Does NOT work in: Outlook desktop, Apple Mail (JS fully sandboxed — unavoidable)
  */
 const copyOtpButton = (code, accentColor, accentBorder) => {
-  const safeCode = String(code).replace(/&/g, "&amp;").replace(/'/g, "&#39;");
+  const rawCode = String(code).replace(/'/g, "\\'");
 
-  /**
-   * FINAL GMAIL-SAFE IMPLEMENTATION
-   *
-   * Issues fixed vs previous version:
-   *
-   * 1. HOISTING BUG: tryExec() was called before its declaration in the joined
-   *    string. Inline onclick strings don't reliably hoist function declarations
-   *    in Gmail/Outlook sandboxes. Fixed by declaring tryExec BEFORE the try block.
-   *
-   * 2. SNAPSHOT BUG: fb() was capturing oh/oc/ob/obg at invocation time (after
-   *    style was already mutated by a previous call). Fixed by snapshotting
-   *    originals immediately on click, before any mutation.
-   *
-   * 3. ATTRIBUTE SAFETY: All handler parts use single quotes internally.
-   *    The onclick="" wrapper uses double quotes — no conflict.
-   *
-   * 4. STRATEGY ORDER:
-   *    a) window.top.navigator.clipboard (async, trusted top context)
-   *    b) window.top.document.execCommand (sync, escapes iframe sandbox)
-   *    c) window.prompt() fallback (manual Ctrl+C, zero failure)
-   */
   const handler = [
-    // Snapshot originals FIRST before any mutation
     `var el=this;`,
-    `var code='${safeCode}';`,
-    `var oh=el.innerHTML,oc=el.style.color,ob=el.style.borderColor,obg=el.style.background;`,
-
-    // Feedback function — uses closed-over snapshots, always resets correctly
-    `function fb(ok){`,
+    `var oh=el.innerHTML,ost=el.getAttribute('style');`,
+    `var topDoc;`,
+    `try{topDoc=(window.top||window).document;}catch(e){topDoc=document;}`,
+    `var g=topDoc.getElementById('__lm_otp_ghost');`,
+    `if(!g){`,
+    `g=topDoc.createElement('div');`,
+    `g.id='__lm_otp_ghost';`,
+    `g.contentEditable='true';`,
+    `g.style.cssText='position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;font-size:12px;pointer-events:none;';`,
+    `(topDoc.body||topDoc.documentElement).appendChild(g);`,
+    `}`,
+    `g.innerText='${rawCode}';`,
+    `var s;`,
+    `try{s=(window.top||window).getSelection();}catch(e){s=window.getSelection();}`,
+    `var r=topDoc.createRange();`,
+    `r.selectNodeContents(g);`,
+    `s.removeAllRanges();`,
+    `s.addRange(r);`,
+    `var ok=topDoc.execCommand('copy');`,
+    `s.removeAllRanges();`,
     `if(ok){`,
     `el.innerHTML='&#10003;&nbsp;&nbsp;OTP Copied!';`,
     `el.style.color='#10b981';`,
@@ -300,53 +293,7 @@ const copyOtpButton = (code, accentColor, accentBorder) => {
     `el.style.borderColor='rgba(239,68,68,0.50)';`,
     `el.style.background='rgba(239,68,68,0.08)';`,
     `}`,
-    `setTimeout(function(){`,
-    `el.innerHTML=oh;`,
-    `el.style.color=oc;`,
-    `el.style.borderColor=ob;`,
-    `el.style.background=obg;`,
-    `},2000);`,
-    `}`,
-
-    // Strategy 2 declared BEFORE strategy 1 calls it — no hoisting dependency
-    `function tryExec(){`,
-    `try{`,
-    `var topDoc=(window.top||window).document;`,
-    `var b=topDoc.body||topDoc.documentElement;`,
-    `var inp=topDoc.createElement('input');`,
-    `inp.value=code;`,
-    `inp.setAttribute('readonly','');`,
-    `inp.style.cssText='position:fixed;top:0;left:0;width:2px;height:2px;opacity:0;border:0;padding:0;';`,
-    `b.appendChild(inp);`,
-    `inp.focus();`,
-    `inp.select();`,
-    `inp.setSelectionRange(0,9999);`,
-    `var ok=topDoc.execCommand('copy');`,
-    `b.removeChild(inp);`,
-    `fb(ok);`,
-    `}catch(e2){`,
-    // Strategy 3: prompt — guaranteed fallback, user can manually Ctrl+C
-    `try{(window.top||window).prompt('Copy your OTP code:',code);}catch(e3){}`,
-    `fb(false);`,
-    `}`,
-    `}`,
-
-    // Strategy 1: Clipboard API on window.top (escapes Gmail iframe, trusted context)
-    // Declared after tryExec so the .catch() reference is already defined
-    `try{`,
-    `var topWin=(window.top||window);`,
-    `if(topWin.navigator&&topWin.navigator.clipboard&&topWin.navigator.clipboard.writeText){`,
-    `topWin.navigator.clipboard.writeText(code).then(`,
-    `function(){fb(true);},`,
-    `function(){tryExec();}`, // clipboard rejected → fall to execCommand
-    `);`,
-    `}else{`,
-    `tryExec();`, // no clipboard API → fall to execCommand
-    `}`,
-    `}catch(e){`,
-    `tryExec();`, // clipboard threw → fall to execCommand
-    `}`,
-
+    `setTimeout(function(){el.innerHTML=oh;el.setAttribute('style',ost);},2000);`,
     `return false;`,
   ].join("");
 
@@ -371,7 +318,6 @@ const copyOtpButton = (code, accentColor, accentBorder) => {
             letter-spacing:0.6px;
             text-decoration:none;
             cursor:pointer;
-            transition:background 0.2s,border-color 0.2s,color 0.2s;
           ">&#128203;&nbsp;&nbsp;Copy OTP</a>
       </td>
     </tr>
