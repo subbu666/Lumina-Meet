@@ -1,21 +1,9 @@
 /**
  * meeting.$id.tsx — Lumina Meet
  *
- * FULLY REFACTORED — All patches merged, socketRef crash eliminated.
+ * FULLY REFACTORED — All patches merged (original + Patch 1-4).
  *
- * ROOT CAUSE FIX (from patch file v2):
- *   The previous version passed `socketRef` (a React ref object) directly into
- *   useRecording. Inside recorder.onstop the .current was read at
- *   callback-creation time, not call time — a classic stale-closure crash.
- *
- *   Fix applied here:
- *   1. useRecording now receives a plain `emitFn: (event, payload) => void`
- *      callback instead of a raw ref.
- *   2. `recordingEmit` is built in <Room> using (window as any).__luminaSocket,
- *      which useWebRTC writes on connect and clears on cleanup (PATCH 4).
- *   3. socketRef is NO LONGER exported from useWebRTC and is not referenced here.
- *
- * PATCHES INCLUDED:
+ * PATCHES INCLUDED (original set):
  * ─ FIX A   useWebRTC() onMeetingEnded callback for host "end for all" nav
  * ─ FIX B   handleLeaveConfirm: host → endMeetingForAll + fire-and-forget HTTP
  * ─ FIX C   RemoteVideoTile <video muted> prevents mobile echo/feedback
@@ -24,12 +12,17 @@
  * ─ PATCH 1-6   Post-meeting modals (MeetingEndedByHost, MeetingEndedByYou, YouLeft)
  * ─ CHAT PATCH  Private messaging with recipient picker & lock badge
  * ─ LOBBY   Full RBAC lobby (LobbyGate, LobbyManagerPanel, LobbyKnockToast, DenyConfirmModal)
- * ─ RECORDING   useRecording hook integration (all patches from recording patch file v2)
- *               • recordingEmit callback via __luminaSocket (crash fix)
- *               • RecordingOptionsModal / RecordingLinkModal
+ * ─ RECORDING   useRecording hook integration (crash-safe __luminaSocket callback)
+ *               • RecordingOptionsModal / RecordingLinkModal / RecordingLimitModal
  *               • CircleDot / StopCircle controls in footer
  *               • REC live-indicator chip in header
- *               • peer-recording-state broadcast via signalling server
+ *
+ * NEW PATCHES (v2 integration):
+ * ─ PATCH 1   Destructure requestMicOn/requestCamOn/requestMicCamOn/hostPermissionRequest/
+ *             respondToPermissionRequest from webrtc
+ * ─ PATCH 2   permissionToasts state + LuminaMeet:permission-result event listener
+ * ─ PATCH 3   HostPermissionDialog (participant view) + PermissionResponseToastLayer (host view)
+ * ─ PATCH 4   Per-peer "ask to unmute / ask to turn camera on" buttons in ParticipantsPanel
  */
 
 import { createPortal } from "react-dom";
@@ -103,9 +96,12 @@ import {
   UserX,
   LogIn,
   Lock,
-  // ── RECORDING icons ──
   CircleDot,
   StopCircle,
+  // NEW — permission UI icons
+  Bell,
+  ThumbsUp,
+  ThumbsDown,
 } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
 import { NeonButton } from "@/components/ui-custom/NeonButton";
@@ -123,7 +119,6 @@ import {
   type PendingParticipant,
 } from "@/hooks/useWebRTC";
 import { useAmbientSound, type SoundscapeId } from "@/hooks/useAmbientSound";
-// ── RECORDING imports ─────────────────────────────────────────────────────────
 import { useRecording } from "@/hooks/useRecording";
 import { TileGenerativeAvatar } from "@/components/ui-custom/GenerativeAvatar";
 import {
@@ -201,6 +196,22 @@ const MANUAL_STATUSES: ParticipantStatus[] = ["available", "busy", "away", "brb"
 
 type PanelType = "participants" | "chat" | "whiteboard" | "polls" | "agenda" | "lobby" | null;
 type LayoutMode = "grid" | "spatial" | "cinema";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+/** Shape of the permission request pushed by the host via socket → useWebRTC */
+interface HostPermissionRequest {
+  type: "mic" | "cam" | "both";
+  hostUsername: string;
+}
+
+/** Toast shown to the HOST after a participant responds to the request */
+interface PermissionResponseToast {
+  id: string;
+  fromUsername: string;
+  type: "mic" | "cam" | "both";
+  accepted: boolean;
+}
 
 // ─── Portal Dropdown ──────────────────────────────────────────────────────────
 
@@ -521,24 +532,15 @@ function LobbyGate({ username, onLeave }: { username: string; onLeave: () => voi
       <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
         <motion.div
           className="absolute -top-32 -left-32 h-96 w-96 rounded-full opacity-20"
-          style={{
-            background: "radial-gradient(circle, oklch(0.65 0.22 280), transparent 70%)",
-          }}
+          style={{ background: "radial-gradient(circle, oklch(0.65 0.22 280), transparent 70%)" }}
           animate={{ scale: [1, 1.15, 1], x: [0, 30, 0], y: [0, -20, 0] }}
           transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
         />
         <motion.div
           className="absolute -bottom-32 -right-32 h-96 w-96 rounded-full opacity-15"
-          style={{
-            background: "radial-gradient(circle, oklch(0.82 0.16 210), transparent 70%)",
-          }}
+          style={{ background: "radial-gradient(circle, oklch(0.82 0.16 210), transparent 70%)" }}
           animate={{ scale: [1, 1.2, 1], x: [0, -20, 0], y: [0, 20, 0] }}
-          transition={{
-            duration: 15,
-            repeat: Infinity,
-            ease: "easeInOut",
-            delay: 3,
-          }}
+          transition={{ duration: 15, repeat: Infinity, ease: "easeInOut", delay: 3 }}
         />
       </div>
 
@@ -631,11 +633,7 @@ function LobbyGate({ username, onLeave }: { username: string; onLeave: () => voi
                     {step.active ? (
                       <motion.span
                         animate={{ rotate: 360 }}
-                        transition={{
-                          duration: 2,
-                          repeat: Infinity,
-                          ease: "linear",
-                        }}
+                        transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
                       >
                         {step.icon}
                       </motion.span>
@@ -788,6 +786,196 @@ function LobbyManagerPanel({
   );
 }
 
+// ─── HostPermissionDialog (PATCH 3) ──────────────────────────────────────────
+// Shown to the PARTICIPANT when the host requests their mic/cam be turned on.
+
+function HostPermissionDialog({
+  request,
+  onAccept,
+  onDecline,
+}: {
+  request: HostPermissionRequest;
+  onAccept: () => void;
+  onDecline: () => void;
+}) {
+  const labelMap: Record<HostPermissionRequest["type"], string> = {
+    mic: "microphone",
+    cam: "camera",
+    both: "microphone and camera",
+  };
+  const iconMap: Record<HostPermissionRequest["type"], React.ReactNode> = {
+    mic: <Mic className="h-8 w-8 text-white" />,
+    cam: <VideoIcon className="h-8 w-8 text-white" />,
+    both: <Mic2 className="h-8 w-8 text-white" />,
+  };
+
+  return createPortal(
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[9997] flex items-center justify-center bg-black/75 backdrop-blur-lg"
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.85, y: 24 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.85, y: 24 }}
+        transition={{ type: "spring", damping: 22, stiffness: 300 }}
+        className="relative mx-4 w-full max-w-sm"
+      >
+        <div className="absolute -inset-1.5 rounded-[2rem] bg-gradient-to-br from-[var(--neon-primary)]/30 to-[var(--neon-secondary)]/20 blur-2xl" />
+        <div className="relative glass-strong rounded-3xl border border-white/10 p-8 text-center overflow-hidden">
+          <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[var(--neon-primary)] to-transparent" />
+
+          {/* Pulsing icon */}
+          <motion.div
+            animate={{ scale: [1, 1.08, 1] }}
+            transition={{ duration: 2, repeat: Infinity }}
+            className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-[var(--neon-primary)] to-[var(--neon-accent)] shadow-[0_0_40px_-8px_oklch(0.65_0.22_280/0.7)]"
+          >
+            {iconMap[request.type]}
+          </motion.div>
+
+          {/* Bell badge */}
+          <div className="mb-3 flex items-center justify-center gap-2">
+            <Bell className="h-3.5 w-3.5 text-[var(--neon-primary)] animate-pulse" />
+            <span className="text-[11px] uppercase tracking-wider text-[var(--neon-primary)] font-semibold">
+              Host request
+            </span>
+          </div>
+
+          <h2 className="text-xl font-bold mb-2">Turn on your {labelMap[request.type]}?</h2>
+          <p className="text-sm text-muted-foreground mb-1">
+            <span className="font-semibold text-foreground">{request.hostUsername}</span> (host) is
+            asking you to enable your {labelMap[request.type]}.
+          </p>
+          <p className="text-xs text-muted-foreground mb-7 leading-relaxed">
+            You can decline and keep your current settings.
+          </p>
+
+          <div className="flex gap-3">
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.97 }}
+              onClick={onDecline}
+              className="flex-1 flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 py-2.5 text-sm font-semibold text-muted-foreground hover:bg-white/10 transition"
+            >
+              <ThumbsDown className="h-4 w-4" /> Decline
+            </motion.button>
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.97 }}
+              onClick={onAccept}
+              className="flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[var(--neon-primary)] to-[var(--neon-accent)] py-2.5 text-sm font-semibold text-white shadow-[0_4px_20px_-4px_oklch(0.65_0.22_280/0.5)] hover:opacity-95 transition"
+            >
+              <ThumbsUp className="h-4 w-4" /> Accept
+            </motion.button>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>,
+    document.body,
+  );
+}
+
+// ─── PermissionResponseToastLayer (PATCH 3) ───────────────────────────────────
+// Shown to the HOST after a participant responds (accepted/declined) to their request.
+
+function PermissionResponseToastLayer({
+  toasts,
+  onDismiss,
+}: {
+  toasts: PermissionResponseToast[];
+  onDismiss: (id: string) => void;
+}) {
+  return (
+    <div className="fixed bottom-28 left-4 z-[9990] flex flex-col gap-2 pointer-events-none">
+      <AnimatePresence>
+        {toasts.map((t) => (
+          <PermissionResponseToast key={t.id} toast={t} onDismiss={() => onDismiss(t.id)} />
+        ))}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function PermissionResponseToast({
+  toast,
+  onDismiss,
+}: {
+  toast: PermissionResponseToast;
+  onDismiss: () => void;
+}) {
+  // Auto-dismiss after 5s
+  useEffect(() => {
+    const t = setTimeout(onDismiss, 5000);
+    return () => clearTimeout(t);
+  }, [onDismiss]);
+
+  const labelMap: Record<PermissionResponseToast["type"], string> = {
+    mic: "mic",
+    cam: "camera",
+    both: "mic & camera",
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: -60, scale: 0.9 }}
+      animate={{ opacity: 1, x: 0, scale: 1 }}
+      exit={{ opacity: 0, x: -60, scale: 0.9 }}
+      transition={{ type: "spring", damping: 22, stiffness: 300 }}
+      className={cn(
+        "pointer-events-auto relative overflow-hidden rounded-2xl border backdrop-blur-xl shadow-xl w-72",
+        toast.accepted
+          ? "border-[oklch(0.75_0.18_145)/0.4] bg-[oklch(0.12_0.02_145/0.92)]"
+          : "border-[oklch(0.72_0.22_35)/0.4] bg-[oklch(0.12_0.02_35/0.92)]",
+      )}
+    >
+      <div
+        className={cn(
+          "absolute top-0 left-0 right-0 h-0.5",
+          toast.accepted
+            ? "bg-gradient-to-r from-transparent via-[oklch(0.75_0.18_145)] to-transparent"
+            : "bg-gradient-to-r from-transparent via-[oklch(0.72_0.22_35)] to-transparent",
+        )}
+      />
+      <div className="p-3.5 flex items-center gap-3">
+        <div
+          className={cn(
+            "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl",
+            toast.accepted ? "bg-[oklch(0.75_0.18_145)/0.2]" : "bg-[oklch(0.72_0.22_35)/0.2]",
+          )}
+        >
+          {toast.accepted ? (
+            <ThumbsUp className="h-4 w-4 text-[oklch(0.85_0.15_145)]" />
+          ) : (
+            <ThumbsDown className="h-4 w-4 text-[oklch(0.82_0.2_35)]" />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold truncate">{toast.fromUsername}</p>
+          <p
+            className={cn(
+              "text-[11px]",
+              toast.accepted ? "text-[oklch(0.85_0.15_145)]" : "text-[oklch(0.82_0.2_35)]",
+            )}
+          >
+            {toast.accepted
+              ? `turned on their ${labelMap[toast.type]}`
+              : `declined to turn on ${labelMap[toast.type]}`}
+          </p>
+        </div>
+        <button
+          onClick={onDismiss}
+          className="shrink-0 text-muted-foreground hover:text-foreground transition"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
 // ─── Root component ───────────────────────────────────────────────────────────
 
 function MeetingRoom() {
@@ -913,15 +1101,16 @@ function Room({
   const [transferTarget, setTransferTarget] = useState<RemotePeer | null>(null);
 
   // ── Post-meeting modal state ──────────────────────────────────────────────
-  const [meetingEndedInfo, setMeetingEndedInfo] = useState<{
-    hostUsername: string;
-  } | null>(null);
+  const [meetingEndedInfo, setMeetingEndedInfo] = useState<{ hostUsername: string } | null>(null);
   const [showYouLeftModal, setShowYouLeftModal] = useState(false);
 
   // ── Lobby state ───────────────────────────────────────────────────────────
   const [toastQueue, setToastQueue] = useState<PendingParticipant[]>([]);
   const [denyTarget, setDenyTarget] = useState<PendingParticipant | null>(null);
   const dismissedToastsRef = useRef<Set<string>>(new Set());
+
+  // ── PATCH 2: Permission state ─────────────────────────────────────────────
+  const [permissionToasts, setPermissionToasts] = useState<PermissionResponseToast[]>([]);
 
   // ── Whiteboard state ──────────────────────────────────────────────────────
   const [wbTool, setWbTool] = useState<WhiteboardTool>("pen");
@@ -930,10 +1119,7 @@ function Room({
   const [wbDrawing, setWbDrawing] = useState(false);
   const [wbPoints, setWbPoints] = useState<number[][]>([]);
   const [wbCurrentId, setWbCurrentId] = useState<string | null>(null);
-  const [wbShapeStart, setWbShapeStart] = useState<{
-    x: number;
-    y: number;
-  } | null>(null);
+  const [wbShapeStart, setWbShapeStart] = useState<{ x: number; y: number } | null>(null);
   const [wbPreview, setWbPreview] = useState<WhiteboardElement | null>(null);
   const [wbUndoStack, setWbUndoStack] = useState<WhiteboardElement[][]>([]);
   const [wbRedoStack, setWbRedoStack] = useState<WhiteboardElement[][]>([]);
@@ -970,9 +1156,9 @@ function Room({
     toggleSoundscape,
   } = useAmbientSound();
 
-  // ── useWebRTC (FIX A: onMeetingEndedWithInfo + onYouLeft callbacks) ───────
-  // NOTE: socketRef is NOT destructured here — it is intentionally hidden
-  //       inside useWebRTC. The recording emit path uses __luminaSocket instead.
+  // ── useWebRTC ─────────────────────────────────────────────────────────────
+  // NOTE: socketRef is intentionally NOT destructured — the recording emit
+  // path uses window.__luminaSocket instead (stale-closure crash fix).
   const webrtc = useWebRTC(
     id,
     username,
@@ -1061,22 +1247,15 @@ function Room({
     activeSpotlightId,
     lobbyKnockCount,
     clearLobbyKnockCount,
-    // socketRef is intentionally NOT destructured here
+    // ── PATCH 1: new permission-management values ──────────────────────────
+    requestMicOn,
+    requestCamOn,
+    requestMicCamOn,
+    hostPermissionRequest,
+    respondToPermissionRequest,
   } = webrtc;
 
-  // ── RECORDING EMIT — crash-safe callback (Patch 3 / v2 fix) ──────────────
-  //
-  // The root cause of the old crash: passing socketRef (a ref object) into
-  // useRecording meant that inside recorder.onstop the .current was captured
-  // at callback-creation time (stale closure). By the time onstop fired the
-  // ref container was still alive but .current had already been reset to null
-  // during cleanup → "Cannot read properties of undefined (reading 'current')".
-  //
-  // Fix: use a plain stable callback. The callback reads __luminaSocket at
-  // call time (not creation time), so it always sees the live socket.
-  // useWebRTC writes window.__luminaSocket = socket on connect and clears it
-  // in the cleanup return (see PATCH 4 comment in the patch file — one line
-  // in useWebRTC.ts's socket.on("connect") handler).
+  // ── RECORDING EMIT — crash-safe callback ──────────────────────────────────
   const recordingEmit = useCallback((event: string, payload: unknown) => {
     (window as any).__luminaSocket?.emit(event, payload);
   }, []);
@@ -1092,14 +1271,9 @@ function Room({
     lastRecording,
     error: recordingError,
   } = useRecording(id, localStream, recordingEmit, {
-    // Fires at the 14-minute mark (RECORDING_WARNING_BEFORE_SEC = 60 s before limit).
-    // Shows the amber banner for 8 seconds so the host has time to wrap up.
     onApproachingLimit: () => setShowRecordingWarning(true),
-
-    // Fires at the 15-minute mark when the recorder is force-stopped.
-    // Opens the jaw-dropping limit modal immediately before the upload begins.
     onLimitExceeded: () => {
-      setShowRecordingWarning(false); // dismiss the banner if still visible
+      setShowRecordingWarning(false);
       setShowRecordingLimit(true);
     },
   });
@@ -1112,13 +1286,11 @@ function Room({
   const canManage = isHost || isSubHost;
   const isCinema = layoutMode === "cinema";
 
-  // Recording duration display helpers
   const recMM = Math.floor(recordingDurationSec / 60)
     .toString()
     .padStart(2, "0");
   const recSS = (recordingDurationSec % 60).toString().padStart(2, "0");
 
-  // Agenda time-left helper
   const agendaTimeLeft = useMemo(() => {
     if (!agenda) return null;
     const item = agenda.items[agenda.activeIdx];
@@ -1138,6 +1310,24 @@ function Room({
     window.addEventListener("Lumina Meet:host-removed", handler);
     return () => window.removeEventListener("Lumina Meet:host-removed", handler);
   }, [leaveRoom]);
+
+  // ── PATCH 2: Listen for permission responses from participants ────────────
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { fromUsername, type, accepted } = (e as CustomEvent).detail;
+      setPermissionToasts((prev) => [
+        ...prev,
+        {
+          id: `${Date.now()}-${Math.random()}`,
+          fromUsername,
+          type: type as "mic" | "cam" | "both",
+          accepted,
+        },
+      ]);
+    };
+    window.addEventListener("LuminaMeet:permission-result", handler);
+    return () => window.removeEventListener("LuminaMeet:permission-result", handler);
+  }, []);
 
   // ── Lobby toast management ────────────────────────────────────────────────
   useEffect(() => {
@@ -1381,7 +1571,7 @@ function Room({
     if (activePanel !== "agenda") setActivePanel("agenda");
   }, [agendaIn, setAgenda, activePanel]);
 
-  // ── Leave / end (FIX B) ───────────────────────────────────────────────────
+  // ── Leave / end ───────────────────────────────────────────────────────────
   const handleLeaveConfirm = useCallback(async () => {
     setShowLeaveModal(false);
     if (isHost) {
@@ -1515,24 +1705,15 @@ function Room({
       <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
         <motion.div
           className="absolute -top-32 -left-32 h-96 w-96 rounded-full opacity-20"
-          style={{
-            background: "radial-gradient(circle, oklch(0.65 0.22 280), transparent 70%)",
-          }}
+          style={{ background: "radial-gradient(circle, oklch(0.65 0.22 280), transparent 70%)" }}
           animate={{ scale: [1, 1.15, 1], x: [0, 30, 0], y: [0, -20, 0] }}
           transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
         />
         <motion.div
           className="absolute -bottom-32 -right-32 h-96 w-96 rounded-full opacity-15"
-          style={{
-            background: "radial-gradient(circle, oklch(0.82 0.16 210), transparent 70%)",
-          }}
+          style={{ background: "radial-gradient(circle, oklch(0.82 0.16 210), transparent 70%)" }}
           animate={{ scale: [1, 1.2, 1], x: [0, -20, 0], y: [0, 20, 0] }}
-          transition={{
-            duration: 15,
-            repeat: Infinity,
-            ease: "easeInOut",
-            delay: 3,
-          }}
+          transition={{ duration: 15, repeat: Infinity, ease: "easeInOut", delay: 3 }}
         />
       </div>
 
@@ -1625,11 +1806,7 @@ function Room({
                   >
                     <motion.span
                       animate={{ rotate: [0, 15, -10, 15, 0] }}
-                      transition={{
-                        duration: 1,
-                        repeat: Infinity,
-                        repeatDelay: 2,
-                      }}
+                      transition={{ duration: 1, repeat: Infinity, repeatDelay: 2 }}
                     >
                       ✋
                     </motion.span>
@@ -1651,8 +1828,6 @@ function Room({
                     <span>{SOUNDSCAPES.find((s) => s.id === activeSoundscape)?.label}</span>
                   </motion.button>
                 )}
-
-                {/* Live REC indicator — all participants see it while recording */}
                 {isRecording && (
                   <motion.div
                     initial={{ opacity: 0, scale: 0.8 }}
@@ -1666,7 +1841,6 @@ function Room({
                     </span>
                   </motion.div>
                 )}
-
                 {currentPoll && !currentPoll.closed && (
                   <motion.button
                     initial={{ opacity: 0, scale: 0.8 }}
@@ -1762,10 +1936,7 @@ function Room({
                       >
                         <span
                           className="h-2 w-2 rounded-full shrink-0"
-                          style={{
-                            background: cfg.color,
-                            boxShadow: `0 0 6px ${cfg.color}`,
-                          }}
+                          style={{ background: cfg.color, boxShadow: `0 0 6px ${cfg.color}` }}
                         />
                         <span className="flex-1">{cfg.label}</span>
                         {isActive && (
@@ -1971,6 +2142,8 @@ function Room({
               onMuteAll={muteAll}
               onCamOffAll={camOffAll}
               onTransferHost={setTransferTarget}
+              onRequestMicOn={requestMicOn}
+              onRequestCamOn={requestCamOn}
               onClose={() => setActivePanel(null)}
             />
           )}
@@ -2176,7 +2349,7 @@ function Room({
             </button>
           </div>
 
-          {/* Right controls (with recording button — host / co-host only) */}
+          {/* Right controls */}
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             <ControlBtn
               active={layoutMode !== "cinema"}
@@ -2217,7 +2390,6 @@ function Room({
             {/* Recording button — host and co-host only */}
             {canManage &&
               (isRecording ? (
-                // Live: pulsing red stop button with elapsed timer
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
@@ -2229,11 +2401,9 @@ function Room({
                   <span className="hidden sm:inline text-xs font-semibold tabular-nums">
                     {recMM}:{recSS}
                   </span>
-                  {/* Pulsing dot (mobile only) */}
                   <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-[oklch(0.72_0.22_35)] sm:hidden animate-pulse" />
                 </motion.button>
               ) : (
-                // Idle: start recording
                 <ControlBtn
                   active={true}
                   onClick={() => setShowRecordingOptions(true)}
@@ -2262,8 +2432,6 @@ function Room({
             onClose={() => setTransferTarget(null)}
           />
         )}
-
-        {/* Host ended for all — shown to the host who ended it */}
         {meetingEndedInfo && username === meetingEndedInfo.hostUsername && (
           <MeetingEndedByYouModal
             onDismiss={() => {
@@ -2272,8 +2440,6 @@ function Room({
             }}
           />
         )}
-
-        {/* Host ended for all — shown to other participants */}
         {meetingEndedInfo && username !== meetingEndedInfo.hostUsername && (
           <MeetingEndedByHostModal
             hostUsername={meetingEndedInfo.hostUsername}
@@ -2283,8 +2449,6 @@ function Room({
             }}
           />
         )}
-
-        {/* Participant intentionally left */}
         {showYouLeftModal && (
           <YouLeftModal
             onDismiss={() => {
@@ -2297,8 +2461,6 @@ function Room({
             }}
           />
         )}
-
-        {/* Recording mode picker */}
         {showRecordingOptions && (
           <RecordingOptionsModal
             open={showRecordingOptions}
@@ -2310,8 +2472,6 @@ function Room({
             isSharing={sharing}
           />
         )}
-
-        {/* Upload progress + link reveal */}
         {showRecordingLink && (
           <RecordingLinkModal
             open={showRecordingLink}
@@ -2327,11 +2487,6 @@ function Room({
             userEmail={user?.email ?? ""}
           />
         )}
-
-        {/* ── Recording limit exceeded modal ────────────────────────────── */}
-        {/* Shown when the 15-minute hard cap fires. Appears BEFORE the
-            upload modal so the user sees the dramatic "limit reached"
-            screen first, then the normal upload progress once they dismiss. */}
         {showRecordingLimit && (
           <RecordingLimitModal
             open={showRecordingLimit}
@@ -2339,18 +2494,30 @@ function Room({
             recordingMode={recordingMode ?? "screen_voice"}
           />
         )}
+
+        {/* ── PATCH 3: Host permission request dialog (participant view) ── */}
+        {hostPermissionRequest && (
+          <HostPermissionDialog
+            request={hostPermissionRequest}
+            onAccept={() => respondToPermissionRequest(true)}
+            onDecline={() => respondToPermissionRequest(false)}
+          />
+        )}
       </AnimatePresence>
 
-      {/* ── Recording 1-minute warning banner ─────────────────────────────── */}
-      {/* Rendered OUTSIDE AnimatePresence so it can self-animate independently.
-          Positioned just below the header (top-[72px]) via its own fixed CSS.
-          Only visible to the host/co-host who is actively recording. */}
+      {/* Recording 1-minute warning banner */}
       {canManage && (
         <RecordingWarningBanner
           show={showRecordingWarning}
           onDismiss={() => setShowRecordingWarning(false)}
         />
       )}
+
+      {/* ── PATCH 3: Permission response toasts (host view) ─────────────── */}
+      <PermissionResponseToastLayer
+        toasts={permissionToasts}
+        onDismiss={(id) => setPermissionToasts((prev) => prev.filter((t) => t.id !== id))}
+      />
     </div>
   );
 }
@@ -2391,11 +2558,7 @@ function SettingsMenu({
   const BACKGROUNDS = [
     { id: "none", label: "None", cls: "bg-white/5" },
     { id: "blur", label: "Blur", cls: "bg-[oklch(0.82_0.16_210/0.2)]" },
-    {
-      id: "gradient-purple",
-      label: "Purple",
-      cls: "bg-[oklch(0.35_0.18_280)]",
-    },
+    { id: "gradient-purple", label: "Purple", cls: "bg-[oklch(0.35_0.18_280)]" },
     { id: "gradient-teal", label: "Teal", cls: "bg-[oklch(0.35_0.15_200)]" },
     { id: "gradient-dark", label: "Dark", cls: "bg-[oklch(0.12_0.02_265)]" },
   ] as const;
@@ -2595,42 +2758,14 @@ function WhiteboardOverlay({
   onClose: () => void;
 }) {
   const tools: { id: WhiteboardTool; icon: React.ReactNode; label: string }[] = [
-    {
-      id: "select",
-      icon: <MousePointer className="h-4 w-4" />,
-      label: "Select (V)",
-    },
-    {
-      id: "pen",
-      icon: <PenLine className="h-4 w-4" />,
-      label: "Pen (P)",
-    },
-    {
-      id: "eraser",
-      icon: <Eraser className="h-4 w-4" />,
-      label: "Eraser (E)",
-    },
+    { id: "select", icon: <MousePointer className="h-4 w-4" />, label: "Select (V)" },
+    { id: "pen", icon: <PenLine className="h-4 w-4" />, label: "Pen (P)" },
+    { id: "eraser", icon: <Eraser className="h-4 w-4" />, label: "Eraser (E)" },
     { id: "text", icon: <Type className="h-4 w-4" />, label: "Text (T)" },
-    {
-      id: "sticky",
-      icon: <StickyNote className="h-4 w-4" />,
-      label: "Sticky (S)",
-    },
-    {
-      id: "arrow",
-      icon: <ArrowUpRight className="h-4 w-4" />,
-      label: "Arrow (A)",
-    },
-    {
-      id: "rect",
-      icon: <Square className="h-4 w-4" />,
-      label: "Rect (R)",
-    },
-    {
-      id: "ellipse",
-      icon: <Circle className="h-4 w-4" />,
-      label: "Ellipse (O)",
-    },
+    { id: "sticky", icon: <StickyNote className="h-4 w-4" />, label: "Sticky (S)" },
+    { id: "arrow", icon: <ArrowUpRight className="h-4 w-4" />, label: "Arrow (A)" },
+    { id: "rect", icon: <Square className="h-4 w-4" />, label: "Rect (R)" },
+    { id: "ellipse", icon: <Circle className="h-4 w-4" />, label: "Ellipse (O)" },
   ];
 
   const pts2path = (pts: number[][]): string =>
@@ -3136,8 +3271,7 @@ function PollsPanel({
               })}
             </div>
             <p className="text-[11px] text-muted-foreground">
-              {currentPoll.totalVoters} vote
-              {currentPoll.totalVoters !== 1 ? "s" : ""}
+              {currentPoll.totalVoters} vote{currentPoll.totalVoters !== 1 ? "s" : ""}
             </p>
             {isHost && (
               <div className="flex gap-2">
@@ -3257,10 +3391,7 @@ function AgendaPanel({
                     value={Math.round(item.durationSec / 60)}
                     onChange={(e) => {
                       const n = [...agendaInput];
-                      n[i] = {
-                        ...item,
-                        durationSec: Number(e.target.value) * 60,
-                      };
+                      n[i] = { ...item, durationSec: Number(e.target.value) * 60 };
                       onAgendaInputChange(n);
                     }}
                     className="w-12 bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-sm outline-none text-center focus:border-[var(--neon-primary)]/50 transition"
@@ -3469,10 +3600,7 @@ function SpatialCanvas({
   const dragOffset = useRef({ x: 0, y: 0 });
 
   const getPos = (id: string): TilePosition =>
-    tilePositions.get(id) ?? {
-      x: Math.random() * 60 + 5,
-      y: Math.random() * 60 + 5,
-    };
+    tilePositions.get(id) ?? { x: Math.random() * 60 + 5, y: Math.random() * 60 + 5 };
 
   const allParticipants = [
     { id: "local", name: username },
@@ -3620,20 +3748,12 @@ function VideoGrid({
     const isLocalSpotlit = activeSpotlightId === "local" || activeSpotlightId === localSocketId;
     const spotlitPeer = isLocalSpotlit ? null : peers.find((p) => p.socketId === activeSpotlightId);
     const stripItems = isLocalSpotlit
-      ? peers.map((p, i) => ({
-          type: "remote" as const,
-          peer: p,
-          hue: hueForIndex(i),
-        }))
+      ? peers.map((p, i) => ({ type: "remote" as const, peer: p, hue: hueForIndex(i) }))
       : [
           { type: "local" as const },
           ...peers
             .filter((p) => p.socketId !== activeSpotlightId)
-            .map((p, i) => ({
-              type: "remote" as const,
-              peer: p,
-              hue: hueForIndex(i),
-            })),
+            .map((p, i) => ({ type: "remote" as const, peer: p, hue: hueForIndex(i) })),
         ];
     return (
       <div className="flex h-full gap-3">
@@ -3916,9 +4036,8 @@ function RemoteVideoTile({
           ? "border-[var(--neon-secondary)] shadow-[0_0_24px_4px_oklch(0.82_0.16_210/0.4)]"
           : "border-white/10",
       )}
-      style={{}}
     >
-      {/* FIX C: muted — audio rendered by the dedicated <audio> element in useWebRTC */}
+      {/* FIX C: muted — audio rendered by dedicated <audio> element in useWebRTC */}
       {peer.stream && (
         <video
           ref={videoRef}
@@ -4085,6 +4204,8 @@ function ParticipantsPanel({
   onMuteAll,
   onCamOffAll,
   onTransferHost,
+  onRequestMicOn,
+  onRequestCamOn,
   onClose,
 }: {
   username: string;
@@ -4095,16 +4216,16 @@ function ParticipantsPanel({
   isHost: boolean;
   isSubHost: boolean;
   peers: RemotePeer[];
-  raisedHands: Array<{
-    socketId: string;
-    username: string;
-    handRaisedAt: number;
-  }>;
+  raisedHands: Array<{ socketId: string; username: string; handRaisedAt: number }>;
   onLowerHand: (id: string) => void;
   onRemove: (id: string) => void;
   onMuteAll: () => void;
   onCamOffAll: () => void;
   onTransferHost: (peer: RemotePeer) => void;
+  /** PATCH 4: request participant to unmute */
+  onRequestMicOn: (socketId: string) => void;
+  /** PATCH 4: request participant to turn camera on */
+  onRequestCamOn: (socketId: string) => void;
   onClose: () => void;
 }) {
   const canManage = isHost || isSubHost;
@@ -4164,6 +4285,7 @@ function ParticipantsPanel({
           </div>
         )}
         <ul className="space-y-2">
+          {/* Local user row */}
           <li className="flex items-center gap-3 rounded-xl border border-[var(--neon-primary)]/20 bg-[var(--neon-primary)]/5 p-2.5">
             <div className="relative">
               <Avatar name={username} hue={280} size={32} />
@@ -4191,6 +4313,8 @@ function ParticipantsPanel({
               )}
             </div>
           </li>
+
+          {/* Remote peer rows */}
           {peers.map((p, i) => (
             <motion.li
               key={p.socketId}
@@ -4209,11 +4333,7 @@ function ParticipantsPanel({
                   {p.handRaised && (
                     <motion.span
                       animate={{ rotate: [0, 15, -10, 15, 0] }}
-                      transition={{
-                        duration: 1,
-                        repeat: Infinity,
-                        repeatDelay: 1.5,
-                      }}
+                      transition={{ duration: 1, repeat: Infinity, repeatDelay: 1.5 }}
                       className="text-sm"
                     >
                       ✋
@@ -4246,6 +4366,32 @@ function ParticipantsPanel({
                 ) : (
                   <VideoOff className="h-3.5 w-3.5 text-[oklch(0.72_0.22_35)]" />
                 )}
+
+                {/* ── PATCH 4: Ask to unmute / turn camera on ────────────────── */}
+                {canManage && !p.isHost && (
+                  <>
+                    {!p.mic && (
+                      <button
+                        onClick={() => onRequestMicOn(p.socketId)}
+                        className="ml-1 text-muted-foreground hover:text-[var(--neon-secondary)] transition"
+                        title="Ask to unmute"
+                      >
+                        <Mic className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    {!p.cam && (
+                      <button
+                        onClick={() => onRequestCamOn(p.socketId)}
+                        className="ml-1 text-muted-foreground hover:text-[var(--neon-secondary)] transition"
+                        title="Ask to turn camera on"
+                      >
+                        <VideoIcon className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </>
+                )}
+
+                {/* Host-only: transfer + remove */}
                 {isHost && !p.isHost && (
                   <>
                     <button
@@ -4264,6 +4410,7 @@ function ParticipantsPanel({
                     </button>
                   </>
                 )}
+                {/* Sub-host can remove non-hosts */}
                 {isSubHost && !p.isHost && !p.isSubHost && (
                   <button
                     onClick={() => onRemove(p.socketId)}
@@ -4380,7 +4527,6 @@ function ChatPanel({
       transition={{ type: "spring", damping: 26, stiffness: 250 }}
       className="absolute right-0 top-0 bottom-0 w-80 max-w-full glass-strong border-l border-white/10 z-10 flex flex-col"
     >
-      {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-white/5 shrink-0">
         <h3 className="text-sm font-semibold flex items-center gap-2">
           <MessageSquare className="h-4 w-4 text-[var(--neon-primary)]" /> Meeting Chat
@@ -4395,7 +4541,6 @@ function ChatPanel({
         </button>
       </div>
 
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto p-3 space-y-0.5 scrollbar-hide">
         {grouped.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full gap-3 py-12">
@@ -4564,17 +4709,9 @@ function ChatPanel({
                             {emojiPickerForMsg === msg.id && (
                               <motion.div
                                 data-emoji-picker
-                                initial={{
-                                  opacity: 0,
-                                  y: 6,
-                                  scale: 0.92,
-                                }}
+                                initial={{ opacity: 0, y: 6, scale: 0.92 }}
                                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                                exit={{
-                                  opacity: 0,
-                                  y: 6,
-                                  scale: 0.92,
-                                }}
+                                exit={{ opacity: 0, y: 6, scale: 0.92 }}
                                 className={cn(
                                   "absolute bottom-full mb-2 z-30 glass-strong rounded-2xl border border-white/10 p-1.5 shadow-2xl",
                                   msg.isSelf ? "right-0" : "left-0",
@@ -4584,10 +4721,7 @@ function ChatPanel({
                                   {REACTIONS.map((emoji) => (
                                     <motion.button
                                       key={emoji}
-                                      whileHover={{
-                                        scale: 1.35,
-                                        y: -3,
-                                      }}
+                                      whileHover={{ scale: 1.35, y: -3 }}
                                       whileTap={{ scale: 0.9 }}
                                       onClick={() => {
                                         onReact(msg.id, emoji);
@@ -4625,11 +4759,7 @@ function ChatPanel({
                     key={i}
                     className="w-1 rounded-full bg-[var(--neon-secondary)]"
                     animate={{ height: ["4px", "10px", "4px"] }}
-                    transition={{
-                      duration: 0.8,
-                      repeat: Infinity,
-                      delay: i * 0.15,
-                    }}
+                    transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.15 }}
                   />
                 ))}
               </div>
@@ -4674,7 +4804,6 @@ function ChatPanel({
 
       {/* Input area */}
       <div className="border-t border-white/5 p-3 shrink-0">
-        {/* Recipient selector */}
         <div className="flex items-center gap-2 mb-2">
           <span className="text-[11px] text-muted-foreground shrink-0">To:</span>
           <div className="relative flex-1">
@@ -4703,11 +4832,7 @@ function ChatPanel({
                   initial={{ opacity: 0, y: 4, scale: 0.97 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: 4, scale: 0.97 }}
-                  transition={{
-                    type: "spring",
-                    damping: 24,
-                    stiffness: 320,
-                  }}
+                  transition={{ type: "spring", damping: 24, stiffness: 320 }}
                   className="absolute bottom-full mb-2 left-0 right-0 z-40 glass-strong rounded-2xl border border-white/10 p-1.5 shadow-2xl"
                 >
                   <button
@@ -4778,7 +4903,6 @@ function ChatPanel({
           </div>
         </div>
 
-        {/* Text input */}
         <div
           className={cn(
             "flex items-center gap-2 rounded-2xl border pl-4 pr-2 py-2 transition focus-within:border-opacity-60",
@@ -4827,7 +4951,7 @@ function ChatPanel({
   );
 }
 
-// ─── MeetingEndedByHostModal ──────────────────────────────────────────────────
+// ─── Post-meeting modals ──────────────────────────────────────────────────────
 
 function MeetingEndedByHostModal({
   hostUsername,
@@ -4851,9 +4975,7 @@ function MeetingEndedByHostModal({
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <motion.div
           className="absolute -top-40 left-1/2 -translate-x-1/2 h-[500px] w-[500px] rounded-full opacity-25"
-          style={{
-            background: "radial-gradient(circle, oklch(0.82 0.16 210), transparent 70%)",
-          }}
+          style={{ background: "radial-gradient(circle, oklch(0.82 0.16 210), transparent 70%)" }}
           animate={{ scale: [1, 1.2, 1] }}
           transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
         />
@@ -4872,12 +4994,7 @@ function MeetingEndedByHostModal({
             <motion.div
               initial={{ scale: 0, rotate: -20 }}
               animate={{ scale: 1, rotate: 0 }}
-              transition={{
-                type: "spring",
-                damping: 14,
-                stiffness: 260,
-                delay: 0.1,
-              }}
+              transition={{ type: "spring", damping: 14, stiffness: 260, delay: 0.1 }}
               className="mx-auto mb-7 relative flex h-24 w-24 items-center justify-center"
             >
               <div className="relative flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-[oklch(0.55_0.22_210)] to-[oklch(0.45_0.18_260)] shadow-[0_0_50px_-8px_oklch(0.82_0.16_210/0.7)]">
@@ -4912,8 +5029,6 @@ function MeetingEndedByHostModal({
   );
 }
 
-// ─── MeetingEndedByYouModal ───────────────────────────────────────────────────
-
 function MeetingEndedByYouModal({ onDismiss }: { onDismiss: () => void }) {
   useEffect(() => {
     const t = setTimeout(onDismiss, 8000);
@@ -4941,12 +5056,7 @@ function MeetingEndedByYouModal({ onDismiss }: { onDismiss: () => void }) {
             <motion.div
               initial={{ scale: 0, y: -20 }}
               animate={{ scale: 1, y: 0 }}
-              transition={{
-                type: "spring",
-                damping: 13,
-                stiffness: 280,
-                delay: 0.1,
-              }}
+              transition={{ type: "spring", damping: 13, stiffness: 280, delay: 0.1 }}
               className="mx-auto mb-7 relative flex h-24 w-24 items-center justify-center"
             >
               <div className="relative flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-[var(--neon-primary)] to-[var(--neon-accent)] shadow-[0_0_60px_-8px_oklch(0.65_0.22_280/0.8)]">
@@ -4994,8 +5104,6 @@ function MeetingEndedByYouModal({ onDismiss }: { onDismiss: () => void }) {
   );
 }
 
-// ─── YouLeftModal ─────────────────────────────────────────────────────────────
-
 function YouLeftModal({ onDismiss, onRejoin }: { onDismiss: () => void; onRejoin: () => void }) {
   useEffect(() => {
     const t = setTimeout(onDismiss, 12000);
@@ -5023,23 +5131,14 @@ function YouLeftModal({ onDismiss, onRejoin }: { onDismiss: () => void; onRejoin
             <motion.div
               initial={{ scale: 0, rotate: 20 }}
               animate={{ scale: 1, rotate: 0 }}
-              transition={{
-                type: "spring",
-                damping: 14,
-                stiffness: 260,
-                delay: 0.1,
-              }}
+              transition={{ type: "spring", damping: 14, stiffness: 260, delay: 0.1 }}
               className="mx-auto mb-7 relative flex h-24 w-24 items-center justify-center"
             >
               <div className="relative flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-[var(--neon-accent)] to-[var(--neon-primary)]">
                 <motion.span
                   className="text-4xl select-none"
                   animate={{ rotate: [0, 18, -12, 18, 0] }}
-                  transition={{
-                    duration: 1.5,
-                    repeat: Infinity,
-                    repeatDelay: 1.5,
-                  }}
+                  transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 1.5 }}
                 >
                   👋
                 </motion.span>
@@ -5076,6 +5175,7 @@ function YouLeftModal({ onDismiss, onRejoin }: { onDismiss: () => void; onRejoin
 }
 
 // ─── Leave Modal ──────────────────────────────────────────────────────────────
+
 function LeaveModal({
   isHost,
   onConfirm,
