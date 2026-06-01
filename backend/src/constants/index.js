@@ -55,7 +55,7 @@ export const MAX_RECORDING_DURATION_MIN = 5; // human-readable label used in UI 
  * useRecording hook fires the onApproachingLimit callback so the UI
  * can show a soft warning banner before the hard stop fires.
  */
-export const RECORDING_WARNING_BEFORE_SEC = 60; // warn at 4:00 remaining
+export const RECORDING_WARNING_BEFORE_SEC = 120; // warn at 3:00 minutes exactly (120 seconds remaining)
 
 // ─────────────────────────────────────────────────────────────────────────────
 

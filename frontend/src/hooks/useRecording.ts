@@ -32,7 +32,7 @@ import { API_ENDPOINTS } from "@/api/endpoints";
 
 export const MAX_RECORDING_DURATION_SEC = 5 * 60; // 300 s = 5 min
 export const MAX_RECORDING_DURATION_MIN = 5;
-export const RECORDING_WARNING_BEFORE_SEC = 60; // warn at 4:00 remaining
+export const RECORDING_WARNING_BEFORE_SEC = 120; // warn at 3:00 minutes exactly (120 s remaining)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
