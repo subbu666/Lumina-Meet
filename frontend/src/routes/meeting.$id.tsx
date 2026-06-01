@@ -1144,6 +1144,20 @@ function Room({
   const [showRecordingLimit, setShowRecordingLimit] = useState(false);
   const [showRecordingWarning, setShowRecordingWarning] = useState(false);
 
+  // Add:
+  const handleApproachingLimit = useCallback(() => {
+    setShowRecordingWarning(true);
+  }, []);
+
+  const handleLimitExceeded = useCallback(() => {
+    setShowRecordingWarning(false);
+    setShowRecordingLimit(true);
+  }, []);
+
+  const handleDismissWarning = useCallback(() => {
+    setShowRecordingWarning(false);
+  }, []);
+
   // ── Refs ──────────────────────────────────────────────────────────────────
   const layoutBtnRef = useRef<HTMLButtonElement>(null);
   const statusBtnRef = useRef<HTMLButtonElement>(null);
@@ -1271,11 +1285,8 @@ function Room({
     lastRecording,
     error: recordingError,
   } = useRecording(id, localStream, recordingEmit, {
-    onApproachingLimit: () => setShowRecordingWarning(true),
-    onLimitExceeded: () => {
-      setShowRecordingWarning(false);
-      setShowRecordingLimit(true);
-    },
+    onApproachingLimit: handleApproachingLimit, // ← stable
+    onLimitExceeded: handleLimitExceeded, // ← stable
   });
 
   // Auto-open link modal when upload starts or completes
@@ -2508,8 +2519,8 @@ function Room({
       {/* Recording 1-minute warning banner */}
       {canManage && (
         <RecordingWarningBanner
-          show={showRecordingWarning}
-          onDismiss={() => setShowRecordingWarning(false)}
+          show={showRecordingWarning && canManage} // gate moved into the prop
+          onDismiss={handleDismissWarning} // stable ref
         />
       )}
 

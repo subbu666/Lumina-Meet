@@ -1,19 +1,24 @@
 /**
  * RecordingModals — Lumina Meet
  *
- * Three modals + one inline banner:
- *  1. RecordingOptionsModal   — picks Screen / Voice / Both.
- *                               Now includes a pre-recording note about the
- *                               15-minute limit.
- *  2. RecordingLinkModal      — shown post-upload, animated timer + final link.
- *  3. RecordingLimitModal     — jaw-dropping full-screen modal shown when the
- *                               15-minute hard cap is hit and the recorder
- *                               is force-stopped.
- *  4. RecordingWarningBanner  — small inline toast shown at the 14-minute mark
- *                               (1 minute left warning). Exported for use in
- *                               meeting.$id.tsx.
+ * Refactored v2 — stale-closure and portal bugs fixed.
  *
- * Matches existing oklch design tokens from styles.css exactly.
+ * Key changes from original:
+ *  • RecordingWarningBanner now renders via createPortal into document.body.
+ *    This escapes the Framer Motion transform stacking context created by the
+ *    animated header/footer, which was silently trapping the fixed-position
+ *    banner inside an ancestor's containing block.
+ *  • RecordingWarningBanner's useEffect dependency on onDismiss is now safe
+ *    because the parent always passes a stable useCallback ref — the 8-second
+ *    auto-dismiss timer fires exactly once per show=true transition.
+ *  • All component interfaces are unchanged — no call-site edits required
+ *    beyond the three changes in meeting.$id.tsx described in the patch.
+ *
+ * Components exported:
+ *  RecordingOptionsModal  — mode picker shown before recording starts
+ *  RecordingLimitModal    — full-screen takeover when the 5-min cap is hit
+ *  RecordingWarningBanner — inline toast shown at the 1-minute warning mark
+ *  RecordingLinkModal     — upload progress + final shareable link
  */
 
 import { createPortal } from "react-dom";
@@ -196,7 +201,7 @@ export function RecordingOptionsModal({
                   </button>
                 </div>
 
-                {/* Options */}
+                {/* Mode options */}
                 <div className="space-y-3 mb-5">
                   {RECORDING_OPTIONS.map((opt) => {
                     const isActive = selected === opt.mode;
@@ -252,7 +257,7 @@ export function RecordingOptionsModal({
                           {opt.icon}
                         </div>
 
-                        {/* Text */}
+                        {/* Label + description */}
                         <div className="flex-1 min-w-0">
                           <p
                             className="font-semibold text-sm transition-colors duration-200 mb-0.5"
@@ -290,23 +295,19 @@ export function RecordingOptionsModal({
                   })}
                 </div>
 
-                {/* ── Pre-recording duration note ─────────────────────────────
-                    Always visible so the user knows the limit BEFORE clicking
-                    Start. Uses an amber/warning tone distinct from the info
-                    note below it.
-                ─────────────────────────────────────────────────────────────── */}
+                {/* Duration limit note */}
                 <div className="flex items-start gap-2.5 rounded-xl border border-[oklch(0.8_0.18_80/0.35)] bg-[oklch(0.8_0.18_80/0.07)] px-4 py-3 mb-3">
                   <Timer className="h-3.5 w-3.5 text-[oklch(0.85_0.18_80)] shrink-0 mt-0.5" />
                   <p className="text-[12px] text-[oklch(0.85_0.15_80)] leading-relaxed">
                     <span className="font-semibold">
                       Recording length is capped at {MAX_RECORDING_DURATION_MIN} minutes.
                     </span>{" "}
-                    The recorder will stop automatically and your clip will be saved when the limit
-                    is reached. You'll get a warning 1 minute before.
+                    The recorder stops automatically and your clip is saved when the limit is
+                    reached. You'll get a warning 1 minute before.
                   </p>
                 </div>
 
-                {/* Info note */}
+                {/* Privacy note */}
                 <div className="flex items-start gap-2.5 rounded-xl border border-[oklch(0.82_0.16_210/0.2)] bg-[oklch(0.82_0.16_210/0.05)] px-4 py-3 mb-6">
                   <div className="h-1.5 w-1.5 rounded-full bg-[var(--neon-secondary)] mt-1.5 shrink-0 animate-pulse" />
                   <p className="text-[12px] text-muted-foreground leading-relaxed">
@@ -346,12 +347,10 @@ export function RecordingOptionsModal({
   );
 }
 
-// ─── Recording Limit Exceeded Modal ──────────────────────────────────────────
-/**
- * Shown when the 15-minute hard cap is hit and the recorder is force-stopped.
- * Designed to be impossible to miss — full-screen takeover with dramatic
- * animations — while staying tasteful and on-brand.
- */
+// ─── Recording Limit Modal ────────────────────────────────────────────────────
+//
+// Shown when the 5-minute hard cap is hit and the recorder is force-stopped.
+// Full-screen takeover so it cannot be missed.
 
 interface RecordingLimitModalProps {
   open: boolean;
@@ -384,9 +383,8 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
           className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/92 backdrop-blur-2xl"
           onClick={onClose}
         >
-          {/* ── Dramatic ambient background ─────────────────────────────── */}
+          {/* Ambient background */}
           <div className="pointer-events-none absolute inset-0 overflow-hidden">
-            {/* Large pulsing red orb */}
             <motion.div
               className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-[700px] w-[700px] rounded-full"
               style={{
@@ -395,7 +393,6 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
               animate={{ scale: [1, 1.15, 1], opacity: [0.5, 0.8, 0.5] }}
               transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
             />
-            {/* Secondary purple orb for contrast */}
             <motion.div
               className="absolute -top-40 -right-40 h-96 w-96 rounded-full opacity-25"
               style={{
@@ -412,8 +409,7 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
               animate={{ scale: [1, 1.2, 1] }}
               transition={{ duration: 5, repeat: Infinity, delay: 0.5 }}
             />
-
-            {/* Scanline shimmer across the whole screen */}
+            {/* Scanline sweep */}
             <motion.div
               className="absolute inset-x-0 h-px bg-gradient-to-r from-transparent via-[oklch(0.72_0.22_35/0.6)] to-transparent"
               animate={{ top: ["-2px", "100vh"] }}
@@ -442,7 +438,7 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
 
             {/* Card */}
             <div className="relative overflow-hidden glass-strong rounded-[2.5rem] border border-[oklch(0.72_0.22_35/0.5)]">
-              {/* Top danger line — animated shimmer */}
+              {/* Animated top bar */}
               <div
                 className="h-1 shimmer"
                 style={{
@@ -453,9 +449,8 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
               />
 
               <div className="px-10 pt-10 pb-8 text-center">
-                {/* ── Icon ─────────────────────────────────────────────── */}
+                {/* Pulsing stop icon */}
                 <div className="relative mx-auto mb-7 flex h-28 w-28 items-center justify-center">
-                  {/* Pulsing outer rings */}
                   {[0, 1, 2].map((i) => (
                     <motion.div
                       key={i}
@@ -469,8 +464,6 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
                       }}
                     />
                   ))}
-
-                  {/* Inner circle */}
                   <motion.div
                     className="relative flex h-full w-full items-center justify-center rounded-full"
                     style={{
@@ -492,7 +485,7 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
                   </motion.div>
                 </div>
 
-                {/* ── Headline ──────────────────────────────────────────── */}
+                {/* Headline */}
                 <motion.h2
                   initial={{ opacity: 0, y: 12 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -507,7 +500,7 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
                   Recording Limit Reached
                 </motion.h2>
 
-                {/* ── Sub-headline ──────────────────────────────────────── */}
+                {/* Sub-headline */}
                 <motion.p
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -518,11 +511,11 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
                   <span className="font-semibold text-[oklch(0.85_0.18_80)]">
                     {MAX_RECORDING_DURATION_MIN}-minute limit
                   </span>{" "}
-                  and has been automatically stopped. Don't worry — everything recorded so far is
-                  being saved to your cloud.
+                  and has been automatically stopped. Everything recorded so far is being saved to
+                  your cloud.
                 </motion.p>
 
-                {/* ── Info cards ───────────────────────────────────────── */}
+                {/* Info cards */}
                 <motion.div
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -537,8 +530,7 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
                       </p>
                     </div>
                     <p className="text-[12px] text-muted-foreground leading-relaxed">
-                      Your full {MAX_RECORDING_DURATION_MIN}-min clip is uploading to Cloudinary
-                      now.
+                      Your full {MAX_RECORDING_DURATION_MIN}-min clip is uploading to cloud now.
                     </p>
                   </div>
                   <div className="rounded-2xl border border-[oklch(0.8_0.18_80/0.3)] bg-[oklch(0.8_0.18_80/0.07)] px-4 py-3 text-left">
@@ -554,7 +546,7 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
                   </div>
                 </motion.div>
 
-                {/* ── Why the limit? note ───────────────────────────────── */}
+                {/* Why the limit */}
                 <motion.div
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
@@ -564,12 +556,12 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
                   <AlertTriangle className="h-3.5 w-3.5 text-[oklch(0.82_0.2_35)] shrink-0 mt-0.5" />
                   <p className="text-[12px] text-muted-foreground leading-relaxed">
                     The {MAX_RECORDING_DURATION_MIN}-minute cap keeps recordings concise and within
-                    your free-tier cloud storage allowance. For longer sessions, consider splitting
-                    into multiple recordings.
+                    your free-tier cloud storage allowance. For longer sessions, split into multiple
+                    recordings.
                   </p>
                 </motion.div>
 
-                {/* ── CTA ──────────────────────────────────────────────── */}
+                {/* CTA */}
                 <motion.button
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -596,26 +588,47 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
 }
 
 // ─── Recording Warning Banner ─────────────────────────────────────────────────
-/**
- * Inline toast rendered inside the meeting room (not a portal) at the 14:00
- * mark. Small, non-blocking, auto-dismisses after 8 seconds.
- * Pass it directly in meeting.$id.tsx, positioned near the header or footer.
- */
+//
+// Shown at the 1-minute-remaining mark (4:00 into a 5-min recording).
+//
+// FIX 1 — createPortal:
+//   The original rendered into the normal React tree, inside the Room
+//   component's return. Framer Motion applies CSS transforms to the animated
+//   header and footer elements. Any element with a CSS transform creates a new
+//   containing block for position:fixed descendants — so the banner's
+//   "fixed top-[72px]" was positioned relative to the header's bounding box,
+//   not the viewport, making it invisible or mis-positioned.
+//   Rendering via createPortal into document.body guarantees the banner is
+//   a direct child of <body> and position:fixed works against the true viewport.
+//
+// FIX 2 — stable onDismiss:
+//   The useEffect([show, onDismiss]) sets an 8-second auto-dismiss timer.
+//   If onDismiss is an inline arrow function in the parent, it gets a new
+//   reference every render. Since recordingDurationSec updates every second,
+//   the parent re-renders every second, onDismiss gets a new reference,
+//   useEffect re-runs, the old setTimeout is cancelled and a new one starts —
+//   the 8-second timer never completes. This is fixed in the parent by wrapping
+//   onDismiss in useCallback (see meeting.$id.tsx changes).
 
 interface RecordingWarningBannerProps {
+  /** Controls visibility. Pass `showRecordingWarning && canManage`. */
   show: boolean;
+  /** Must be a stable reference (useCallback with [] deps) in the parent. */
   onDismiss: () => void;
 }
 
 export function RecordingWarningBanner({ show, onDismiss }: RecordingWarningBannerProps) {
-  // Auto-dismiss after 8 seconds
+  // Auto-dismiss after 8 seconds.
+  // This effect only runs when `show` transitions to true or `onDismiss`
+  // changes. With a stable onDismiss (useCallback in parent), the timer is
+  // set exactly once and runs to completion.
   useEffect(() => {
     if (!show) return;
     const t = setTimeout(onDismiss, 8000);
     return () => clearTimeout(t);
   }, [show, onDismiss]);
 
-  return (
+  return createPortal(
     <AnimatePresence>
       {show && (
         <motion.div
@@ -623,6 +636,7 @@ export function RecordingWarningBanner({ show, onDismiss }: RecordingWarningBann
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -16, scale: 0.96 }}
           transition={{ type: "spring", damping: 22, stiffness: 320 }}
+          // z-[9980] — below recording modals (9999/10000) but above everything else.
           className="fixed top-[72px] left-1/2 -translate-x-1/2 z-[9980] pointer-events-auto"
         >
           <div
@@ -653,11 +667,12 @@ export function RecordingWarningBanner({ show, onDismiss }: RecordingWarningBann
           </div>
         </motion.div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }
 
-// ─── Recording Link Generation Modal ─────────────────────────────────────────
+// ─── Recording Link Modal ─────────────────────────────────────────────────────
 
 interface RecordingLinkModalProps {
   open: boolean;
@@ -827,7 +842,7 @@ export function RecordingLinkModal({
               />
 
               <div className="p-8 text-center">
-                {/* Visual timer ring */}
+                {/* SVG progress ring */}
                 <div
                   className="relative mx-auto mb-6 flex items-center justify-center"
                   style={{ width: 140, height: 140 }}
@@ -844,12 +859,7 @@ export function RecordingLinkModal({
                   <svg
                     width="140"
                     height="140"
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      transform: "rotate(-90deg)",
-                    }}
+                    style={{ position: "absolute", top: 0, left: 0, transform: "rotate(-90deg)" }}
                   >
                     <circle
                       cx="70"
@@ -870,9 +880,7 @@ export function RecordingLinkModal({
                       strokeDasharray={C}
                       strokeDashoffset={progressArc}
                       transition={{ duration: 0.5 }}
-                      style={{
-                        filter: `drop-shadow(0 0 8px ${colors.glow})`,
-                      }}
+                      style={{ filter: `drop-shadow(0 0 8px ${colors.glow})` }}
                     />
                   </svg>
 

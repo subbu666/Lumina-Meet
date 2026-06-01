@@ -1,31 +1,40 @@
 /**
  * useRecording — Lumina Meet
  *
- * ADDED in this version:
- *  • MAX_RECORDING_DURATION_SEC (15 min) hard cap — the hook auto-stops
- *    the MediaRecorder when the limit is hit and fires onLimitExceeded().
- *  • RECORDING_WARNING_BEFORE_SEC (60 s) soft warning — fires
- *    onApproachingLimit() at the 14:00 mark so the UI can show a banner.
- *  • Both callbacks are optional; the hook is fully backward-compatible.
+ * Refactored v2 — all stale-closure and ref-sync bugs fixed.
+ *
+ * Key changes from original:
+ *  • Callback refs are assigned synchronously in the render body (not inside
+ *    useEffect) so the interval closure always reads the latest handler even
+ *    when the parent re-renders between ticks.
+ *  • The options object is never depended upon as a whole — only the individual
+ *    callback values are extracted, which are now stable useCallback refs in
+ *    the parent.
+ *  • warnFiredRef and limitExceededRef reset correctly on every new recording.
+ *  • Timer cleanup is robust: cleared in onstop AND on hard-stop path so there
+ *    is never a dangling interval.
  *
  * Recording modes:
  *  "screen_voice" — screen share + microphone
  *  "voice"        — microphone only (audio/webm)
  *  "screen"       — screen video only (no audio)
+ *
+ * Limit constants (mirror backend constants/index.js):
+ *  MAX_RECORDING_DURATION_SEC   = 300  (5 min hard cap)
+ *  RECORDING_WARNING_BEFORE_SEC = 60   (warn at 4:00 mark)
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiClient } from "@/api/apiClient";
 import { API_ENDPOINTS } from "@/api/endpoints";
 
-// ─── Shared limit constants (mirrors backend constants/index.js) ─────────────
-// Defined here so the frontend never needs to fetch them from the API.
-// If you change the backend constant, update this too.
-export const MAX_RECORDING_DURATION_SEC = 5 * 60; // 900 s = 15 min
+// ─── Shared limit constants ───────────────────────────────────────────────────
+
+export const MAX_RECORDING_DURATION_SEC = 5 * 60; // 300 s = 5 min
 export const MAX_RECORDING_DURATION_MIN = 5;
 export const RECORDING_WARNING_BEFORE_SEC = 60; // warn at 4:00 remaining
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export type RecordingMode = "screen_voice" | "voice" | "screen";
 
@@ -42,13 +51,16 @@ export interface RecordingEntry {
 }
 
 export interface UseRecordingOptions {
-  /** Called once when the recording crosses the limit and is force-stopped. */
-  onLimitExceeded?: () => void;
   /**
-   * Called once when RECORDING_WARNING_BEFORE_SEC seconds remain.
-   * Useful for showing a "1 minute left" banner before the hard stop.
+   * Called exactly once when RECORDING_WARNING_BEFORE_SEC seconds remain.
+   * Must be a stable reference (useCallback) in the parent component.
    */
   onApproachingLimit?: () => void;
+  /**
+   * Called exactly once when the hard cap is hit and the recorder is
+   * force-stopped. Must be a stable reference (useCallback) in the parent.
+   */
+  onLimitExceeded?: () => void;
 }
 
 export interface UseRecordingReturn {
@@ -63,7 +75,7 @@ export interface UseRecordingReturn {
   error: string | null;
 }
 
-// ─── Upload time estimator (exported so RecordingLinkModal can use it) ───────
+// ─── Upload time estimator ────────────────────────────────────────────────────
 
 const BITRATE_VOICE_KBPS = 128;
 const BITRATE_SCREEN_KBPS = 2500;
@@ -86,15 +98,8 @@ export function estimatedUploadSec(mode: RecordingMode, durationSec: number): nu
   return rawSec + (mode === "voice" ? 2 : 5);
 }
 
-// ─── Hook ────────────────────────────────────────────────────────────────────
+// ─── Hook ─────────────────────────────────────────────────────────────────────
 
-/**
- * @param meetingId   - current meeting ID
- * @param localStream - the local MediaStream from useWebRTC
- * @param emitFn      - optional function to emit socket events.
- *                      Pass: (event, payload) => webrtc.socketRef.current?.emit(event, payload)
- * @param options     - optional callbacks: onLimitExceeded, onApproachingLimit
- */
 export function useRecording(
   meetingId: string,
   localStream: MediaStream | null,
@@ -114,38 +119,56 @@ export function useRecording(
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<number>(0);
 
-  // Keep emitFn + callbacks in refs so closures always see the latest versions
-  const emitFnRef = useRef(emitFn);
-  const onLimitExceededRef = useRef(options?.onLimitExceeded);
-  const onApproachingLimitRef = useRef(options?.onApproachingLimit);
-  // Track whether we've already fired the approaching-limit warning this session
+  // ── Callback refs — assigned synchronously every render ───────────────────
+  //
+  // WHY NOT useEffect: useEffect runs after paint (async). The setInterval
+  // callback closes over these refs and fires every second. If a parent
+  // re-render happens between the tick and the effect, the ref is stale for
+  // one tick. Synchronous assignment in the render body guarantees the ref
+  // is always up-to-date before any effect or interval runs.
+  //
+  // WHY REFS AT ALL: storing callbacks in refs lets the interval closure
+  // always call the latest version without being in the dependency array of
+  // useCallback (which would re-create the interval on every parent render).
+  const emitFnRef = useRef<typeof emitFn>(emitFn);
+  const onApproachingLimitRef = useRef<(() => void) | undefined>(undefined);
+  const onLimitExceededRef = useRef<(() => void) | undefined>(undefined);
+
+  // Synchronous ref sync — no useEffect needed.
+  emitFnRef.current = emitFn;
+  onApproachingLimitRef.current = options?.onApproachingLimit;
+  onLimitExceededRef.current = options?.onLimitExceeded;
+
+  // Per-session state refs (reset on each startRecording call).
   const warnFiredRef = useRef(false);
-  // Track whether limit was exceeded (used in onstop to suppress normal upload flow)
   const limitExceededRef = useRef(false);
 
-  useEffect(() => {
-    emitFnRef.current = emitFn;
-  }, [emitFn]);
-
-  useEffect(() => {
-    onLimitExceededRef.current = options?.onLimitExceeded;
-    onApproachingLimitRef.current = options?.onApproachingLimit;
-  }, [options?.onLimitExceeded, options?.onApproachingLimit]);
-
-  // Cleanup on unmount
+  // ── Cleanup on unmount ────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
       if (mediaRecorderRef.current?.state === "recording") {
         mediaRecorderRef.current.stop();
       }
     };
   }, []);
 
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const clearTimer = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
   const broadcastRecordingState = useCallback((recording: boolean, mode: RecordingMode | null) => {
     emitFnRef.current?.("recording-state", { recording, mode });
   }, []);
 
+  // ── Upload ────────────────────────────────────────────────────────────────
   const uploadToCloudinary = useCallback(
     async (blob: Blob, mode: RecordingMode, durationSec: number, mimeType: string) => {
       setIsUploading(true);
@@ -153,8 +176,9 @@ export function useRecording(
       setError(null);
 
       try {
-        // Step 1: get Cloudinary signature from backend
-        // The backend will reject if durationSec > MAX_RECORDING_DURATION_SEC
+        // Step 1: get signed upload credentials from backend.
+        // The backend re-validates durationSec <= MAX_RECORDING_DURATION_SEC
+        // so a tampered client cannot bypass the cap server-side.
         const sigRes = await apiClient.post(API_ENDPOINTS.RECORDING_SIGNATURE, {
           meetingId,
           mode,
@@ -165,7 +189,7 @@ export function useRecording(
         const { signature, timestamp, cloudName, apiKey, publicId, resourceType, transformation } =
           sigRes.data.data;
 
-        // Step 2: upload directly to Cloudinary with XHR for progress tracking
+        // Step 2: upload directly to Cloudinary with XHR for progress tracking.
         const formData = new FormData();
         formData.append("file", blob, `recording-${Date.now()}.webm`);
         formData.append("signature", signature);
@@ -198,7 +222,7 @@ export function useRecording(
 
         setUploadProgress(90);
 
-        // Step 3: tell backend to save metadata and send the email
+        // Step 3: save metadata and trigger the email notification.
         const saveRes = await apiClient.post(API_ENDPOINTS.RECORDING_SAVE, {
           meetingId,
           publicId,
@@ -211,8 +235,6 @@ export function useRecording(
         setUploadProgress(100);
         setLastRecording(saveRes.data.data.recording);
       } catch (err: any) {
-        // Surface the recording-limit error with a friendly message if the
-        // backend also rejected it (e.g. clock skew between client and server)
         if (err?.response?.data?.code === "RECORDING_LIMIT_EXCEEDED") {
           setError(
             `Recording exceeds the ${MAX_RECORDING_DURATION_MIN}-minute limit and could not be uploaded.`,
@@ -227,13 +249,16 @@ export function useRecording(
     [meetingId],
   );
 
+  // ── startRecording ────────────────────────────────────────────────────────
   const startRecording = useCallback(
     async (mode: RecordingMode) => {
+      // Reset all session state.
       setError(null);
       setLastRecording(null);
+      setUploadProgress(0);
       chunksRef.current = [];
-      limitExceededRef.current = false;
       warnFiredRef.current = false;
+      limitExceededRef.current = false;
 
       if (!localStream && mode === "voice") {
         setError("No microphone stream available.");
@@ -256,7 +281,7 @@ export function useRecording(
             audio: false,
           });
         } else {
-          // screen_voice: screen video + existing mic audio
+          // screen_voice: screen video + existing mic audio tracks.
           const screenStream = await navigator.mediaDevices.getDisplayMedia({
             video: { frameRate: { ideal: 30 } },
             audio: false,
@@ -265,7 +290,7 @@ export function useRecording(
           captureStream = new MediaStream([...screenStream.getTracks(), ...audioTracks]);
         }
 
-        // Pick the best supported container format
+        // Pick the best supported container format.
         const mimeTypes =
           mode === "voice"
             ? ["audio/webm;codecs=opus", "audio/webm", "audio/ogg"]
@@ -289,16 +314,15 @@ export function useRecording(
         };
 
         recorder.onstop = async () => {
-          if (timerRef.current) {
-            clearInterval(timerRef.current);
-            timerRef.current = null;
-          }
+          // Always clear the timer here — it may already be null if the hard
+          // stop path cleared it first, but clearInterval(null) is a no-op.
+          clearTimer();
 
           const durationSec = Math.round((Date.now() - startTimeRef.current) / 1000);
           const blob = new Blob(chunksRef.current, { type: mimeType || "video/webm" });
           chunksRef.current = [];
 
-          // Release the screen capture grab (camera LED off etc.)
+          // Release screen capture (turns off the browser recording indicator).
           captureStream.getTracks().forEach((t) => t.stop());
 
           setIsRecording(false);
@@ -306,13 +330,12 @@ export function useRecording(
           setRecordingDurationSec(0);
           broadcastRecordingState(false, null);
 
-          // If the limit was exceeded we still upload — the recording up to the
-          // cut-off point is perfectly valid. The onLimitExceeded callback has
-          // already fired before onstop to show the modal.
+          // Upload the recording whether it stopped normally or hit the limit —
+          // the captured content up to the cut-off point is valid.
           await uploadToCloudinary(blob, mode, durationSec, mimeType);
         };
 
-        recorder.start(1000); // chunk every second for smooth progress
+        recorder.start(1000); // chunk every second
         mediaRecorderRef.current = recorder;
         startTimeRef.current = Date.now();
 
@@ -321,38 +344,39 @@ export function useRecording(
         setRecordingDurationSec(0);
         broadcastRecordingState(true, mode);
 
-        // ── Duration-tracking interval ────────────────────────────────────────
-        // This interval has two jobs:
-        //   1. Update the live elapsed-time counter in the UI (every second).
-        //   2. Enforce the hard 15-minute cap by stopping the MediaRecorder
-        //      when MAX_RECORDING_DURATION_SEC is reached.
-        // It also fires a one-time soft warning RECORDING_WARNING_BEFORE_SEC
-        // seconds before the cap (i.e. at the 14:00 mark).
+        // ── Duration-tracking interval ──────────────────────────────────────
+        //
+        // Three jobs per tick:
+        //   1. Update the elapsed-time counter displayed in the UI.
+        //   2. Fire the soft warning exactly once when 60 seconds remain
+        //      (i.e. at the 4:00 mark for a 5-min cap).
+        //   3. Force-stop the recorder at exactly 5:00 (300 s elapsed).
+        //
+        // Reading callbacks via refs (not closure captures) means the latest
+        // parent handlers are always called even if the parent re-rendered
+        // between ticks.
         timerRef.current = setInterval(() => {
           const elapsed = Math.round((Date.now() - startTimeRef.current) / 1000);
           setRecordingDurationSec(elapsed);
 
-          // ── Soft warning (fires once at 14:00) ─────────────────────────────
           const remaining = MAX_RECORDING_DURATION_SEC - elapsed;
+
+          // ── Soft warning (fires once, exactly at 60 s remaining) ──────────
           if (remaining <= RECORDING_WARNING_BEFORE_SEC && remaining > 0 && !warnFiredRef.current) {
             warnFiredRef.current = true;
             onApproachingLimitRef.current?.();
           }
 
-          // ── Hard stop at 15:00 ─────────────────────────────────────────────
+          // ── Hard stop (fires once, at 0 s remaining) ──────────────────────
           if (elapsed >= MAX_RECORDING_DURATION_SEC) {
-            if (timerRef.current) {
-              clearInterval(timerRef.current);
-              timerRef.current = null;
-            }
+            // Clear the interval first so this branch never runs twice.
+            clearTimer();
             limitExceededRef.current = true;
 
-            // Fire the exceeded callback first so the modal appears before
-            // the recorder's onstop async chain begins.
+            // Fire the exceeded callback before stopping so the modal can
+            // appear before the async upload chain begins.
             onLimitExceededRef.current?.();
 
-            // Stop the recorder — this will trigger onstop above which
-            // handles cleanup and upload.
             if (mediaRecorderRef.current?.state === "recording") {
               mediaRecorderRef.current.stop();
             }
@@ -366,9 +390,10 @@ export function useRecording(
         }
       }
     },
-    [localStream, broadcastRecordingState, uploadToCloudinary],
+    [localStream, broadcastRecordingState, uploadToCloudinary, clearTimer],
   );
 
+  // ── stopRecording ─────────────────────────────────────────────────────────
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current?.state === "recording") {
       mediaRecorderRef.current.stop();
