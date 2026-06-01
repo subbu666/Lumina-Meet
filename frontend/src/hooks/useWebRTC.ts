@@ -21,6 +21,12 @@
  *
  *   The component wires these to set local state that controls which dialog
  *   is shown. Navigation happens inside the dialog's "Go to dashboard" button.
+ *
+ * NEW — Host Permission Dialogs (Feature 2):
+ *   Hosts can request individual participants to turn their mic or cam back on.
+ *   Participants receive a dialog and decide whether to accept or decline.
+ *   New hook returns: requestMicOn, requestCamOn, requestMicCamOn,
+ *   hostPermissionRequest, respondToPermissionRequest.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -149,6 +155,13 @@ export interface MeetingEndedInfo {
   hostUsername: string;
 }
 
+// ─── New: host permission request type (Feature 2) ───────────────────────────
+export interface HostPermissionRequest {
+  type: "mic" | "cam" | "both";
+  fromSocketId: string;
+  fromUsername: string;
+}
+
 export interface UseWebRTCReturn {
   localStream: MediaStream | null;
   localCameraStream: MediaStream | null;
@@ -233,6 +246,13 @@ export interface UseWebRTCReturn {
   lobbyKnockCount: number;
   clearLobbyKnockCount: () => void;
   socketRef: React.MutableRefObject<Socket | null>;
+  // ── Feature 2: Host Permission Dialogs ──────────────────────────────────
+  requestMicOn: (socketId: string) => void;
+  requestCamOn: (socketId: string) => void;
+  requestMicCamOn: (socketId: string) => void;
+  /** Incoming permission request from host (for non-host participants) */
+  hostPermissionRequest: HostPermissionRequest | null;
+  respondToPermissionRequest: (accepted: boolean) => void;
 }
 
 // ─── ICE servers ──────────────────────────────────────────────────────────────
@@ -413,6 +433,12 @@ export function useWebRTC(
   const [cinemaMode, setCinemaMode] = useState(false);
   const [spotlightId, setSpotlightId] = useState<string | null>(null);
   const [autoSpotlight, setAutoSpotlight] = useState(false);
+
+  // ── Feature 2 state: host permission dialogs ───────────────────────────────
+  const [hostPermissionRequest, setHostPermissionRequest] = useState<HostPermissionRequest | null>(
+    null,
+  );
+  const pendingPermissionRef = useRef<HostPermissionRequest | null>(null);
 
   // ── Refs ───────────────────────────────────────────────────────────────────
   const socketRef = useRef<Socket | null>(null);
@@ -803,6 +829,26 @@ export function useWebRTC(
         if (action === "lower-hand") setLocalHandRaised(false);
         if (action === "remove") window.dispatchEvent(new CustomEvent("Lumina Meet:host-removed"));
       });
+
+      // ── Feature 2: Host asked this participant to turn mic/cam back on ────
+      socket.on("host-permission-request", (req: HostPermissionRequest) => {
+        pendingPermissionRef.current = req;
+        setHostPermissionRequest(req);
+      });
+
+      // ── Feature 2: Host received the participant's response ───────────────
+      // Only fires on the host's socket. Surfaced via a custom DOM event so
+      // the component can listen and show an appropriate toast/notification.
+      socket.on(
+        "permission-response-result",
+        ({ fromSocketId, fromUsername, type, accepted }: any) => {
+          window.dispatchEvent(
+            new CustomEvent("LuminaMeet:permission-result", {
+              detail: { fromSocketId, fromUsername, type, accepted },
+            }),
+          );
+        },
+      );
 
       // ── Phase 3: Lobby ─────────────────────────────────────────────────────
 
@@ -1232,6 +1278,51 @@ export function useWebRTC(
     socketRef.current?.emit("transfer-host", { targetSocketId: socketId, mode });
   }, []);
 
+  // ── Feature 2: Host permission request controls ────────────────────────────
+
+  const requestMicOn = useCallback((socketId: string) => {
+    socketRef.current?.emit("request-mic-on", { targetSocketId: socketId });
+  }, []);
+
+  const requestCamOn = useCallback((socketId: string) => {
+    socketRef.current?.emit("request-cam-on", { targetSocketId: socketId });
+  }, []);
+
+  const requestMicCamOn = useCallback((socketId: string) => {
+    socketRef.current?.emit("request-mic-cam-on", { targetSocketId: socketId });
+  }, []);
+
+  const respondToPermissionRequest = useCallback(
+    (accepted: boolean) => {
+      const req = pendingPermissionRef.current;
+      if (!req || !socketRef.current) return;
+      socketRef.current.emit("permission-response", {
+        toSocketId: req.fromSocketId,
+        type: req.type,
+        accepted,
+      });
+      // If accepted, actually turn on the device(s)
+      if (accepted) {
+        const stream = cameraStreamRef.current;
+        if (!stream) return;
+        if (req.type === "mic" || req.type === "both") {
+          stream.getAudioTracks().forEach((t) => {
+            t.enabled = true;
+          });
+          setMic(true);
+          socketRef.current.emit("media-state", { mic: true });
+        }
+        if (req.type === "cam" || req.type === "both") {
+          // toggleCam() handles re-acquiring the camera track
+          void toggleCam();
+        }
+      }
+      pendingPermissionRef.current = null;
+      setHostPermissionRequest(null);
+    },
+    [toggleCam],
+  );
+
   // ── Chat ───────────────────────────────────────────────────────────────────
 
   const sendChatMessage = useCallback(
@@ -1498,5 +1589,11 @@ export function useWebRTC(
     lobbyKnockCount,
     clearLobbyKnockCount,
     socketRef,
+    // Feature 2: Host Permission Dialogs
+    requestMicOn,
+    requestCamOn,
+    requestMicCamOn,
+    hostPermissionRequest,
+    respondToPermissionRequest,
   };
 }
