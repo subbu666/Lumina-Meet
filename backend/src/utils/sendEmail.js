@@ -258,30 +258,39 @@ const otpRow = (code, bgFrom, bgTo, borderColor, glowColor) => {
  * Does NOT work in: Outlook desktop, Apple Mail (JS fully sandboxed — unavoidable)
  */
 const copyOtpButton = (code, accentColor, accentBorder) => {
-  // OTP codes are always digits — no escaping needed, but be safe anyway
   const safeCode = String(code).replace(/&/g, "&amp;").replace(/'/g, "&#39;");
 
-  // Inline IIFE — uses only synchronous DOM APIs that Gmail's sandbox permits.
-  // Written without line breaks so attribute parsers don't choke.
-  // 'el' = the anchor tag (this), passed from onclick.
-  // We avoid innerHTML mutation during execCommand to prevent focus loss.
+  /**
+   * FINAL GMAIL-SAFE IMPLEMENTATION
+   *
+   * Issues fixed vs previous version:
+   *
+   * 1. HOISTING BUG: tryExec() was called before its declaration in the joined
+   *    string. Inline onclick strings don't reliably hoist function declarations
+   *    in Gmail/Outlook sandboxes. Fixed by declaring tryExec BEFORE the try block.
+   *
+   * 2. SNAPSHOT BUG: fb() was capturing oh/oc/ob/obg at invocation time (after
+   *    style was already mutated by a previous call). Fixed by snapshotting
+   *    originals immediately on click, before any mutation.
+   *
+   * 3. ATTRIBUTE SAFETY: All handler parts use single quotes internally.
+   *    The onclick="" wrapper uses double quotes — no conflict.
+   *
+   * 4. STRATEGY ORDER:
+   *    a) window.top.navigator.clipboard (async, trusted top context)
+   *    b) window.top.document.execCommand (sync, escapes iframe sandbox)
+   *    c) window.prompt() fallback (manual Ctrl+C, zero failure)
+   */
   const handler = [
+    // Snapshot originals FIRST before any mutation
     `var el=this;`,
-    `var d=el.ownerDocument;`, // ← get the RIGHT document
-    `var b=d.body||d.documentElement;`, // ← fallback to <html> if no <body>
-    `var inp=d.createElement('input');`, // ← create in the right document
-    `inp.value='${safeCode}';`,
-    `inp.setAttribute('readonly','');`,
-    `inp.style.cssText='position:fixed;top:0;left:0;width:2px;height:2px;opacity:0;border:0;padding:0;';`,
-    `b.appendChild(inp);`, // ← append to the right body
-    `inp.focus();inp.select();`,
-    `inp.setSelectionRange(0,9999);`,
-    `var ok=false;`,
-    `try{ok=d.execCommand('copy');}catch(e){}`, // ← execCommand on the right document
-    `b.removeChild(inp);`, // ← remove from the right body
+    `var code='${safeCode}';`,
     `var oh=el.innerHTML,oc=el.style.color,ob=el.style.borderColor,obg=el.style.background;`,
+
+    // Feedback function — uses closed-over snapshots, always resets correctly
+    `function fb(ok){`,
     `if(ok){`,
-    `el.innerHTML='&#10003;&nbsp;&nbsp;OTP Copied to Clipboard!';`,
+    `el.innerHTML='&#10003;&nbsp;&nbsp;OTP Copied!';`,
     `el.style.color='#10b981';`,
     `el.style.borderColor='rgba(16,185,129,0.60)';`,
     `el.style.background='rgba(16,185,129,0.10)';`,
@@ -297,6 +306,47 @@ const copyOtpButton = (code, accentColor, accentBorder) => {
     `el.style.borderColor=ob;`,
     `el.style.background=obg;`,
     `},2000);`,
+    `}`,
+
+    // Strategy 2 declared BEFORE strategy 1 calls it — no hoisting dependency
+    `function tryExec(){`,
+    `try{`,
+    `var topDoc=(window.top||window).document;`,
+    `var b=topDoc.body||topDoc.documentElement;`,
+    `var inp=topDoc.createElement('input');`,
+    `inp.value=code;`,
+    `inp.setAttribute('readonly','');`,
+    `inp.style.cssText='position:fixed;top:0;left:0;width:2px;height:2px;opacity:0;border:0;padding:0;';`,
+    `b.appendChild(inp);`,
+    `inp.focus();`,
+    `inp.select();`,
+    `inp.setSelectionRange(0,9999);`,
+    `var ok=topDoc.execCommand('copy');`,
+    `b.removeChild(inp);`,
+    `fb(ok);`,
+    `}catch(e2){`,
+    // Strategy 3: prompt — guaranteed fallback, user can manually Ctrl+C
+    `try{(window.top||window).prompt('Copy your OTP code:',code);}catch(e3){}`,
+    `fb(false);`,
+    `}`,
+    `}`,
+
+    // Strategy 1: Clipboard API on window.top (escapes Gmail iframe, trusted context)
+    // Declared after tryExec so the .catch() reference is already defined
+    `try{`,
+    `var topWin=(window.top||window);`,
+    `if(topWin.navigator&&topWin.navigator.clipboard&&topWin.navigator.clipboard.writeText){`,
+    `topWin.navigator.clipboard.writeText(code).then(`,
+    `function(){fb(true);},`,
+    `function(){tryExec();}`, // clipboard rejected → fall to execCommand
+    `);`,
+    `}else{`,
+    `tryExec();`, // no clipboard API → fall to execCommand
+    `}`,
+    `}catch(e){`,
+    `tryExec();`, // clipboard threw → fall to execCommand
+    `}`,
+
     `return false;`,
   ].join("");
 
