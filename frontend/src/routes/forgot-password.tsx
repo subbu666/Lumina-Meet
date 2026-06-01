@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check } from "lucide-react";
 import { toast } from "sonner";
@@ -26,6 +26,16 @@ function ForgotPasswordPage() {
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // Resend timer — starts when we move to step 1
+  const [timer, setTimer] = useState(60);
+
+  useEffect(() => {
+    if (step !== 1) return;
+    if (timer <= 0) return;
+    const id = setInterval(() => setTimer((t) => t - 1), 1000);
+    return () => clearInterval(id);
+  }, [step, timer]);
+
   // Controls the "no account found" modal
   const [noAccountOpen, setNoAccountOpen] = useState(false);
 
@@ -38,19 +48,17 @@ function ForgotPasswordPage() {
 
       // Backend returns success:false + code:"USER_NOT_FOUND" at HTTP 200
       // when the email has no registered account (anti-enumeration pattern).
-      // authService resolves (doesn't throw) in this case, so we check here.
       if (result?.code === "USER_NOT_FOUND") {
         setNoAccountOpen(true);
         return;
       }
 
       toast.success("Reset code sent — check your inbox");
+      setTimer(60); // reset timer each time an OTP is freshly sent
       setStep(1);
     } catch (err) {
-      // Real errors (network, 429, 500) land here
       const { code } = extractError(err);
       if (code === "USER_NOT_FOUND") {
-        // Defensive: handle it even if backend ever throws instead of resolving
         setNoAccountOpen(true);
       } else {
         toast.error(extractError(err).message);
@@ -91,6 +99,21 @@ function ForgotPasswordPage() {
       setLoading(false);
     }
   };
+
+  // Resend handler (used in Step 1)
+  const resend = async () => {
+    try {
+      await authService.forgotPassword({ email });
+      toast.success("New code sent — check your inbox");
+      setOtp("");
+      setTimer(60);
+    } catch (err) {
+      toast.error(extractError(err).message);
+    }
+  };
+
+  const pct = ((60 - timer) / 60) * 100;
+  const circumference = 2 * Math.PI * 15;
 
   return (
     <>
@@ -145,24 +168,49 @@ function ForgotPasswordPage() {
                 <NeonButton fullWidth loading={loading} onClick={verify} disabled={otp.length < 6}>
                   Verify code
                 </NeonButton>
-                <p className="text-center text-xs text-muted-foreground">
-                  Didn't receive it?{" "}
-                  <button
-                    type="button"
-                    className="text-[var(--neon-secondary)] hover:underline"
-                    onClick={async () => {
-                      try {
-                        await authService.forgotPassword({ email });
-                        toast.success("New code sent");
-                        setOtp("");
-                      } catch (err) {
-                        toast.error(extractError(err).message);
-                      }
-                    }}
-                  >
-                    Resend
-                  </button>
-                </p>
+
+                {/* Resend with circular countdown — mirrors verify-otp page */}
+                <div className="flex items-center justify-center gap-3 text-sm text-muted-foreground">
+                  {timer > 0 ? (
+                    <>
+                      <div className="relative h-7 w-7">
+                        <svg className="absolute inset-0 -rotate-90" viewBox="0 0 36 36">
+                          <circle
+                            cx="18"
+                            cy="18"
+                            r="15"
+                            fill="none"
+                            stroke="oklch(1 0 0 / 0.1)"
+                            strokeWidth="3"
+                          />
+                          <motion.circle
+                            cx="18"
+                            cy="18"
+                            r="15"
+                            fill="none"
+                            stroke="oklch(0.82 0.16 210)"
+                            strokeWidth="3"
+                            strokeLinecap="round"
+                            strokeDasharray={circumference}
+                            strokeDashoffset={(1 - pct / 100) * circumference}
+                          />
+                        </svg>
+                        <div className="absolute inset-0 flex items-center justify-center text-[10px] font-mono">
+                          {timer}
+                        </div>
+                      </div>
+                      <span>Resend in {timer}s</span>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="text-[var(--neon-secondary)] hover:underline"
+                      onClick={resend}
+                    >
+                      Resend code
+                    </button>
+                  )}
+                </div>
               </motion.div>
             )}
 
