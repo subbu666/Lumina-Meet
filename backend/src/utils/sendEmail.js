@@ -258,42 +258,40 @@ const otpRow = (code, bgFrom, bgTo, borderColor, glowColor) => {
  * Does NOT work in: Outlook desktop, Apple Mail (JS fully sandboxed — unavoidable)
  */
 const copyOtpButton = (code, accentColor, accentBorder) => {
-  const rawCode = String(code).replace(/'/g, "\\'");
+  const rawCode = String(code).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 
+  // THE FIX: textarea.select() needs ZERO cross-frame access.
+  // No window.top, no getSelection(), no Range — those all throw SecurityError
+  // inside Gmail's sandboxed iframe and silently kill the entire handler.
+  // textarea.select() is a pure element method. execCommand is synchronous.
+  // Gmail's service worker cannot intercept synchronous DOM operations.
   const handler = [
-    `var el=this;`,
-    `var oh=el.innerHTML,ost=el.getAttribute('style');`,
-    `var topDoc;`,
-    `try{topDoc=(window.top||window).document;}catch(e){topDoc=document;}`,
-    `var g=topDoc.getElementById('__lm_otp_ghost');`,
-    `if(!g){`,
-    `g=topDoc.createElement('div');`,
-    `g.id='__lm_otp_ghost';`,
-    `g.contentEditable='true';`,
-    `g.style.cssText='position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;font-size:12px;pointer-events:none;';`,
-    `(topDoc.body||topDoc.documentElement).appendChild(g);`,
-    `}`,
-    `g.innerText='${rawCode}';`,
-    `var s;`,
-    `try{s=(window.top||window).getSelection();}catch(e){s=window.getSelection();}`,
-    `var r=topDoc.createRange();`,
-    `r.selectNodeContents(g);`,
-    `s.removeAllRanges();`,
-    `s.addRange(r);`,
-    `var ok=topDoc.execCommand('copy');`,
-    `s.removeAllRanges();`,
+    `(function(btn){`,
+    `var ot=btn.innerHTML,os=btn.getAttribute('style');`,
+    `var ta=document.createElement('textarea');`,
+    `ta.value='${rawCode}';`,
+    `ta.setAttribute('readonly','');`,
+    `ta.style.cssText='position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;font-size:12px;';`,
+    `document.body.appendChild(ta);`,
+    `ta.focus();`,
+    `ta.select();`,
+    `ta.setSelectionRange(0,99999);`,
+    `var ok=false;`,
+    `try{ok=document.execCommand('copy');}catch(e){ok=false;}`,
+    `document.body.removeChild(ta);`,
     `if(ok){`,
-    `el.innerHTML='&#10003;&nbsp;&nbsp;OTP Copied!';`,
-    `el.style.color='#10b981';`,
-    `el.style.borderColor='rgba(16,185,129,0.60)';`,
-    `el.style.background='rgba(16,185,129,0.10)';`,
+    `btn.innerHTML='&#10003;&nbsp;&nbsp;OTP Copied!';`,
+    `btn.style.color='#10b981';`,
+    `btn.style.borderColor='rgba(16,185,129,0.60)';`,
+    `btn.style.background='rgba(16,185,129,0.12)';`,
     `}else{`,
-    `el.innerHTML='&#10007;&nbsp;&nbsp;Copy Failed';`,
-    `el.style.color='#ef4444';`,
-    `el.style.borderColor='rgba(239,68,68,0.50)';`,
-    `el.style.background='rgba(239,68,68,0.08)';`,
+    `btn.innerHTML='&#10007;&nbsp;&nbsp;Copy Failed';`,
+    `btn.style.color='#ef4444';`,
+    `btn.style.borderColor='rgba(239,68,68,0.50)';`,
+    `btn.style.background='rgba(239,68,68,0.08)';`,
     `}`,
-    `setTimeout(function(){el.innerHTML=oh;el.setAttribute('style',ost);},2000);`,
+    `setTimeout(function(){btn.innerHTML=ot;btn.setAttribute('style',os);},2000);`,
+    `})(this);`,
     `return false;`,
   ].join("");
 
@@ -323,7 +321,6 @@ const copyOtpButton = (code, accentColor, accentBorder) => {
     </tr>
   </table>`;
 };
-
 /**
  * Horizontal divider
  */
