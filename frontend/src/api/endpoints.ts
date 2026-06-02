@@ -18,6 +18,12 @@ export const API_ENDPOINTS = {
   GENERATE_AND_INVITE: "/api/meeting/generate-and-invite",
   MEETING_HISTORY: "/api/meeting/history",
   RECORD_JOINED_MEETING: "/api/meeting/record-joined",
+  /**
+   * Permanently hard-deletes a meeting from the database.
+   * Usage: apiClient.delete(`${API_ENDPOINTS.DELETE_MEETING}/${meetingId}`)
+   * Only the host can delete. Active meetings cannot be deleted (end them first).
+   */
+  DELETE_MEETING: "/api/meeting",
 
   // ── Recordings ─────────────────────────────────────────────────────────────
   /** Get Cloudinary signed upload params — POST { meetingId, mode, durationSec, fileType } */

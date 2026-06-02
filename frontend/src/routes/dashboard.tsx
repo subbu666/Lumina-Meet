@@ -1,8 +1,11 @@
 /**
  * dashboard.tsx — Lumina Meet Dashboard
  *
- * Includes the RecordingsTab merged directly into this file.
- * The dashboard now has two tabs: "Recent meetings" and "Recordings".
+ * CHANGES vs previous version:
+ *   - Delete meeting: each MeetingGroupRow now has a trash icon button.
+ *   - DeleteMeetingModal is wired up: open → confirm → optimistic removal from state.
+ *   - Active meetings block deletion with a clear toast (end the meeting first).
+ *   - All other code is identical to the previous version.
  */
 
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
@@ -27,6 +30,7 @@ import {
   Copy,
   ExternalLink,
   RefreshCw,
+  Trash2,
   // RecordingsTab icons
   Mic2,
   MonitorSmartphone,
@@ -43,6 +47,7 @@ import { useAuthStore } from "@/store/authStore";
 import { NeonButton } from "@/components/ui-custom/NeonButton";
 import { FloatingInput } from "@/components/ui-custom/FloatingInput";
 import { MeetingGenerationModal } from "@/components/modals/MeetingGenerationModal";
+import { DeleteMeetingModal } from "@/components/modals/DeleteMeetingModal";
 import { meetingService, type MeetingGroup, formatDuration } from "@/api/services/meetingService";
 import { extractError } from "@/api/apiClient";
 import { apiClient } from "@/api/apiClient";
@@ -626,6 +631,9 @@ function Dashboard() {
   const [groups, setGroups] = useState<MeetingGroup[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // ── Delete modal state ──────────────────────────────────────────────────────
+  const [deleteTarget, setDeleteTarget] = useState<MeetingGroup | null>(null);
+
   const loadHistory = () => {
     setLoading(true);
     meetingService
@@ -678,6 +686,48 @@ function Dashboard() {
     } catch {
       toast.error("Enter a valid meeting link");
     }
+  };
+
+  // ── Delete handlers ─────────────────────────────────────────────────────────
+
+  /**
+   * Called when the user clicks the trash icon on a meeting row.
+   * Active meetings show a toast instead of opening the modal.
+   */
+  const handleDeleteRequest = (group: MeetingGroup) => {
+    if (group.isActive) {
+      toast.error("End the meeting before deleting it.", {
+        description: "You can't delete a room that's currently live.",
+      });
+      return;
+    }
+    setDeleteTarget(group);
+  };
+
+  /**
+   * Called by DeleteMeetingModal when the user confirms.
+   * Optimistically removes the row, then refetches on success.
+   * On API error, restores the row and re-throws so the modal can catch it.
+   */
+  const handleDeleteConfirm = async (meetingId: string) => {
+    // Optimistic remove
+    setGroups((prev) => prev.filter((g) => g.meetingId !== meetingId));
+    try {
+      await meetingService.deleteMeeting(meetingId);
+      toast.success("Meeting deleted successfully.");
+      // Sync truth from server (removes any race conditions)
+      loadHistory();
+    } catch (err) {
+      // Restore the row on failure
+      loadHistory();
+      const { message } = extractError(err);
+      toast.error(message || "Failed to delete meeting. Please try again.");
+      throw err; // let the modal know to revert to idle phase
+    }
+  };
+
+  const handleDeleteClose = () => {
+    setDeleteTarget(null);
   };
 
   if (!user?.username) return null;
@@ -774,7 +824,6 @@ function Dashboard() {
               />
             </div>
 
-            {/* Contextual action — only show "Send invites" on meetings tab */}
             <AnimatePresence mode="wait">
               {activeTab === "meetings" && (
                 <motion.button
@@ -814,7 +863,12 @@ function Dashboard() {
                   ) : (
                     <ul className="divide-y divide-white/5 -mx-5">
                       {groups.map((group, i) => (
-                        <MeetingGroupRow key={group.meetingId} group={group} index={i} />
+                        <MeetingGroupRow
+                          key={group.meetingId}
+                          group={group}
+                          index={i}
+                          onDeleteRequest={handleDeleteRequest}
+                        />
                       ))}
                     </ul>
                   )}
@@ -879,6 +933,14 @@ function Dashboard() {
           loadHistory();
         }}
       />
+
+      {/* ── Delete meeting modal ────────────────────────────────────────── */}
+      <DeleteMeetingModal
+        open={deleteTarget !== null}
+        meeting={deleteTarget}
+        onClose={handleDeleteClose}
+        onConfirm={handleDeleteConfirm}
+      />
     </main>
   );
 }
@@ -913,7 +975,6 @@ function TabButton({
           {count}
         </span>
       )}
-      {/* Active underline */}
       {active && (
         <motion.div
           layoutId="tab-underline"
@@ -1089,8 +1150,19 @@ function MeetingCTA({ group }: { group: MeetingGroup }) {
 }
 
 // ─── MeetingGroupRow ──────────────────────────────────────────────────────────
+//
+// CHANGED: accepts onDeleteRequest prop and renders the delete button.
+//
 
-function MeetingGroupRow({ group, index }: { group: MeetingGroup; index: number }) {
+function MeetingGroupRow({
+  group,
+  index,
+  onDeleteRequest,
+}: {
+  group: MeetingGroup;
+  index: number;
+  onDeleteRequest: (group: MeetingGroup) => void;
+}) {
   const [open, setOpen] = useState(false);
 
   const hasSessions = group.supportsMultipleSessions && group.sessions.length > 0;
@@ -1100,8 +1172,9 @@ function MeetingGroupRow({ group, index }: { group: MeetingGroup; index: number 
     <motion.li
       initial={{ opacity: 0, x: -8 }}
       animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: 8, transition: { duration: 0.18 } }}
       transition={{ delay: index * 0.04 }}
-      className={expired ? "relative opacity-70" : "relative"}
+      className={expired ? "relative opacity-70 group" : "relative group"}
     >
       {expired && (
         <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-[oklch(0.72_0.22_35/0.5)] rounded-r" />
@@ -1188,7 +1261,36 @@ function MeetingGroupRow({ group, index }: { group: MeetingGroup; index: number 
           </div>
         </div>
 
-        <MeetingCTA group={group} />
+        {/* ── Action cluster: CTA + Delete ─────────────────────────────── */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <MeetingCTA group={group} />
+
+          {/*
+           * Delete button — always visible on hover, always present in DOM.
+           * Uses opacity + scale transition so it feels like it "appears".
+           * Stops click propagation so the row expand/collapse isn't triggered.
+           */}
+          <motion.button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDeleteRequest(group);
+            }}
+            title={group.isActive ? "End meeting before deleting" : "Delete meeting"}
+            aria-label="Delete meeting"
+            className={cn(
+              "flex h-7 w-7 items-center justify-center rounded-lg border transition-all duration-150",
+              "opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100",
+              group.isActive
+                ? // Active — muted red, cursor blocked, no hover glow (can't delete)
+                  "border-[oklch(0.72_0.22_35/0.2)] bg-transparent text-[oklch(0.72_0.22_35/0.35)] cursor-not-allowed"
+                : // Deletable — full danger red on hover
+                  "border-white/10 bg-transparent text-muted-foreground/50 hover:border-[oklch(0.72_0.22_35/0.45)] hover:bg-[oklch(0.72_0.22_35/0.1)] hover:text-[oklch(0.82_0.2_35)] active:scale-[0.93]",
+            )}
+            whileTap={group.isActive ? undefined : { scale: 0.9 }}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </motion.button>
+        </div>
       </div>
 
       <AnimatePresence initial={false}>

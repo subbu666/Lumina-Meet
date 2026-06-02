@@ -130,7 +130,6 @@ function toMeetingGroup(raw: RawMeeting, index: number): MeetingGroup {
   const totalDurationMin = sessions.reduce((sum, s) => sum + s.durationMin, 0);
   const isActive = raw.status === "active";
   const type: MeetingBadgeType = raw.type ?? "instant";
-  // scheduled meetings don't support multi-session; instant and joined do
   const supportsMultipleSessions = raw.supportsMultipleSessions ?? type !== "scheduled";
 
   return {
@@ -178,7 +177,7 @@ export const meetingService = {
   }): Promise<{ link: string; meeting: RawMeeting }> =>
     apiClient.post(API_ENDPOINTS.SCHEDULE_MEETING, data).then((r) => ({
       link: r.data.data.joinUrl,
-      meeting: r.data.data.meeting, // full meeting object; scheduledFor is inside here
+      meeting: r.data.data.meeting,
     })),
 
   invite: (data: { meetingId: string; emails: string[] }) =>
@@ -193,28 +192,36 @@ export const meetingService = {
   /**
    * Record a "joined" meeting in the user's history.
    * Call this when the user joins via a pasted link.
-   * Body: { meetingLink, title }
    */
   recordJoined: (data: { meetingLink: string; title: string }): Promise<void> =>
     apiClient.post(API_ENDPOINTS.RECORD_JOINED_MEETING, data).then(() => undefined),
 
   /**
    * Fetch meeting history and return it as grouped MeetingGroup[].
-   * Also returns the legacy flat items[] for backward-compat.
    */
   history: (): Promise<{ groups: MeetingGroup[]; items: HistoryItem[] }> =>
     apiClient.get(API_ENDPOINTS.MEETING_HISTORY).then((r) => {
       const meetings: RawMeeting[] = r.data.data?.meetings ?? [];
-
       const groups: MeetingGroup[] = meetings.map((m, i) => toMeetingGroup(m, i));
-
       const items: HistoryItem[] = groups.map((g) => ({
         id: g.meetingId,
         title: g.title,
         date: g.createdAt,
         durationMin: g.totalDurationMin,
       }));
-
       return { groups, items };
     }),
+
+  /**
+   * Permanently hard-delete a meeting from the database.
+   *
+   * Rules enforced server-side:
+   *  - Only the host can delete.
+   *  - Active meetings cannot be deleted (end them first → 409 MEETING_ACTIVE).
+   *  - Cloudinary recordings are NOT removed — only the DB record is wiped.
+   *
+   * On success the meeting should be removed from local state immediately.
+   */
+  deleteMeeting: (meetingId: string): Promise<void> =>
+    apiClient.delete(`${API_ENDPOINTS.DELETE_MEETING}/${meetingId}`).then(() => undefined),
 };

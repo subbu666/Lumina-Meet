@@ -9,6 +9,7 @@ import {
   getMeeting,
   updateMeeting,
   cancelMeeting,
+  deleteMeeting, // ← NEW
   getMeetingHistory,
   getUpcomingMeetings,
   endMeeting,
@@ -19,6 +20,7 @@ import {
   joinMeetingValidation,
   recordJoinedMeetingValidation,
   historyValidation,
+  deleteMeetingValidation, // ← NEW
 } from "../controllers/meetingController.js";
 import {
   getUploadSignature,
@@ -78,7 +80,7 @@ router.post(
 // Express treating "recording" as a meetingId param.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// GET  /api/meeting/recordings         — all recordings for the current user (dashboard tab)
+// GET  /api/meeting/recordings          — all recordings for the current user
 router.get("/recordings", authenticate, getUserRecordings);
 
 // POST /api/meeting/recording/signature — get Cloudinary signed upload params
@@ -120,7 +122,18 @@ router.get("/upcoming", authenticate, getUpcomingMeetings);
 // ── Single meeting CRUD (param routes last) ───────────────────────────────────
 router.get("/:meetingId", authenticate, getMeeting);
 router.patch("/:meetingId", authenticate, updateMeeting);
-router.delete("/:meetingId", authenticate, cancelMeeting);
+
+// DELETE /:meetingId/cancel  — soft cancel (status → "cancelled"), keeps DB record
+router.delete("/:meetingId/cancel", authenticate, cancelMeeting);
+
+// DELETE /:meetingId         — hard delete (removes document from DB entirely)  ← NEW
+router.delete(
+  "/:meetingId",
+  authenticate,
+  deleteMeetingValidation,
+  deleteMeeting,
+);
+
 router.post("/:meetingId/end", authenticate, endMeeting);
 
 export default router;

@@ -125,6 +125,12 @@ export const historyValidation = [
     .withMessage("Invalid status"),
 ];
 
+// ─── STEP 1: Add this validation (alongside the other export const *Validation arrays) ───
+
+export const deleteMeetingValidation = [
+  param("meetingId").trim().notEmpty().withMessage("Meeting ID is required"),
+];
+
 // ─── Shared helper ────────────────────────────────────────────────────────────
 
 async function createUniqueMeetingId() {
@@ -999,6 +1005,65 @@ export const endMeeting = asyncHandler(async (req, res) => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 10. PERMANENTLY DELETE MEETING
+//
+// Hard-deletes the meeting document from MongoDB.
+// Only the host can delete their own meeting.
+// Cannot delete a meeting that is currently ACTIVE (someone is in the room).
+// Cloudinary recordings are NOT deleted here — only the DB record is removed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const deleteMeeting = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      message: "Validation failed",
+      details: errors.array().reduce((acc, err) => {
+        if (!acc[err.path]) acc[err.path] = [];
+        acc[err.path].push(err.msg);
+        return acc;
+      }, {}),
+    });
+  }
+
+  const { meetingId } = req.params;
+  const userId = req.userId;
+
+  const meeting = await Meeting.findOne({ meetingId });
+
+  if (!meeting) {
+    throw new APIError(404, "Meeting not found", "MEETING_NOT_FOUND");
+  }
+
+  // Only the host can delete their meeting
+  if (!meeting.isHost(userId)) {
+    throw new APIError(
+      403,
+      "Only the meeting host can delete this meeting",
+      "NOT_HOST",
+    );
+  }
+
+  // Prevent deletion of an actively running meeting — end it first
+  if (meeting.status === "active") {
+    throw new APIError(
+      409,
+      "Cannot delete an active meeting. Please end the meeting first.",
+      "MEETING_ACTIVE",
+    );
+  }
+
+  await Meeting.deleteOne({ meetingId });
+
+  res.status(200).json({
+    success: true,
+    message: "Meeting permanently deleted",
+    data: { meetingId },
+  });
+});
+
 export default {
   generateInstantMeeting,
   generateAndInvite,
@@ -1012,4 +1077,5 @@ export default {
   getMeetingHistory,
   getUpcomingMeetings,
   endMeeting,
+  deleteMeeting,
 };
