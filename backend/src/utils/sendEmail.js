@@ -3,28 +3,16 @@
  *
  * Design principles:
  *  • Zero SVG, zero CSS flexbox/grid — only table-based layouts (Gmail/Outlook safe)
- *  • All OTP digits in a single fixed-width table — never overflow on any device
+ *  • OTP displayed as a SINGLE unified box — easy to select & copy on mobile and desktop
  *  • Inline styles only (Gmail strips <style> blocks on mobile)
  *  • Gradient text replaced with solid colored text where -webkit-text-fill-color may fail
  *  • VML-safe for Outlook desktop
  *  • Tested viewport: 320px → 700px
  *
- * COPY OTP BUTTON — Gmail-compatible implementation:
- *
- *  Gmail STRIPS <script> tags completely — so no global functions can be defined.
- *  Gmail's service worker BLOCKS navigator.clipboard.writeText() with a network error.
- *
- *  Solution: Pure inline onclick using ONLY document.execCommand('copy') via a
- *  temporary <input> element. No async, no Promises, no external APIs.
- *  execCommand is synchronous and runs entirely in the DOM — Gmail cannot block it.
- *
- *  The entire handler fits in one onclick attribute, uses only:
- *    - document.createElement / appendChild / removeChild  (always allowed)
- *    - document.execCommand('copy')                        (synchronous, no network)
- *    - element.style mutations + setTimeout               (always allowed)
- *
- *  Works in: Gmail web ✓  Outlook web ✓  Yahoo Mail web ✓  Any browser ✓
- *  Does NOT work in: Outlook desktop, Apple Mail (JS fully sandboxed — unavoidable)
+ * COPY OTP — the copy button has been intentionally removed.
+ * The OTP is now rendered as a single monospace text cell, so users can:
+ *  - Triple-click / long-press to select all digits at once on any device
+ *  - Standard OS text selection works perfectly — no JS required, no Gmail sandbox issues
  */
 
 const BREVO_API_URL = "https://api.brevo.com/v3/smtp/email";
@@ -108,7 +96,6 @@ const T = {
 /**
  * Outer shell — centers card, sets background, resets box model.
  * Uses a 1-column table so Outlook respects the max-width.
- * NO <script> tags — Gmail strips them. All JS lives in inline onclick attrs.
  */
 const shell = (innerHtml, previewText = "") => `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
@@ -128,8 +115,6 @@ const shell = (innerHtml, previewText = "") => `<!DOCTYPE html>
     td{padding:0;}
     img{border:0;outline:none;text-decoration:none;display:block;-ms-interpolation-mode:bicubic;}
     a{text-decoration:none;}
-    /* Copy OTP button hover */
-    .copy-otp-btn:hover{background:rgba(99,102,241,0.25)!important;border-color:rgba(99,102,241,0.60)!important;color:#ffffff!important;}
     /* Mobile overrides */
     @media only screen and (max-width:599px){
       .wrapper{width:100%!important;padding:16px 12px!important;}
@@ -137,9 +122,7 @@ const shell = (innerHtml, previewText = "") => `<!DOCTYPE html>
       .hdr{padding:36px 20px 28px!important;}
       .body{padding:24px 20px!important;}
       .ftr{padding:20px 20px 28px!important;}
-      .otp-table{width:auto!important;}
-      .otp-cell{width:38px!important;height:52px!important;font-size:24px!important;border-radius:12px!important;}
-      .otp-gap{width:5px!important;}
+      .otp-single-cell{font-size:28px!important;letter-spacing:10px!important;padding:20px 16px!important;}
       .btn-cta{font-size:15px!important;padding:16px 18px!important;}
       .title-text{font-size:22px!important;}
       .body-text{font-size:14px!important;line-height:1.65!important;}
@@ -193,134 +176,80 @@ const shell = (innerHtml, previewText = "") => `<!DOCTYPE html>
 </html>`;
 
 /**
- * OTP digit row — fixed 48px cells, never overflows.
- * On mobile the @media rule shrinks each cell to 38px.
- * The digit-gap columns collapse on very small screens via the otp-gap class.
+ * Single unified OTP box — jaw-dropping, elegant design.
+ *
+ * WHY SINGLE BOX vs individual digit cells:
+ *  - Individual digit cells (separate <td> per digit) cannot be selected as a unit on mobile.
+ *    Long-pressing on mobile selects only the tapped cell's content.
+ *  - A single <td> with the full OTP string as plain text allows triple-click (desktop)
+ *    or long-press → Select All (mobile) to grab all digits in one gesture.
+ *  - No JS, no clipboard API, no Gmail sandbox issues — pure HTML text selection.
+ *
+ * Design: a single rounded pill/rectangle with:
+ *  - Deep dark glass background with subtle gradient
+ *  - Wide letter-spacing giving the "individual boxes" visual feel without breaking selection
+ *  - Inner glow border in the accent color
+ *  - Outer glow box-shadow for depth
+ *  - Monospace font for perfect digit alignment
+ *  - "Select to copy" hint label below
  */
-const otpRow = (code, bgFrom, bgTo, borderColor, glowColor) => {
-  const digits = code.split("");
-  const cells = digits
-    .map((d, i) => {
-      const spacer =
-        i < digits.length - 1
-          ? `<td class="otp-gap" width="8" style="width:8px;"></td>`
-          : "";
-      return `
-      <td class="otp-cell" align="center" valign="middle"
-        style="
-          width:48px;
-          height:64px;
-          background:linear-gradient(150deg,${bgFrom}22,${bgTo}18);
-          border:1.5px solid ${borderColor};
-          border-radius:14px;
-          box-shadow:0 6px 20px ${glowColor}28,inset 0 1px 0 rgba(255,255,255,0.10);
-          font-family:'Courier New',Courier,monospace;
-          font-size:30px;
-          font-weight:800;
-          color:${T.white};
-          letter-spacing:0;
-          text-align:center;
-          vertical-align:middle;
-          line-height:1;
-          mso-line-height-rule:exactly;
-        ">${d}</td>${spacer}`;
-    })
-    .join("");
-
-  return `
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0"
-      class="otp-table" style="margin:0 auto;">
-      <tr>${cells}</tr>
-    </table>`;
-};
-
-/**
- * Copy OTP button — Gmail-safe implementation.
- *
- * KEY INSIGHT from debugging:
- *  - Gmail STRIPS <script> tags → no global functions available
- *  - Gmail's service worker BLOCKS navigator.clipboard.writeText() → Promise rejection / network error
- *  - ONLY safe approach: pure synchronous execCommand('copy') via a hidden <input>, fully inline
- *
- * The onclick attribute contains a self-contained IIFE that:
- *  1. Creates a hidden <input type="text"> (not textarea — avoids scroll-jump on mobile)
- *  2. Sets its value to the OTP code (embedded as a literal string, HTML-entity-safe)
- *  3. Selects the input value
- *  4. Calls document.execCommand('copy') — synchronous, no Promises, no network, Gmail allows it
- *  5. Removes the input
- *  6. Mutates the button element directly for visual feedback (green ✓ or red ✗)
- *  7. Resets after 2000ms via setTimeout
- *
- * NO navigator.clipboard — avoids Gmail service worker interception entirely.
- * NO external function calls — entire logic self-contained in the attribute.
- *
- * Works in: Gmail web ✓  Outlook web ✓  Yahoo Mail web ✓  Any browser ✓
- * Does NOT work in: Outlook desktop, Apple Mail (JS fully sandboxed — unavoidable)
- */
-const copyOtpButton = (code, accentColor, accentBorder) => {
-  const rawCode = String(code).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-
-  // THE FIX: textarea.select() needs ZERO cross-frame access.
-  // No window.top, no getSelection(), no Range — those all throw SecurityError
-  // inside Gmail's sandboxed iframe and silently kill the entire handler.
-  // textarea.select() is a pure element method. execCommand is synchronous.
-  // Gmail's service worker cannot intercept synchronous DOM operations.
-  const handler = [
-    `(function(btn){`,
-    `var ot=btn.innerHTML,os=btn.getAttribute('style');`,
-    `var ta=document.createElement('textarea');`,
-    `ta.value='${rawCode}';`,
-    `ta.setAttribute('readonly','');`,
-    `ta.style.cssText='position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;font-size:12px;';`,
-    `document.body.appendChild(ta);`,
-    `ta.focus();`,
-    `ta.select();`,
-    `ta.setSelectionRange(0,99999);`,
-    `var ok=false;`,
-    `try{ok=document.execCommand('copy');}catch(e){ok=false;}`,
-    `document.body.removeChild(ta);`,
-    `if(ok){`,
-    `btn.innerHTML='&#10003;&nbsp;&nbsp;OTP Copied!';`,
-    `btn.style.color='#10b981';`,
-    `btn.style.borderColor='rgba(16,185,129,0.60)';`,
-    `btn.style.background='rgba(16,185,129,0.12)';`,
-    `}else{`,
-    `btn.innerHTML='&#10007;&nbsp;&nbsp;Copy Failed';`,
-    `btn.style.color='#ef4444';`,
-    `btn.style.borderColor='rgba(239,68,68,0.50)';`,
-    `btn.style.background='rgba(239,68,68,0.08)';`,
-    `}`,
-    `setTimeout(function(){btn.innerHTML=ot;btn.setAttribute('style',os);},2000);`,
-    `})(this);`,
-    `return false;`,
-  ].join("");
-
-  return `
-  <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:16px auto 0;">
+const otpSingleBox = (code, accentFrom, accentTo, accentBorder, glowColor) => `
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 auto;">
     <tr>
       <td align="center">
-        <a href="#"
-          class="copy-otp-btn"
-          onclick="${handler}"
-          title="Copy OTP to clipboard"
+        <!-- Outer glow layer -->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0"
           style="
-            display:inline-block;
-            padding:9px 20px;
-            background:rgba(255,255,255,0.04);
-            border:1px solid ${accentBorder};
-            border-radius:100px;
-            font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;
-            font-size:12px;
-            font-weight:700;
-            color:${accentColor};
-            letter-spacing:0.6px;
-            text-decoration:none;
-            cursor:pointer;
-          ">&#128203;&nbsp;&nbsp;Copy OTP</a>
+            border-radius:20px;
+            box-shadow:
+              0 0 0 1px ${accentBorder},
+              0 0 32px ${glowColor},
+              0 8px 48px rgba(0,0,0,0.60),
+              inset 0 1px 0 rgba(255,255,255,0.08);
+            background:linear-gradient(145deg,rgba(255,255,255,0.06) 0%,rgba(255,255,255,0.02) 50%,rgba(0,0,0,0.10) 100%);
+          ">
+          <tr>
+            <td
+              class="otp-single-cell"
+              align="center"
+              valign="middle"
+              style="
+                padding:26px 40px;
+                font-family:'Courier New',Courier,monospace;
+                font-size:38px;
+                font-weight:900;
+                color:#ffffff;
+                letter-spacing:16px;
+                text-align:center;
+                white-space:nowrap;
+                line-height:1;
+                mso-line-height-rule:exactly;
+                -webkit-user-select:text;
+                user-select:text;
+                cursor:text;
+                border-radius:20px;
+                background:linear-gradient(145deg,${accentFrom}18,${accentTo}0e);
+                border:1.5px solid ${accentBorder};
+                text-shadow:0 0 24px ${glowColor},0 2px 8px rgba(0,0,0,0.40);
+              ">${code}</td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+    <!-- Select-to-copy hint -->
+    <tr>
+      <td align="center" style="padding-top:12px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+          <tr>
+            <td style="padding:5px 14px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.09);border-radius:100px;">
+              <p style="margin:0;font-size:11px;font-weight:600;color:rgba(255,255,255,0.38);letter-spacing:0.8px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;white-space:nowrap;">&#128072; Tap &amp; hold to select &nbsp;&bull;&nbsp; Triple-click on desktop</p>
+            </td>
+          </tr>
+        </table>
       </td>
     </tr>
   </table>`;
-};
+
 /**
  * Horizontal divider
  */
@@ -490,10 +419,8 @@ export const sendOTPEmail = async (toEmail, otpCode, username = "there") => {
           style="background:rgba(99,102,241,0.07);border:1px solid rgba(99,102,241,0.22);border-radius:20px;margin-bottom:16px;">
           <tr>
             <td style="padding:32px 20px;text-align:center;">
-              <p style="margin:0 0 20px 0;font-size:10px;font-weight:700;color:${T.white40};text-transform:uppercase;letter-spacing:3px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Your Verification Code</p>
-              ${otpRow(otpCode, T.indigo, T.violet, "rgba(99,102,241,0.50)", T.indigo)}
-              ${copyOtpButton(otpCode, "#a5b4fc", "rgba(99,102,241,0.40)")}
-              <p style="margin:14px 0 0 0;font-size:12px;color:${T.white40};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Enter this code exactly as shown</p>
+              <p style="margin:0 0 24px 0;font-size:10px;font-weight:700;color:${T.white40};text-transform:uppercase;letter-spacing:3px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Your Verification Code</p>
+              ${otpSingleBox(otpCode, T.indigo, T.violet, "rgba(99,102,241,0.55)", "rgba(99,102,241,0.40)")}
             </td>
           </tr>
         </table>
@@ -766,10 +693,9 @@ export const sendPasswordResetEmail = async (
           style="background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.22);border-radius:20px;margin-bottom:16px;">
           <tr>
             <td style="padding:32px 20px;text-align:center;">
-              <p style="margin:0 0 20px 0;font-size:10px;font-weight:700;color:${T.white40};text-transform:uppercase;letter-spacing:3px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Password Reset Code</p>
-              ${otpRow(otpCode, T.amber, T.red, "rgba(245,158,11,0.50)", T.amber)}
-              ${copyOtpButton(otpCode, T.amber, "rgba(245,158,11,0.40)")}
-              <p style="margin:14px 0 0 0;font-size:12px;color:${T.white40};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Enter this in the reset password screen</p>
+              <p style="margin:0 0 24px 0;font-size:10px;font-weight:700;color:${T.white40};text-transform:uppercase;letter-spacing:3px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Password Reset Code</p>
+              ${otpSingleBox(otpCode, T.amber, T.red, "rgba(245,158,11,0.55)", "rgba(245,158,11,0.35)")}
+              <p style="margin:16px 0 0 0;font-size:12px;color:${T.white40};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Enter this in the reset password screen</p>
             </td>
           </tr>
         </table>
@@ -789,7 +715,7 @@ export const sendPasswordResetEmail = async (
           <tr><td style="padding:20px 22px;">
             <p style="margin:0 0 14px 0;font-size:13px;font-weight:700;color:${T.white90};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">How to reset your password:</p>
             ${[
-              ["1", "Copy the code above"],
+              ["1", "Select and copy the code above"],
               ["2", "Paste it in the OTP Field and click verify"],
               ["3", "Set your new password"],
               ["4", "You're in — log in with your new credentials"],
@@ -904,7 +830,6 @@ export const sendMeetingReminderEmail = async (
           <tr>
             <td align="center"
               style="background:${T.surface};border:1px solid ${T.surfaceBorder};border-radius:20px;padding:32px 20px;">
-              <!-- Number -->
               <p class="countdown-num"
                 style="margin:0;font-size:80px;font-weight:800;color:${urgencyColor};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1;letter-spacing:-4px;mso-line-height-rule:exactly;">${minutesBefore}</p>
               <p style="margin:8px 0 0 0;font-size:12px;font-weight:700;color:${T.white40};text-transform:uppercase;letter-spacing:3px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Minutes Until Start</p>
@@ -983,17 +908,6 @@ export const sendMeetingReminderEmail = async (
   });
 };
 
-/**
- * sendRecordingReadyEmail — ADD THIS FUNCTION TO YOUR EXISTING sendEmail.js
- *
- * Paste this entire function at the bottom of your sendEmail.js file,
- * just before the `export default { ... }` line.
- * Also add it to the default export object.
- *
- * It uses the same shell(), iconCircle(), ctaButton(), divider(), detailRow(),
- * surfaceBox(), badge(), and T tokens already defined at the top of sendEmail.js.
- */
-
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. RECORDING READY EMAIL
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1036,7 +950,6 @@ export const sendRecordingReadyEmail = async (toEmail, recordingData) => {
 
   const preview = `Your "${meetingTitle}" recording is ready — ${formatDur(durationSec)}`;
 
-  // Mode-based accent color (we use inline hex since T tokens are defined in the outer file)
   const accentColors = {
     screen_voice: {
       from: "#6366f1",
@@ -1063,8 +976,6 @@ export const sendRecordingReadyEmail = async (toEmail, recordingData) => {
     <!-- ══ HEADER ══ -->
     <tr>
       <td class="hdr" style="padding:48px 40px 36px;text-align:center;background:linear-gradient(160deg,rgba(99,102,241,0.18) 0%,rgba(167,139,250,0.10) 55%,transparent 100%);border-radius:24px 24px 0 0;">
-
-        <!-- Animated recording dot icon circle -->
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 20px;">
           <tr>
             <td align="center" valign="middle"
@@ -1082,7 +993,6 @@ export const sendRecordingReadyEmail = async (toEmail, recordingData) => {
           </tr>
         </table>
 
-        <!-- Badge -->
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 14px;">
           <tr>
             <td style="background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.30);border-radius:100px;padding:7px 18px;">
@@ -1100,13 +1010,11 @@ export const sendRecordingReadyEmail = async (toEmail, recordingData) => {
     <tr>
       <td class="body" style="padding:36px 40px;">
 
-        <!-- Greeting -->
         <p style="margin:0 0 8px 0;font-size:18px;font-weight:800;color:#e8eaff;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Hi ${hostName} 🎉</p>
         <p class="body-text" style="margin:0 0 28px 0;font-size:15px;color:rgba(255,255,255,0.55);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.75;">
           Your Lumina Meet recording from <strong style="color:${ac.text};">${meetingTitle}</strong> has been processed and is now available. Click below to view or share it.
         </p>
 
-        <!-- Thumbnail (video only) -->
         ${
           thumbnailUrl
             ? `
@@ -1115,7 +1023,6 @@ export const sendRecordingReadyEmail = async (toEmail, recordingData) => {
             <td style="border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,0.08);">
               <a href="${cloudinaryUrl}" style="display:block;position:relative;line-height:0;">
                 <img src="${thumbnailUrl}" alt="Recording thumbnail" width="100%" style="border-radius:15px;display:block;max-height:200px;object-fit:cover;width:100%;" />
-                <!-- Play button overlay (table-based, Outlook-safe) -->
                 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
                   style="position:absolute;top:0;left:0;right:0;bottom:0;">
                   <tr>
@@ -1138,7 +1045,6 @@ export const sendRecordingReadyEmail = async (toEmail, recordingData) => {
             : ""
         }
 
-        <!-- Recording details card -->
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
           style="background:#161836;border:1px solid #252850;border-radius:18px;margin-bottom:24px;overflow:hidden;">
           <tr>
@@ -1231,7 +1137,6 @@ export const sendRecordingReadyEmail = async (toEmail, recordingData) => {
           </tr>
         </table>
 
-        <!-- Primary CTA -->
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
           <tr>
             <td align="center" style="padding:0;">
@@ -1267,7 +1172,6 @@ export const sendRecordingReadyEmail = async (toEmail, recordingData) => {
           </tr>
         </table>
 
-        <!-- Link fallback -->
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:14px;">
           <tr>
             <td style="background:#161836;border:1px solid #252850;border-radius:12px;padding:14px 18px;text-align:center;">
@@ -1277,7 +1181,6 @@ export const sendRecordingReadyEmail = async (toEmail, recordingData) => {
           </tr>
         </table>
 
-        <!-- Note about dashboard -->
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px;">
           <tr>
             <td style="background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.15);border-radius:14px;padding:16px 20px;">
@@ -1328,27 +1231,10 @@ export const sendRecordingReadyEmail = async (toEmail, recordingData) => {
   });
 };
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // 6. MEETING TITLE CHANGED EMAIL
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * sendMeetingTitleChangedEmail
- *
- * Sent to the meeting host after a successful title rename.
- *
- * @param {string} toEmail        — host's email address
- * @param {object} data
- *   @param {string} data.hostName      — display name / username
- *   @param {string} data.oldTitle      — previous meeting title
- *   @param {string} data.newTitle      — the new meeting title
- *   @param {string} data.meetingId     — e.g. "vm-abc123-xyz"
- *   @param {string} data.meetingLink   — full join URL (unchanged)
- *   @param {string} data.meetingType   — "instant" | "scheduled" | "joined"
- *   @param {string|null} data.scheduledFor — ISO date string or null
- * @returns {Promise<{success: boolean, messageId?: string, error?: string}>}
- */
 export const sendMeetingTitleChangedEmail = async (toEmail, data) => {
   const {
     hostName = "there",
@@ -1381,7 +1267,6 @@ export const sendMeetingTitleChangedEmail = async (toEmail, data) => {
 
   const preview = `Your meeting has been renamed from "${oldTitle}" to "${newTitle}"`;
 
-  // ── Accent palette: violet/indigo rename theme ──────────────────────────
   const acFrom = "#6366f1";
   const acTo = "#a78bfa";
   const acText = "#c4b5fd";
@@ -1393,8 +1278,6 @@ export const sendMeetingTitleChangedEmail = async (toEmail, data) => {
     <!-- ══ HEADER ══ -->
     <tr>
       <td class="hdr" style="padding:48px 40px 36px;text-align:center;background:linear-gradient(160deg,rgba(99,102,241,0.20) 0%,rgba(167,139,250,0.12) 55%,transparent 100%);border-radius:24px 24px 0 0;">
-
-        <!-- Icon circle: pencil / edit -->
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 20px;">
           <tr>
             <td align="center" valign="middle"
@@ -1412,7 +1295,6 @@ export const sendMeetingTitleChangedEmail = async (toEmail, data) => {
           </tr>
         </table>
 
-        <!-- Badge -->
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 16px;">
           <tr>
             <td style="background:${acBg};border:1px solid ${acBorder};border-radius:100px;padding:7px 18px;">
@@ -1430,7 +1312,6 @@ export const sendMeetingTitleChangedEmail = async (toEmail, data) => {
     <tr>
       <td class="body" style="padding:36px 40px;">
 
-        <!-- Greeting -->
         <p style="margin:0 0 8px 0;font-size:18px;font-weight:800;color:#e8eaff;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Hi ${hostName} ✨</p>
         <p class="body-text" style="margin:0 0 28px 0;font-size:15px;color:rgba(255,255,255,0.55);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.75;">
           Your <strong style="color:${acText};">${typeLabel}</strong> has been successfully renamed. Here's a summary of what changed.
@@ -1441,16 +1322,12 @@ export const sendMeetingTitleChangedEmail = async (toEmail, data) => {
           style="margin-bottom:24px;">
           <tr>
             <td style="background:#161836;border:1px solid #252850;border-radius:20px;overflow:hidden;">
-
-              <!-- OLD TITLE -->
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                 <tr>
                   <td style="padding:20px 24px;border-bottom:1px solid rgba(255,255,255,0.06);">
                     <p style="margin:0 0 6px 0;font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);text-transform:uppercase;letter-spacing:2px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Previous title</p>
-                    <!-- Strikethrough effect via text-decoration -->
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                       <tr>
-                        <!-- Red left stripe -->
                         <td valign="top" style="width:3px;background:rgba(239,68,68,0.55);border-radius:2px;padding:0;"></td>
                         <td style="width:12px;"></td>
                         <td valign="middle">
@@ -1462,7 +1339,6 @@ export const sendMeetingTitleChangedEmail = async (toEmail, data) => {
                 </tr>
               </table>
 
-              <!-- Arrow divider -->
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                 <tr>
                   <td align="center" style="padding:10px 24px;background:rgba(99,102,241,0.06);">
@@ -1472,14 +1348,12 @@ export const sendMeetingTitleChangedEmail = async (toEmail, data) => {
                 </tr>
               </table>
 
-              <!-- NEW TITLE -->
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                 <tr>
                   <td style="padding:20px 24px;">
                     <p style="margin:0 0 6px 0;font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);text-transform:uppercase;letter-spacing:2px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">New title</p>
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                       <tr>
-                        <!-- Green left stripe -->
                         <td valign="top" style="width:3px;background:linear-gradient(180deg,${acFrom},${acTo});border-radius:2px;padding:0;"></td>
                         <td style="width:12px;"></td>
                         <td valign="middle">
@@ -1490,7 +1364,6 @@ export const sendMeetingTitleChangedEmail = async (toEmail, data) => {
                   </td>
                 </tr>
               </table>
-
             </td>
           </tr>
         </table>
@@ -1629,7 +1502,6 @@ export const sendMeetingTitleChangedEmail = async (toEmail, data) => {
           </tr>
         </table>
 
-        <!-- Info note about link permanence -->
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:16px;">
           <tr>
             <td style="background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.20);border-radius:14px;padding:16px 20px;">
@@ -1640,7 +1512,6 @@ export const sendMeetingTitleChangedEmail = async (toEmail, data) => {
           </tr>
         </table>
 
-        <!-- Security notice -->
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:14px;">
           <tr>
             <td style="background:rgba(239,68,68,0.06);border-left:4px solid rgba(239,68,68,0.45);border-radius:0 12px 12px 0;padding:14px 18px;">
@@ -1654,7 +1525,6 @@ export const sendMeetingTitleChangedEmail = async (toEmail, data) => {
       </td>
     </tr>
 
-    <!-- ══ DIVIDER ══ -->
     <tr>
       <td style="padding:0 36px;">
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
