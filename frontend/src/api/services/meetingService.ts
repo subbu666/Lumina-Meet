@@ -221,4 +221,21 @@ export const meetingService = {
    */
   deleteMeeting: (meetingId: string): Promise<void> =>
     apiClient.delete(`${API_ENDPOINTS.DELETE_MEETING}/${meetingId}`).then(() => undefined),
+
+  /**
+   * Rename a meeting title.
+   * Works for all types (instant, scheduled, joined).
+   * Only the record owner (host) can call this.
+   * On DUPLICATE_TITLE (409) the error propagates — use extractDuplicateTitle().
+   * On success, a confirmation email is sent to the host automatically.
+   */
+  renameMeeting: (
+    meetingId: string,
+    title: string,
+  ): Promise<{ meetingId: string; oldTitle: string; newTitle: string }> =>
+    apiClient.patch(`${API_ENDPOINTS.RENAME_MEETING}/${meetingId}/rename`, { title }).then((r) => ({
+      meetingId,
+      oldTitle: r.data.data.oldTitle as string,
+      newTitle: r.data.data.newTitle as string,
+    })),
 };

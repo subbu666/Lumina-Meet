@@ -435,7 +435,6 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
                           {[
                             "All session history & usage stats",
                             "Participant records & invite list",
-                            "All Recordings will be unlinked from this meeting and no longer accessible via the dashboard",
                             "Meeting link (no longer joinable)",
                             ...(meeting.sessionCount > 0
                               ? [

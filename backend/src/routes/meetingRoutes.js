@@ -9,10 +9,12 @@ import {
   getMeeting,
   updateMeeting,
   cancelMeeting,
-  deleteMeeting, // ← NEW
+  deleteMeeting,
   getMeetingHistory,
   getUpcomingMeetings,
   endMeeting,
+  renameMeeting,
+  renameMeetingValidation,
   generateMeetingValidation,
   generateAndInviteValidation,
   scheduleMeetingValidation,
@@ -20,7 +22,7 @@ import {
   joinMeetingValidation,
   recordJoinedMeetingValidation,
   historyValidation,
-  deleteMeetingValidation, // ← NEW
+  deleteMeetingValidation,
 } from "../controllers/meetingController.js";
 import {
   getUploadSignature,
@@ -121,12 +123,24 @@ router.get("/upcoming", authenticate, getUpcomingMeetings);
 
 // ── Single meeting CRUD (param routes last) ───────────────────────────────────
 router.get("/:meetingId", authenticate, getMeeting);
+
+// Title-only rename (dedicated endpoint — sends confirmation email)
+// MUST be before /:meetingId to avoid Express treating "rename" as a meetingId value.
+router.patch(
+  "/:meetingId/rename",
+  authenticate,
+  apiRateLimiter,
+  renameMeetingValidation,
+  renameMeeting,
+);
+
+// Full update (title, description, duration, settings, maxParticipants)
 router.patch("/:meetingId", authenticate, updateMeeting);
 
 // DELETE /:meetingId/cancel  — soft cancel (status → "cancelled"), keeps DB record
 router.delete("/:meetingId/cancel", authenticate, cancelMeeting);
 
-// DELETE /:meetingId         — hard delete (removes document from DB entirely)  ← NEW
+// DELETE /:meetingId         — hard delete (removes document from DB entirely)
 router.delete(
   "/:meetingId",
   authenticate,

@@ -1,7 +1,10 @@
 import { validationResult, body, param, query } from "express-validator";
 import Meeting from "../models/Meeting.js";
 import { generateMeetingId } from "../utils/generateOTP.js";
-import { sendMeetingInvitationEmail } from "../utils/sendEmail.js";
+import {
+  sendMeetingInvitationEmail,
+  sendMeetingTitleChangedEmail,
+} from "../utils/sendEmail.js";
 import { APIError, asyncHandler } from "../middlewares/errorHandler.js";
 
 // ─── Validation rules ─────────────────────────────────────────────────────────
@@ -127,6 +130,16 @@ export const historyValidation = [
 
 export const deleteMeetingValidation = [
   param("meetingId").trim().notEmpty().withMessage("Meeting ID is required"),
+];
+
+export const renameMeetingValidation = [
+  param("meetingId").trim().notEmpty().withMessage("Meeting ID is required"),
+  body("title")
+    .trim()
+    .notEmpty()
+    .withMessage("Meeting title is required")
+    .isLength({ max: 200 })
+    .withMessage("Title cannot exceed 200 characters"),
 ];
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
@@ -1097,6 +1110,123 @@ export const deleteMeeting = asyncHandler(async (req, res) => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 11. RENAME MEETING TITLE
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const renameMeeting = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      message: "Validation failed",
+      details: errors.array().reduce((acc, err) => {
+        if (!acc[err.path]) acc[err.path] = [];
+        acc[err.path].push(err.msg);
+        return acc;
+      }, {}),
+    });
+  }
+
+  const { meetingId } = req.params;
+  const { title } = req.body;
+  const userId = req.userId;
+
+  const meeting = await Meeting.findOne({ meetingId });
+  if (!meeting) {
+    throw new APIError(404, "Meeting not found", "MEETING_NOT_FOUND");
+  }
+
+  // Only the owner of the record can rename it.
+  // For "joined" meetings this is the user who saved the link, not the
+  // original room host — that's intentional and correct.
+  if (!meeting.isHost(userId)) {
+    throw new APIError(
+      403,
+      "Only the meeting owner can rename this meeting",
+      "NOT_HOST",
+    );
+  }
+
+  const newTitle = title.trim();
+  const oldTitle = meeting.title;
+
+  // No-op: nothing changed
+  if (newTitle.toLowerCase() === oldTitle.toLowerCase()) {
+    const populated = await Meeting.findById(meeting._id).populate(
+      "host",
+      "username email firstName lastName",
+    );
+    return res.status(200).json({
+      success: true,
+      message: "Title unchanged",
+      data: { meeting: populated.toHostObject() },
+    });
+  }
+
+  // Duplicate-title check — exclude this meeting itself
+  const conflict = await Meeting.findOne({
+    host: userId,
+    title: {
+      $regex: `^${newTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+      $options: "i",
+    },
+    _id: { $ne: meeting._id },
+  });
+
+  if (conflict) {
+    throw new APIError(
+      409,
+      `You already have a meeting titled "${conflict.title}". Please choose a different title.`,
+      "DUPLICATE_TITLE",
+      { conflictingTitle: conflict.title },
+    );
+  }
+
+  // Persist the rename
+  meeting.title = newTitle;
+  await meeting.save();
+
+  // Fire confirmation email (non-fatal — never block the response)
+  const User = (await import("../models/User.js")).default;
+  const host = await User.findById(userId);
+
+  if (host?.email) {
+    sendMeetingTitleChangedEmail(host.email, {
+      hostName: host.fullName || host.username || "there",
+      oldTitle,
+      newTitle,
+      meetingId: meeting.meetingId,
+      meetingLink: meeting.meetingLink,
+      meetingType: meeting.type,
+      scheduledFor: meeting.scheduledFor
+        ? meeting.scheduledFor.toISOString()
+        : null,
+    }).catch((emailErr) => {
+      // Log but never throw — the rename already succeeded
+      console.error(
+        "[renameMeeting] Confirmation email failed:",
+        emailErr.message,
+      );
+    });
+  }
+
+  const populated = await Meeting.findById(meeting._id).populate(
+    "host",
+    "username email firstName lastName",
+  );
+
+  res.status(200).json({
+    success: true,
+    message: "Meeting renamed successfully",
+    data: {
+      meeting: populated.toHostObject(),
+      oldTitle,
+      newTitle,
+    },
+  });
+});
+
 export default {
   generateInstantMeeting,
   generateAndInvite,
@@ -1111,4 +1241,5 @@ export default {
   getUpcomingMeetings,
   endMeeting,
   deleteMeeting,
+  renameMeeting,
 };

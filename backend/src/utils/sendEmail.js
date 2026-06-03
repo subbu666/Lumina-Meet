@@ -1328,10 +1328,375 @@ export const sendRecordingReadyEmail = async (toEmail, recordingData) => {
   });
 };
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. MEETING TITLE CHANGED EMAIL
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * sendMeetingTitleChangedEmail
+ *
+ * Sent to the meeting host after a successful title rename.
+ *
+ * @param {string} toEmail        — host's email address
+ * @param {object} data
+ *   @param {string} data.hostName      — display name / username
+ *   @param {string} data.oldTitle      — previous meeting title
+ *   @param {string} data.newTitle      — the new meeting title
+ *   @param {string} data.meetingId     — e.g. "vm-abc123-xyz"
+ *   @param {string} data.meetingLink   — full join URL (unchanged)
+ *   @param {string} data.meetingType   — "instant" | "scheduled" | "joined"
+ *   @param {string|null} data.scheduledFor — ISO date string or null
+ * @returns {Promise<{success: boolean, messageId?: string, error?: string}>}
+ */
+export const sendMeetingTitleChangedEmail = async (toEmail, data) => {
+  const {
+    hostName = "there",
+    oldTitle,
+    newTitle,
+    meetingId,
+    meetingLink,
+    meetingType = "instant",
+    scheduledFor = null,
+  } = data;
+
+  const scheduledStr = scheduledFor
+    ? new Date(scheduledFor).toLocaleString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZoneName: "short",
+      })
+    : null;
+
+  const typeLabel =
+    meetingType === "scheduled"
+      ? "Scheduled Meeting"
+      : meetingType === "joined"
+        ? "Joined Meeting"
+        : "Instant Meeting";
+
+  const preview = `Your meeting has been renamed from "${oldTitle}" to "${newTitle}"`;
+
+  // ── Accent palette: violet/indigo rename theme ──────────────────────────
+  const acFrom = "#6366f1";
+  const acTo = "#a78bfa";
+  const acText = "#c4b5fd";
+  const acGlow = "rgba(99,102,241,0.35)";
+  const acBg = "rgba(99,102,241,0.08)";
+  const acBorder = "rgba(99,102,241,0.25)";
+
+  const inner = `
+    <!-- ══ HEADER ══ -->
+    <tr>
+      <td class="hdr" style="padding:48px 40px 36px;text-align:center;background:linear-gradient(160deg,rgba(99,102,241,0.20) 0%,rgba(167,139,250,0.12) 55%,transparent 100%);border-radius:24px 24px 0 0;">
+
+        <!-- Icon circle: pencil / edit -->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 20px;">
+          <tr>
+            <td align="center" valign="middle"
+              style="
+                width:64px;height:64px;
+                background:linear-gradient(135deg,${acFrom},${acTo});
+                border-radius:20px;
+                box-shadow:0 12px 36px ${acGlow};
+                font-size:30px;
+                text-align:center;
+                vertical-align:middle;
+                line-height:64px;
+                mso-line-height-rule:exactly;
+              ">&#9999;&#65039;</td>
+          </tr>
+        </table>
+
+        <!-- Badge -->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 16px;">
+          <tr>
+            <td style="background:${acBg};border:1px solid ${acBorder};border-radius:100px;padding:7px 18px;">
+              <p style="margin:0;font-size:12px;font-weight:700;color:${acText};letter-spacing:0.8px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;white-space:nowrap;">&#9679;&nbsp; Meeting Title Updated</p>
+            </td>
+          </tr>
+        </table>
+
+        <p class="title-text" style="margin:0 0 8px 0;font-size:26px;font-weight:800;color:#e8eaff;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;letter-spacing:-0.5px;">Your meeting has a new name</p>
+        <p style="margin:0;font-size:14px;color:rgba(255,255,255,0.50);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Title updated successfully — your link is unchanged</p>
+      </td>
+    </tr>
+
+    <!-- ══ BODY ══ -->
+    <tr>
+      <td class="body" style="padding:36px 40px;">
+
+        <!-- Greeting -->
+        <p style="margin:0 0 8px 0;font-size:18px;font-weight:800;color:#e8eaff;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Hi ${hostName} ✨</p>
+        <p class="body-text" style="margin:0 0 28px 0;font-size:15px;color:rgba(255,255,255,0.55);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.75;">
+          Your <strong style="color:${acText};">${typeLabel}</strong> has been successfully renamed. Here's a summary of what changed.
+        </p>
+
+        <!-- Before → After card -->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+          style="margin-bottom:24px;">
+          <tr>
+            <td style="background:#161836;border:1px solid #252850;border-radius:20px;overflow:hidden;">
+
+              <!-- OLD TITLE -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td style="padding:20px 24px;border-bottom:1px solid rgba(255,255,255,0.06);">
+                    <p style="margin:0 0 6px 0;font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);text-transform:uppercase;letter-spacing:2px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Previous title</p>
+                    <!-- Strikethrough effect via text-decoration -->
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                      <tr>
+                        <!-- Red left stripe -->
+                        <td valign="top" style="width:3px;background:rgba(239,68,68,0.55);border-radius:2px;padding:0;"></td>
+                        <td style="width:12px;"></td>
+                        <td valign="middle">
+                          <p style="margin:0;font-size:16px;font-weight:700;color:rgba(255,255,255,0.40);text-decoration:line-through;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;text-decoration-color:rgba(239,68,68,0.6);">${oldTitle}</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Arrow divider -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td align="center" style="padding:10px 24px;background:rgba(99,102,241,0.06);">
+                    <p style="margin:0;font-size:20px;line-height:1;">&#8595;</p>
+                    <p style="margin:2px 0 0 0;font-size:10px;font-weight:700;color:${acText};text-transform:uppercase;letter-spacing:2px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Renamed to</p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- NEW TITLE -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td style="padding:20px 24px;">
+                    <p style="margin:0 0 6px 0;font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);text-transform:uppercase;letter-spacing:2px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">New title</p>
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                      <tr>
+                        <!-- Green left stripe -->
+                        <td valign="top" style="width:3px;background:linear-gradient(180deg,${acFrom},${acTo});border-radius:2px;padding:0;"></td>
+                        <td style="width:12px;"></td>
+                        <td valign="middle">
+                          <p style="margin:0;font-size:18px;font-weight:800;color:#e8eaff;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">${newTitle}</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+            </td>
+          </tr>
+        </table>
+
+        <!-- Meeting details card -->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+          style="background:#161836;border:1px solid #252850;border-radius:18px;margin-bottom:24px;overflow:hidden;">
+          <tr>
+            <td style="padding:16px 20px;border-bottom:1px solid #252850;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td class="detail-icon" valign="middle" style="width:48px;padding-right:12px;vertical-align:middle;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" valign="middle"
+                          style="width:40px;height:40px;background:${acBg};border-radius:10px;font-size:18px;text-align:center;vertical-align:middle;line-height:40px;mso-line-height-rule:exactly;">
+                          &#128279;
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td class="detail-pad" valign="middle" style="vertical-align:middle;">
+                    <p style="margin:0 0 2px 0;font-size:10px;font-weight:700;color:rgba(255,255,255,0.40);text-transform:uppercase;letter-spacing:1.5px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Meeting ID</p>
+                    <p style="margin:0;font-size:14px;font-weight:700;color:#e8eaff;font-family:'Courier New',Courier,monospace;">${meetingId}</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 20px;border-bottom:1px solid #252850;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td class="detail-icon" valign="middle" style="width:48px;padding-right:12px;vertical-align:middle;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" valign="middle"
+                          style="width:40px;height:40px;background:rgba(16,185,129,0.12);border-radius:10px;font-size:18px;text-align:center;vertical-align:middle;line-height:40px;mso-line-height-rule:exactly;">
+                          &#128279;
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td class="detail-pad" valign="middle" style="vertical-align:middle;">
+                    <p style="margin:0 0 2px 0;font-size:10px;font-weight:700;color:rgba(255,255,255,0.40);text-transform:uppercase;letter-spacing:1.5px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Meeting link (unchanged)</p>
+                    <p style="margin:0;font-size:12px;font-weight:600;color:#6ee7b7;font-family:'Courier New',Courier,monospace;word-break:break-all;">${meetingLink}</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          ${
+            scheduledStr
+              ? `
+          <tr>
+            <td style="padding:16px 20px;border-bottom:1px solid #252850;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td class="detail-icon" valign="middle" style="width:48px;padding-right:12px;vertical-align:middle;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" valign="middle"
+                          style="width:40px;height:40px;background:rgba(245,158,11,0.12);border-radius:10px;font-size:18px;text-align:center;vertical-align:middle;line-height:40px;mso-line-height-rule:exactly;">
+                          &#128197;
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td class="detail-pad" valign="middle" style="vertical-align:middle;">
+                    <p style="margin:0 0 2px 0;font-size:10px;font-weight:700;color:rgba(255,255,255,0.40);text-transform:uppercase;letter-spacing:1.5px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Scheduled for</p>
+                    <p style="margin:0;font-size:14px;font-weight:700;color:#e8eaff;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">${scheduledStr}</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>`
+              : ""
+          }
+          <tr>
+            <td style="padding:16px 20px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td class="detail-icon" valign="middle" style="width:48px;padding-right:12px;vertical-align:middle;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" valign="middle"
+                          style="width:40px;height:40px;background:rgba(167,139,250,0.12);border-radius:10px;font-size:18px;text-align:center;vertical-align:middle;line-height:40px;mso-line-height-rule:exactly;">
+                          &#127909;
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td class="detail-pad" valign="middle" style="vertical-align:middle;">
+                    <p style="margin:0 0 2px 0;font-size:10px;font-weight:700;color:rgba(255,255,255,0.40);text-transform:uppercase;letter-spacing:1.5px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Meeting type</p>
+                    <p style="margin:0;font-size:14px;font-weight:700;color:${acText};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">${typeLabel}</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+
+        <!-- CTA -->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+          <tr>
+            <td align="center" style="padding:0;">
+              <!--[if mso]>
+              <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word"
+                href="${meetingLink}" style="height:54px;v-text-anchor:middle;width:400px;" arcsize="15%"
+                strokecolor="${acTo}" fillcolor="${acFrom}">
+                <w:anchorlock/>
+                <center style="color:#ffffff;font-family:sans-serif;font-size:16px;font-weight:800;">&#127909;&nbsp;&nbsp;Open Meeting</center>
+              </v:roundrect>
+              <![endif]-->
+              <!--[if !mso]><!-->
+              <a href="${meetingLink}" class="btn-cta"
+                style="
+                  display:inline-block;
+                  width:100%;
+                  max-width:400px;
+                  padding:18px 24px;
+                  background:linear-gradient(135deg,${acFrom},${acTo});
+                  color:#ffffff;
+                  font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;
+                  font-size:16px;
+                  font-weight:800;
+                  text-align:center;
+                  text-decoration:none;
+                  border-radius:14px;
+                  box-shadow:0 10px 32px ${acGlow};
+                  letter-spacing:0.4px;
+                  box-sizing:border-box;
+                ">&#127909;&nbsp;&nbsp;Open Meeting</a>
+              <!--<![endif]-->
+            </td>
+          </tr>
+        </table>
+
+        <!-- Info note about link permanence -->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:16px;">
+          <tr>
+            <td style="background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.20);border-radius:14px;padding:16px 20px;">
+              <p style="margin:0;font-size:13px;color:rgba(255,255,255,0.55);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.7;">
+                &#128274;&nbsp; <strong style="color:#6ee7b7;">Your meeting link stays the same.</strong> Anyone with the existing link can still join — no need to reshare it.
+              </p>
+            </td>
+          </tr>
+        </table>
+
+        <!-- Security notice -->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:14px;">
+          <tr>
+            <td style="background:rgba(239,68,68,0.06);border-left:4px solid rgba(239,68,68,0.45);border-radius:0 12px 12px 0;padding:14px 18px;">
+              <p style="margin:0;font-size:12px;color:rgba(255,255,255,0.50);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.65;">
+                If you did not make this change, please secure your account immediately by resetting your password.
+              </p>
+            </td>
+          </tr>
+        </table>
+
+      </td>
+    </tr>
+
+    <!-- ══ DIVIDER ══ -->
+    <tr>
+      <td style="padding:0 36px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+          <tr>
+            <td style="height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.10),transparent);font-size:0;line-height:0;">&nbsp;</td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+
+    <!-- ══ FOOTER ══ -->
+    <tr>
+      <td class="ftr" style="padding:22px 40px 30px;text-align:center;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 14px;">
+          <tr>
+            <td style="width:6px;height:6px;background:${acFrom};border-radius:50%;"></td>
+            <td style="width:8px;"></td>
+            <td style="width:6px;height:6px;background:${acTo};border-radius:50%;opacity:0.6;"></td>
+            <td style="width:8px;"></td>
+            <td style="width:6px;height:6px;background:#22d3ee;border-radius:50%;opacity:0.35;"></td>
+          </tr>
+        </table>
+        <p style="margin:0;font-size:12px;color:rgba(255,255,255,0.25);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.8;">
+          This confirmation was sent to ${toEmail} because you renamed a Lumina Meet meeting.<br>
+          Manage your <a href="#" style="color:rgba(255,255,255,0.40);text-decoration:underline;">notification preferences</a>.
+        </p>
+      </td>
+    </tr>`;
+
+  return sendEmail({
+    to: toEmail,
+    subject: `Meeting Renamed: "${newTitle}" — Lumina Meet`,
+    html: shell(inner, preview),
+    text: `Hi ${hostName},\n\nYour meeting has been renamed.\n\nPrevious title: ${oldTitle}\nNew title: ${newTitle}\n\nMeeting ID: ${meetingId}\nMeeting link (unchanged): ${meetingLink}${scheduledStr ? `\nScheduled for: ${scheduledStr}` : ""}\n\nYour link remains the same — no need to reshare it.\n\nIf you did not make this change, please secure your account.`,
+  });
+};
+
 export default {
   sendOTPEmail,
   sendMeetingInvitationEmail,
   sendPasswordResetEmail,
   sendMeetingReminderEmail,
   sendRecordingReadyEmail,
+  sendMeetingTitleChangedEmail,
 };

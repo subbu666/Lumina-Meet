@@ -24,6 +24,11 @@ export const API_ENDPOINTS = {
    * Only the host can delete. Active meetings cannot be deleted (end them first).
    */
   DELETE_MEETING: "/api/meeting",
+  /**
+   * Rename a meeting title (sends confirmation email).
+   * Usage: apiClient.patch(`${API_ENDPOINTS.RENAME_MEETING}/${meetingId}/rename`, { title })
+   */
+  RENAME_MEETING: "/api/meeting",
 
   // ── Recordings ─────────────────────────────────────────────────────────────
   /** Get Cloudinary signed upload params — POST { meetingId, mode, durationSec, fileType } */

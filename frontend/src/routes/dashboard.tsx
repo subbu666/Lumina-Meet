@@ -9,6 +9,7 @@
  *   - InviteDialog receives duplicateTitle + onRetry props.
  *   - join() flow: if DUPLICATE_TITLE 409 on recordJoined, opens modal; on retry
  *     re-calls with the new title and then navigates.
+ *   - RenameMeetingModal added for inline title editing from the history list.
  *   - All other code is identical to the previous version.
  */
 
@@ -35,6 +36,7 @@ import {
   ExternalLink,
   RefreshCw,
   Trash2,
+  Pencil,
   Mic2,
   MonitorSmartphone,
   Monitor,
@@ -52,6 +54,7 @@ import { FloatingInput } from "@/components/ui-custom/FloatingInput";
 import { MeetingGenerationModal } from "@/components/modals/MeetingGenerationModal";
 import { DeleteMeetingModal } from "@/components/modals/DeleteMeetingModal";
 import { DuplicateTitleModal } from "@/components/modals/DuplicateTitleModal";
+import { RenameMeetingModal } from "@/components/modals/RenameMeetingModal";
 import {
   meetingService,
   extractDuplicateTitle,
@@ -624,6 +627,9 @@ function Dashboard() {
   // ── Delete modal state ──────────────────────────────────────────────────────
   const [deleteTarget, setDeleteTarget] = useState<MeetingGroup | null>(null);
 
+  // ── Rename modal state ──────────────────────────────────────────────────────
+  const [renameTarget, setRenameTarget] = useState<MeetingGroup | null>(null);
+
   // ── Duplicate title state ───────────────────────────────────────────────────
   // duplicateTitle   — the exact conflicting title from the server (drives modal open)
   // pendingAction    — what to retry once the user picks a new title
@@ -779,6 +785,23 @@ function Dashboard() {
 
   const handleDeleteClose = () => setDeleteTarget(null);
 
+  // ── Rename handlers ─────────────────────────────────────────────────────────
+
+  const handleRenameRequest = (group: MeetingGroup) => {
+    setRenameTarget(group);
+  };
+
+  const handleRenameSuccess = (meetingId: string, newTitle: string) => {
+    // Optimistically update local state so the dashboard reflects the rename
+    // immediately without waiting for a full history refetch.
+    setGroups((prev) =>
+      prev.map((g) => (g.meetingId === meetingId ? { ...g, title: newTitle } : g)),
+    );
+    setRenameTarget(null);
+  };
+
+  const handleRenameClose = () => setRenameTarget(null);
+
   if (!user?.username) return null;
 
   const displayName = user.username;
@@ -907,6 +930,7 @@ function Dashboard() {
                           group={group}
                           index={i}
                           onDeleteRequest={handleDeleteRequest}
+                          onRenameRequest={handleRenameRequest}
                         />
                       ))}
                     </ul>
@@ -987,6 +1011,14 @@ function Dashboard() {
         meeting={deleteTarget}
         onClose={handleDeleteClose}
         onConfirm={handleDeleteConfirm}
+      />
+
+      {/* Rename meeting modal */}
+      <RenameMeetingModal
+        open={renameTarget !== null}
+        meeting={renameTarget}
+        onClose={handleRenameClose}
+        onSuccess={handleRenameSuccess}
       />
 
       {/*
@@ -1190,10 +1222,12 @@ function MeetingGroupRow({
   group,
   index,
   onDeleteRequest,
+  onRenameRequest,
 }: {
   group: MeetingGroup;
   index: number;
   onDeleteRequest: (group: MeetingGroup) => void;
+  onRenameRequest: (group: MeetingGroup) => void;
 }) {
   const [open, setOpen] = useState(false);
   const hasSessions = group.supportsMultipleSessions && group.sessions.length > 0;
@@ -1279,8 +1313,32 @@ function MeetingGroupRow({
             )}
           </div>
         </div>
+
+        {/* ── Row action buttons ───────────────────────────────────────── */}
         <div className="flex items-center gap-2 flex-shrink-0">
           <MeetingCTA group={group} />
+
+          {/* Rename button — appears on row hover for ALL meeting types */}
+          <motion.button
+            onClick={(e) => {
+              e.stopPropagation();
+              onRenameRequest(group);
+            }}
+            title="Rename meeting"
+            aria-label="Rename meeting"
+            className={cn(
+              "flex h-7 w-7 items-center justify-center rounded-lg border transition-all duration-150",
+              "opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100",
+              "border-white/10 bg-transparent text-muted-foreground/50",
+              "hover:border-[oklch(0.65_0.22_280/0.45)] hover:bg-[oklch(0.65_0.22_280/0.12)] hover:text-[var(--neon-primary)]",
+              "active:scale-[0.93]",
+            )}
+            whileTap={{ scale: 0.9 }}
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </motion.button>
+
+          {/* Delete button — unchanged */}
           <motion.button
             onClick={(e) => {
               e.stopPropagation();
