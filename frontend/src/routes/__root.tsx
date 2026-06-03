@@ -69,6 +69,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
 
+      // ── SEO verification tag (Google) ───────────────────────
+      { name: "google-site-verification", content: "cda-1J3zM-EProWfhmaORXCcCeCpKBteklmb46UR7sA" },
+
       // ── Primary SEO ─────────────────────────────────────────────
       { title: "Lumina Meet — Real-time meetings, beautifully fast" },
       {
