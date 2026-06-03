@@ -30,7 +30,7 @@ src/
 ├── components/
 │   ├── auth/AuthShell.tsx      # Shared shell for sign-in surfaces
 │   ├── effects/                # Particle background
-│   ├── modals/                 # Generation, Welcome, RateLimit, Recording, Rename dialogs,
+│   ├── modals/                 # Generation, Welcome, RateLimit, Recording, Rename, Delete dialogs,
 │   ├── ui/                     # shadcn primitives
 │   └── ui-custom/              # NeonButton, FloatingInput, OtpInput, PasswordStrength
 │
