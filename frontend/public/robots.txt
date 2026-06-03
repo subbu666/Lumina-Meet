@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /dashboard
+Disallow: /meeting/
+Disallow: /api/
+
+Sitemap: https://lumina-meet.app/sitemap.xml

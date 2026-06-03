@@ -465,8 +465,26 @@ export const Route = createFileRoute("/")({
   component: Landing,
   head: () => ({
     meta: [
-      { title: "Lumina Meet — Real-time meetings" },
-      { name: "description", content: "Premium video meeting platform with cinematic UX." },
+      { title: "Lumina Meet — Cinematic Video Meetings for Modern Teams" },
+      {
+        name: "description",
+        content:
+          "Spin up a P2P video room in under 5 seconds. AI noise suppression, background blur, collaborative whiteboard, live polls, ambient soundscapes, and cloud recording — free to start.",
+      },
+      // OG overrides for the landing page specifically
+      { property: "og:title", content: "Lumina Meet — Cinematic Video Meetings for Modern Teams" },
+      {
+        property: "og:description",
+        content:
+          "Spin up a P2P video room in under 5 seconds. Whiteboard, polls, noise suppression, cloud recording. Free to start.",
+      },
+      { property: "og:url", content: import.meta.env.VITE_SITE_URL },
+      // Landing page IS indexable — no noindex needed
+      { name: "robots", content: "index, follow" },
+    ],
+    links: [
+      // Self-referencing canonical for the landing page
+      { rel: "canonical", href: import.meta.env.VITE_SITE_URL },
     ],
   }),
 });

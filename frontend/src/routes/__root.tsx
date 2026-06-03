@@ -57,23 +57,116 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   );
 }
 
+// ─── Canonical origin ─────────────────────────────────────────────
+// Replace with your real domain once you deploy.
+const SITE_URL = import.meta.env.VITE_SITE_URL;
+const OG_IMAGE = `${SITE_URL}/og-image.png`; // 1200×630 — create this separately
+
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   head: () => ({
     meta: [
+      // ── Charset + viewport ──────────────────────────────────────
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
+
+      // ── Primary SEO ─────────────────────────────────────────────
       { title: "Lumina Meet — Real-time meetings, beautifully fast" },
       {
         name: "description",
-        content: "Premium video meetings with end-to-end encryption, scheduling, and cinematic UX.",
+        content:
+          "Secure P2P video meetings with AI noise suppression, background blur, whiteboard, live polls, ambient soundscapes, and cloud recording.",
       },
-      { name: "theme-color", content: "#0B0F19" },
-      { property: "og:title", content: "Lumina Meet — Real-time meetings" },
-      { property: "og:description", content: "Premium video meetings with cinematic UX." },
+      {
+        name: "keywords",
+        content:
+          "video meetings, WebRTC, noise suppression, background blur, whiteboard, cloud recording, team collaboration",
+      },
+      { name: "author", content: "Saladi Subrahmanyam" },
+      { name: "robots", content: "index, follow" },
+
+      // ── Theme ───────────────────────────────────────────────────
+      { name: "theme-color", content: "#6366f1" },
+      { name: "color-scheme", content: "dark" },
+      { name: "application-name", content: "Lumina Meet" },
+
+      // ── Open Graph ──────────────────────────────────────────────
       { property: "og:type", content: "website" },
+      { property: "og:site_name", content: "Lumina Meet" },
+      { property: "og:title", content: "Lumina Meet — Real-time meetings, beautifully fast" },
+      {
+        property: "og:description",
+        content:
+          "Secure P2P video meetings with AI noise suppression, background blur, whiteboard, live polls, and cloud recording.",
+      },
+      { property: "og:url", content: SITE_URL },
+      { property: "og:image", content: OG_IMAGE },
+      { property: "og:image:width", content: "1200" },
+      { property: "og:image:height", content: "630" },
+      { property: "og:image:alt", content: "Lumina Meet — cinematic video meetings" },
+
+      // ── Twitter / X ─────────────────────────────────────────────
       { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:title", content: "Lumina Meet — Real-time meetings, beautifully fast" },
+      {
+        name: "twitter:description",
+        content:
+          "Secure P2P video meetings with AI noise suppression, whiteboard, polls, and cloud recording.",
+      },
+      { name: "twitter:image", content: OG_IMAGE },
+      { name: "twitter:image:alt", content: "Lumina Meet interface" },
     ],
-    links: [{ rel: "stylesheet", href: appCss }],
+    links: [
+      { rel: "stylesheet", href: appCss },
+
+      // ── Favicon suite ───────────────────────────────────────────
+      // Priority order: browsers pick the best match top-to-bottom.
+      { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
+      { rel: "icon", href: "/favicon.ico", sizes: "any" },
+      { rel: "icon", href: "/favicon-16x16.png", type: "image/png", sizes: "16x16" },
+      { rel: "icon", href: "/favicon-32x32.png", type: "image/png", sizes: "32x32" },
+      { rel: "apple-touch-icon", href: "/apple-touch-icon.png", sizes: "180x180" },
+      { rel: "manifest", href: "/site.webmanifest" },
+      { rel: "canonical", href: SITE_URL },
+
+      // ── Preconnect for perf ─────────────────────────────────────
+      { rel: "preconnect", href: "https://res.cloudinary.com" },
+    ],
+    scripts: [
+      // ── JSON-LD structured data ─────────────────────────────────
+      {
+        type: "application/ld+json",
+        children: JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "SoftwareApplication",
+          name: "Lumina Meet",
+          applicationCategory: "BusinessApplication",
+          operatingSystem: "Web",
+          description:
+            "Secure P2P video meetings with AI noise suppression, background blur, whiteboard, live polls, ambient soundscapes, and cloud recording.",
+          url: SITE_URL,
+          logo: `${SITE_URL}/favicon.svg`,
+          author: {
+            "@type": "Person",
+            name: "Saladi Subrahmanyam",
+          },
+          offers: {
+            "@type": "Offer",
+            price: "0",
+            priceCurrency: "USD",
+          },
+          featureList: [
+            "WebRTC P2P video",
+            "AI noise suppression",
+            "Background blur",
+            "Collaborative whiteboard",
+            "Live polls",
+            "Ambient soundscapes",
+            "Cloud recording",
+            "Meeting lobby",
+          ],
+        }),
+      },
+    ],
   }),
   shellComponent: RootShell,
   component: RootComponent,
