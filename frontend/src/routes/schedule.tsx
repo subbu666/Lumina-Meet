@@ -1,4 +1,4 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { format } from "date-fns";
@@ -8,7 +8,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar";
 import { FloatingInput } from "@/components/ui-custom/FloatingInput";
 import { NeonButton } from "@/components/ui-custom/NeonButton";
-import { meetingService } from "@/api/services/meetingService";
+import { DuplicateTitleModal } from "@/components/modals/DuplicateTitleModal";
+import { meetingService, extractDuplicateTitle } from "@/api/services/meetingService";
 import { extractError } from "@/api/apiClient";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +20,8 @@ export const Route = createFileRoute("/schedule")({
 
 function SchedulePage() {
   const navigate = useNavigate();
+
+  // ── Form state ───────────────────────────────────────────────────────────────
   const [title, setTitle] = useState("");
   const [date, setDate] = useState<Date | undefined>(new Date());
   const [time, setTime] = useState("10:00");
@@ -26,9 +29,17 @@ function SchedulePage() {
   const [result, setResult] = useState<{ link: string; scheduledFor: number } | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const submit = async () => {
-    if (!title.trim()) return toast.error("Add a title");
+  // ── Duplicate title state ────────────────────────────────────────────────────
+  const [dupModalOpen, setDupModalOpen] = useState(false);
+  const [dupConflictingTitle, setDupConflictingTitle] = useState("");
+
+  // ── Core submit — accepts an optional title override for retries ─────────────
+  const submit = async (titleOverride?: string) => {
+    const resolvedTitle = (titleOverride ?? title).trim();
+
+    if (!resolvedTitle) return toast.error("Add a title");
     if (!date) return toast.error("Pick a date");
+
     const [h, m] = time.split(":").map(Number);
     const scheduled = new Date(date);
     scheduled.setHours(h, m, 0, 0);
@@ -36,15 +47,11 @@ function SchedulePage() {
 
     setLoading(true);
     try {
-      // FIX: send ISO 8601 string — backend validator uses .isISO8601()
-      // Previously: scheduledFor: scheduled.getTime()  ← number, caused 400
       const res = await meetingService.schedule({
-        title,
+        title: resolvedTitle,
         scheduledFor: scheduled.toISOString(),
       });
 
-      // FIX: meetingService.schedule returns { link, meeting }
-      // scheduledFor lives inside res.meeting, not at the top level
       const scheduledForMs = res.meeting?.scheduledFor
         ? new Date(res.meeting.scheduledFor).getTime()
         : scheduled.getTime();
@@ -52,10 +59,29 @@ function SchedulePage() {
       setResult({ link: res.link, scheduledFor: scheduledForMs });
       toast.success("Meeting scheduled");
     } catch (err) {
+      // ── DUPLICATE_TITLE 409 — open the rename modal ────────────────────────
+      const conflicting = extractDuplicateTitle(err);
+      if (conflicting) {
+        setDupConflictingTitle(conflicting);
+        setDupModalOpen(true);
+        return; // don't show a generic toast
+      }
+
       toast.error(extractError(err).message);
     } finally {
       setLoading(false);
     }
+  };
+
+  /**
+   * Called by DuplicateTitleModal when the user picks a new title.
+   * Update the form field so it stays in sync, then re-submit with the new title.
+   */
+  const handleDupRetry = (newTitle: string) => {
+    setDupModalOpen(false);
+    setDupConflictingTitle("");
+    setTitle(newTitle); // keep the input in sync
+    submit(newTitle);
   };
 
   const copy = async () => {
@@ -128,7 +154,7 @@ function SchedulePage() {
               </div>
             </div>
 
-            <NeonButton fullWidth loading={loading} onClick={submit}>
+            <NeonButton fullWidth loading={loading} onClick={() => submit()}>
               {loading ? "Scheduling…" : "Schedule meeting"}
             </NeonButton>
           </div>
@@ -162,22 +188,30 @@ function SchedulePage() {
                   )}
                 </button>
               </div>
-              <div className="mt-3 flex gap-2">
-                <Link
-                  to="/meeting/$id"
-                  params={{ id: result.link.split("/").pop()! }}
-                  search={{ scheduledFor: result.scheduledFor }}
-                  className="flex-1"
+              <div className="mt-3">
+                <NeonButton
+                  variant="outline"
+                  fullWidth
+                  onClick={() => result.link && window.open(result.link, "_blank")}
                 >
-                  <NeonButton variant="outline" fullWidth>
-                    Open meeting page
-                  </NeonButton>
-                </Link>
+                  Open meeting page
+                </NeonButton>
               </div>
             </motion.div>
           )}
         </motion.div>
       </div>
+
+      {/* ── Duplicate Title Modal ──────────────────────────────────────────────── */}
+      <DuplicateTitleModal
+        open={dupModalOpen}
+        conflictingTitle={dupConflictingTitle}
+        onRetry={handleDupRetry}
+        onClose={() => {
+          setDupModalOpen(false);
+          setDupConflictingTitle("");
+        }}
+      />
     </main>
   );
 }

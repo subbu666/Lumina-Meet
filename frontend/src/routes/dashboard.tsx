@@ -1,10 +1,14 @@
 /**
  * dashboard.tsx — Lumina Meet Dashboard
  *
- * CHANGES vs previous version:
- *   - Delete meeting: each MeetingGroupRow now has a trash icon button.
- *   - DeleteMeetingModal is wired up: open → confirm → optimistic removal from state.
- *   - Active meetings block deletion with a clear toast (end the meeting first).
+ * CHANGES in this version:
+ *   - Duplicate-title detection for instant meetings (handleGenerate),
+ *     generate-and-invite (send), and join-via-link (join).
+ *   - duplicateTitle / pendingAction state drives DuplicateTitleModal open/close.
+ *   - MeetingGenerationModal receives duplicateTitle + onRetry props.
+ *   - InviteDialog receives duplicateTitle + onRetry props.
+ *   - join() flow: if DUPLICATE_TITLE 409 on recordJoined, opens modal; on retry
+ *     re-calls with the new title and then navigates.
  *   - All other code is identical to the previous version.
  */
 
@@ -31,7 +35,6 @@ import {
   ExternalLink,
   RefreshCw,
   Trash2,
-  // RecordingsTab icons
   Mic2,
   MonitorSmartphone,
   Monitor,
@@ -48,7 +51,13 @@ import { NeonButton } from "@/components/ui-custom/NeonButton";
 import { FloatingInput } from "@/components/ui-custom/FloatingInput";
 import { MeetingGenerationModal } from "@/components/modals/MeetingGenerationModal";
 import { DeleteMeetingModal } from "@/components/modals/DeleteMeetingModal";
-import { meetingService, type MeetingGroup, formatDuration } from "@/api/services/meetingService";
+import { DuplicateTitleModal } from "@/components/modals/DuplicateTitleModal";
+import {
+  meetingService,
+  extractDuplicateTitle,
+  type MeetingGroup,
+  formatDuration,
+} from "@/api/services/meetingService";
 import { extractError } from "@/api/apiClient";
 import { apiClient } from "@/api/apiClient";
 import { API_ENDPOINTS } from "@/api/endpoints";
@@ -101,14 +110,14 @@ function shortDate(ms: number): string {
 
 function isScheduledExpired(group: MeetingGroup): boolean {
   if (group.type !== "scheduled" || !group.scheduledFor) return false;
-  if (group.status === "cancelled" || group.status === "completed") return true;
+  if ((group as any).status === "cancelled" || (group as any).status === "completed") return true;
   const durationMs = ((group as any).duration ?? 60) * 60 * 1000;
   return Date.now() > group.scheduledFor + durationMs;
 }
 
 function isScheduledUpcoming(group: MeetingGroup): boolean {
   if (group.type !== "scheduled" || !group.scheduledFor) return false;
-  if (group.status === "active") return false;
+  if (group.isActive) return false;
   return !isScheduledExpired(group);
 }
 
@@ -139,13 +148,11 @@ function IconBtn({
 }) {
   const base =
     "inline-flex items-center gap-1.5 font-medium rounded-lg transition-all duration-150 select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1";
-
   const sizes: Record<string, string> = {
     xs: "px-2 py-1 text-[11px]",
     sm: "px-3 py-1.5 text-xs",
     md: "px-4 py-2 text-sm",
   };
-
   const variants: Record<IconBtnVariant, string> = {
     primary:
       "bg-gradient-neon text-white shadow-[0_4px_20px_-6px_oklch(0.65_0.22_280/0.6)] hover:shadow-[0_6px_28px_-6px_oklch(0.65_0.22_280/0.8)] hover:brightness-110 active:scale-[0.97]",
@@ -158,7 +165,6 @@ function IconBtn({
     expired:
       "bg-[oklch(0.72_0.22_35/0.08)] border border-[oklch(0.72_0.22_35/0.2)] text-[oklch(0.72_0.22_35/0.7)] cursor-not-allowed",
   };
-
   return (
     <Tag
       onClick={disabled ? undefined : onClick}
@@ -239,10 +245,7 @@ function formatDate(ts: number): string {
 }
 
 function formatTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return new Date(ts).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 }
 
 function groupByMeeting(
@@ -268,14 +271,12 @@ function groupByMeeting(
 function RecordingCard({ recording, index }: { recording: RecordingEntry; index: number }) {
   const [copied, setCopied] = useState(false);
   const meta = MODE_META[recording.mode];
-
   const handleCopy = () => {
     navigator.clipboard.writeText(recording.cloudinaryUrl).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
     });
   };
-
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
@@ -284,7 +285,6 @@ function RecordingCard({ recording, index }: { recording: RecordingEntry; index:
       className="group relative overflow-hidden rounded-2xl border border-white/8 bg-white/3 hover:border-white/14 hover:bg-white/5 transition-all duration-200"
     >
       <div className="absolute top-0 left-0 right-0 h-px opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-gradient-to-r from-transparent via-[var(--neon-primary)] to-transparent" />
-
       <div className="flex gap-4 p-4">
         <div className="shrink-0">
           {recording.thumbnailUrl && recording.mode !== "voice" ? (
@@ -315,7 +315,6 @@ function RecordingCard({ recording, index }: { recording: RecordingEntry; index:
             </div>
           )}
         </div>
-
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap mb-1.5">
             <span
@@ -329,7 +328,6 @@ function RecordingCard({ recording, index }: { recording: RecordingEntry; index:
               {formatDate(recording.createdAt)} at {formatTime(recording.createdAt)}
             </span>
           </div>
-
           <div className="flex items-center gap-4 mb-2.5">
             <div className="flex items-center gap-1 text-[12px] text-muted-foreground">
               <Clock className="h-3 w-3 shrink-0" />
@@ -340,7 +338,6 @@ function RecordingCard({ recording, index }: { recording: RecordingEntry; index:
               <span>{formatFileSize(recording.fileSizeBytes)}</span>
             </div>
           </div>
-
           <div className="flex items-center gap-2">
             <div className="flex-1 min-w-0 rounded-lg border border-white/8 bg-white/4 px-2.5 py-1.5 flex items-center gap-2">
               <span className="text-[11px] font-mono text-[var(--neon-secondary)] truncate flex-1">
@@ -387,7 +384,6 @@ function MeetingRecordingGroup({
   groupIndex: number;
 }) {
   const [expanded, setExpanded] = useState(groupIndex === 0);
-
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
@@ -419,7 +415,6 @@ function MeetingRecordingGroup({
           )}
         </div>
       </button>
-
       <AnimatePresence>
         {expanded && (
           <motion.div
@@ -469,7 +464,6 @@ function RecordingsTab() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h2 className="text-xl font-bold text-gradient">Recordings</h2>
@@ -489,7 +483,6 @@ function RecordingsTab() {
         </motion.button>
       </div>
 
-      {/* Stats bar */}
       {recordings.length > 0 && (
         <motion.div
           initial={{ opacity: 0, y: 8 }}
@@ -534,7 +527,6 @@ function RecordingsTab() {
         </motion.div>
       )}
 
-      {/* Content */}
       {loading ? (
         <div className="flex flex-col items-center justify-center py-20 gap-4">
           <motion.div
@@ -576,16 +568,14 @@ function RecordingsTab() {
               <Video className="h-7 w-7 text-[var(--neon-primary)]" />
             </div>
           </div>
-
           <div className="text-center max-w-xs">
             <h3 className="text-base font-semibold mb-1">No recordings yet</h3>
             <p className="text-sm text-muted-foreground leading-relaxed">
               Start a meeting and click the{" "}
-              <span className="text-foreground font-medium">Record</span> button (host or co-host
-              only) to capture your sessions.
+              <span className="text-foreground font-medium">Record</span> button to capture your
+              sessions.
             </p>
           </div>
-
           <div className="flex gap-3 flex-wrap justify-center mt-2">
             {(
               Object.entries(MODE_META) as [RecordingMode, (typeof MODE_META)[RecordingMode]][]
@@ -634,6 +624,16 @@ function Dashboard() {
   // ── Delete modal state ──────────────────────────────────────────────────────
   const [deleteTarget, setDeleteTarget] = useState<MeetingGroup | null>(null);
 
+  // ── Duplicate title state ───────────────────────────────────────────────────
+  // duplicateTitle   — the exact conflicting title from the server (drives modal open)
+  // pendingAction    — what to retry once the user picks a new title
+  //   "instant"      → retry meetingService.generate with new title
+  //   "join"         → retry meetingService.recordJoined with new title, then navigate
+  const [duplicateTitle, setDuplicateTitle] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<"instant" | "join" | null>(null);
+  // Stored context for the "join" retry
+  const [pendingJoinLink, setPendingJoinLink] = useState<string | null>(null);
+
   const loadHistory = () => {
     setLoading(true);
     meetingService
@@ -654,18 +654,38 @@ function Dashboard() {
   const handleOpenGen = () => {
     setGenOpen(true);
     setGenLink(null);
+    setDuplicateTitle(null);
+    setPendingAction(null);
   };
 
+  // Called by MeetingGenerationModal with whatever title the user typed.
   const handleGenerate = async (title: string) => {
     try {
       const res = await meetingService.generate({ title });
       setGenLink(res.link);
+      setDuplicateTitle(null);
+      setPendingAction(null);
       loadHistory();
     } catch (err) {
-      setGenOpen(false);
-      toast.error(extractError(err).message);
+      const dup = extractDuplicateTitle(err);
+      if (dup) {
+        // Surface the dup modal inside MeetingGenerationModal
+        setDuplicateTitle(dup);
+        setPendingAction("instant");
+      } else {
+        setGenOpen(false);
+        toast.error(extractError(err).message);
+      }
     }
   };
+
+  // Called by MeetingGenerationModal's DuplicateTitleModal when user picks a new title.
+  const handleGenerateRetry = async (newTitle: string) => {
+    setDuplicateTitle(null);
+    await handleGenerate(newTitle);
+  };
+
+  // ── Join via pasted link ────────────────────────────────────────────────────
 
   const join = async () => {
     try {
@@ -675,11 +695,21 @@ function Dashboard() {
       if (!id) throw new Error("No ID");
 
       const recordTitle = joinTitle.trim() || "Joined meeting";
+
       try {
         await meetingService.recordJoined({ meetingLink: joinLink, title: recordTitle });
         loadHistory();
-      } catch {
-        // Non-fatal
+      } catch (recordErr) {
+        const dup = extractDuplicateTitle(recordErr);
+        if (dup) {
+          // Store context so we can retry after the user picks a new title
+          setPendingJoinLink(joinLink);
+          setDuplicateTitle(dup);
+          setPendingAction("join");
+          setJoinOpen(false);
+          return; // don't navigate yet
+        }
+        // Non-fatal — we still allow joining even if recordJoined fails for other reasons
       }
 
       navigate({ to: "/meeting/$id", params: { id } });
@@ -688,12 +718,41 @@ function Dashboard() {
     }
   };
 
+  // Called by the standalone DuplicateTitleModal (join flow) when user retries.
+  const handleJoinRetry = async (newTitle: string) => {
+    setDuplicateTitle(null);
+    setPendingAction(null);
+
+    const link = pendingJoinLink;
+    setPendingJoinLink(null);
+    if (!link) return;
+
+    try {
+      const url = new URL(link);
+      const parts = url.pathname.split("/").filter(Boolean);
+      const id = parts[parts.length - 1];
+
+      try {
+        await meetingService.recordJoined({ meetingLink: link, title: newTitle });
+        loadHistory();
+      } catch {
+        // Non-fatal — navigate anyway
+      }
+
+      navigate({ to: "/meeting/$id", params: { id } });
+    } catch {
+      toast.error("Something went wrong — please try again.");
+    }
+  };
+
+  const handleDuplicateClose = () => {
+    setDuplicateTitle(null);
+    setPendingAction(null);
+    setPendingJoinLink(null);
+  };
+
   // ── Delete handlers ─────────────────────────────────────────────────────────
 
-  /**
-   * Called when the user clicks the trash icon on a meeting row.
-   * Active meetings show a toast instead of opening the modal.
-   */
   const handleDeleteRequest = (group: MeetingGroup) => {
     if (group.isActive) {
       toast.error("End the meeting before deleting it.", {
@@ -704,31 +763,21 @@ function Dashboard() {
     setDeleteTarget(group);
   };
 
-  /**
-   * Called by DeleteMeetingModal when the user confirms.
-   * Optimistically removes the row, then refetches on success.
-   * On API error, restores the row and re-throws so the modal can catch it.
-   */
   const handleDeleteConfirm = async (meetingId: string) => {
-    // Optimistic remove
     setGroups((prev) => prev.filter((g) => g.meetingId !== meetingId));
     try {
       await meetingService.deleteMeeting(meetingId);
       toast.success("Meeting deleted successfully.");
-      // Sync truth from server (removes any race conditions)
       loadHistory();
     } catch (err) {
-      // Restore the row on failure
       loadHistory();
       const { message } = extractError(err);
       toast.error(message || "Failed to delete meeting. Please try again.");
-      throw err; // let the modal know to revert to idle phase
+      throw err;
     }
   };
 
-  const handleDeleteClose = () => {
-    setDeleteTarget(null);
-  };
+  const handleDeleteClose = () => setDeleteTarget(null);
 
   if (!user?.username) return null;
 
@@ -743,7 +792,6 @@ function Dashboard() {
           <div className="h-8 w-8 rounded-lg bg-gradient-neon glow-primary" />
           <span className="font-semibold tracking-tight">Lumina Meet</span>
         </Link>
-
         <div className="flex items-center gap-3">
           <div className="hidden sm:flex items-center gap-2 rounded-full glass px-3 py-1.5 text-sm">
             <div className="h-6 w-6 rounded-full bg-gradient-neon flex items-center justify-center text-[10px] font-bold text-white">
@@ -751,16 +799,12 @@ function Dashboard() {
             </div>
             <span className="text-muted-foreground">{displayName}</span>
           </div>
-
           <button
             onClick={() => {
               logout();
               navigate({ to: "/login" });
             }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-              bg-white/[0.05] border border-white/10 text-muted-foreground
-              hover:bg-[oklch(0.72_0.22_35/0.12)] hover:border-[oklch(0.72_0.22_35/0.3)]
-              hover:text-[oklch(0.82_0.2_35)] transition-all duration-150 active:scale-[0.97]"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white/[0.05] border border-white/10 text-muted-foreground hover:bg-[oklch(0.72_0.22_35/0.12)] hover:border-[oklch(0.72_0.22_35/0.3)] hover:text-[oklch(0.82_0.2_35)] transition-all duration-150 active:scale-[0.97]"
           >
             <LogOut className="h-3.5 w-3.5" />
             Logout
@@ -806,7 +850,6 @@ function Dashboard() {
 
         {/* ── Tab bar ─────────────────────────────────────────────────── */}
         <div className="mt-10 glass rounded-2xl overflow-hidden">
-          {/* Tab header */}
           <div className="flex items-center justify-between border-b border-white/5 px-5 py-1">
             <div className="flex items-center gap-1">
               <TabButton
@@ -833,10 +876,7 @@ function Dashboard() {
                   exit={{ opacity: 0, x: 8 }}
                   transition={{ duration: 0.15 }}
                   onClick={() => setInviteOpen(true)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-                    bg-[oklch(0.65_0.22_280/0.1)] border border-[oklch(0.65_0.22_280/0.25)]
-                    text-[var(--neon-secondary)] hover:bg-[oklch(0.65_0.22_280/0.2)]
-                    hover:border-[oklch(0.65_0.22_280/0.45)] transition-all duration-150 active:scale-[0.97]"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[oklch(0.65_0.22_280/0.1)] border border-[oklch(0.65_0.22_280/0.25)] text-[var(--neon-secondary)] hover:bg-[oklch(0.65_0.22_280/0.2)] hover:border-[oklch(0.65_0.22_280/0.45)] transition-all duration-150 active:scale-[0.97]"
                 >
                   <Send className="h-3 w-3" />
                   Send invites
@@ -845,7 +885,6 @@ function Dashboard() {
             </AnimatePresence>
           </div>
 
-          {/* Tab content */}
           <div className="p-5">
             <AnimatePresence mode="wait">
               {activeTab === "meetings" ? (
@@ -890,16 +929,23 @@ function Dashboard() {
       </section>
 
       {/* ── Modals ─────────────────────────────────────────────────────── */}
+
+      {/* Instant meeting modal — passes duplicateTitle so it can open DuplicateTitleModal internally */}
       <MeetingGenerationModal
         open={genOpen}
         link={genLink}
+        duplicateTitle={pendingAction === "instant" ? duplicateTitle : null}
         onClose={() => {
           setGenOpen(false);
           setGenLink(null);
+          setDuplicateTitle(null);
+          setPendingAction(null);
         }}
         onGenerate={handleGenerate}
+        onRetry={handleGenerateRetry}
       />
 
+      {/* Join via link */}
       <Dialog open={joinOpen} onOpenChange={setJoinOpen}>
         <DialogContent className="glass-strong border-white/10">
           <DialogHeader>
@@ -926,6 +972,7 @@ function Dashboard() {
         </DialogContent>
       </Dialog>
 
+      {/* Invite dialog */}
       <InviteDialog
         open={inviteOpen}
         onClose={() => {
@@ -934,12 +981,24 @@ function Dashboard() {
         }}
       />
 
-      {/* ── Delete meeting modal ────────────────────────────────────────── */}
+      {/* Delete meeting modal */}
       <DeleteMeetingModal
         open={deleteTarget !== null}
         meeting={deleteTarget}
         onClose={handleDeleteClose}
         onConfirm={handleDeleteConfirm}
+      />
+
+      {/*
+       * Standalone DuplicateTitleModal for the "join via link" flow.
+       * (Instant meeting dup is handled inside MeetingGenerationModal.)
+       * The invite flow has its own internal modal inside InviteDialog.
+       */}
+      <DuplicateTitleModal
+        open={pendingAction === "join" && !!duplicateTitle}
+        conflictingTitle={duplicateTitle ?? ""}
+        onRetry={handleJoinRetry}
+        onClose={handleDuplicateClose}
       />
     </main>
   );
@@ -1000,10 +1059,7 @@ function EmptyHistory({ onStart }: { onStart: () => void }) {
       </div>
       <button
         onClick={onStart}
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium
-          bg-gradient-neon text-white shadow-[0_4px_20px_-6px_oklch(0.65_0.22_280/0.5)]
-          hover:shadow-[0_6px_28px_-6px_oklch(0.65_0.22_280/0.75)] hover:brightness-110
-          transition-all duration-150 active:scale-[0.97]"
+        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-gradient-neon text-white shadow-[0_4px_20px_-6px_oklch(0.65_0.22_280/0.5)] hover:shadow-[0_6px_28px_-6px_oklch(0.65_0.22_280/0.75)] hover:brightness-110 transition-all duration-150 active:scale-[0.97]"
       >
         <Plus className="h-4 w-4" />
         Start your first meeting
@@ -1059,8 +1115,6 @@ function MeetingTypeBadge({ group }: { group: MeetingGroup }) {
   );
 }
 
-// ─── Date line ────────────────────────────────────────────────────────────────
-
 function MeetingDateLine({ group }: { group: MeetingGroup }) {
   if (group.type === "scheduled" && group.scheduledFor) {
     return (
@@ -1081,22 +1135,15 @@ function MeetingDateLine({ group }: { group: MeetingGroup }) {
   );
 }
 
-// ─── Meeting CTA button ───────────────────────────────────────────────────────
-
 function MeetingCTA({ group }: { group: MeetingGroup }) {
   if (isScheduledExpired(group)) {
     return (
-      <span
-        className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-          bg-[oklch(0.72_0.22_35/0.08)] border border-[oklch(0.72_0.22_35/0.2)]
-          text-[oklch(0.72_0.22_35/0.6)] cursor-not-allowed select-none"
-      >
+      <span className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[oklch(0.72_0.22_35/0.08)] border border-[oklch(0.72_0.22_35/0.2)] text-[oklch(0.72_0.22_35/0.6)] cursor-not-allowed select-none">
         <AlertTriangle className="h-3 w-3" />
         Expired
       </span>
     );
   }
-
   if (isScheduledUpcoming(group) && group.scheduledFor) {
     return (
       <Link
@@ -1104,44 +1151,32 @@ function MeetingCTA({ group }: { group: MeetingGroup }) {
         params={{ id: group.meetingId }}
         search={{ scheduledFor: group.scheduledFor }}
         onClick={(e) => e.stopPropagation()}
-        className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-          bg-[oklch(0.65_0.22_280/0.1)] border border-[oklch(0.65_0.22_280/0.3)]
-          text-[var(--neon-primary)] hover:bg-[oklch(0.65_0.22_280/0.2)]
-          hover:border-[oklch(0.65_0.22_280/0.5)] transition-all duration-150 active:scale-[0.97]"
+        className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[oklch(0.65_0.22_280/0.1)] border border-[oklch(0.65_0.22_280/0.3)] text-[var(--neon-primary)] hover:bg-[oklch(0.65_0.22_280/0.2)] hover:border-[oklch(0.65_0.22_280/0.5)] transition-all duration-150 active:scale-[0.97]"
       >
         <Timer className="h-3 w-3" />
         View countdown
       </Link>
     );
   }
-
   if (group.isActive) {
     return (
       <Link
         to="/meeting/$id"
         params={{ id: group.meetingId }}
         onClick={(e) => e.stopPropagation()}
-        className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-          bg-[oklch(0.65_0.22_160/0.18)] border border-[oklch(0.65_0.22_160/0.4)]
-          text-[var(--neon-secondary)] shadow-[0_0_14px_-4px_oklch(0.65_0.22_160/0.5)]
-          hover:bg-[oklch(0.65_0.22_160/0.28)] hover:shadow-[0_0_20px_-4px_oklch(0.65_0.22_160/0.7)]
-          transition-all duration-150 active:scale-[0.97]"
+        className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[oklch(0.65_0.22_160/0.18)] border border-[oklch(0.65_0.22_160/0.4)] text-[var(--neon-secondary)] shadow-[0_0_14px_-4px_oklch(0.65_0.22_160/0.5)] hover:bg-[oklch(0.65_0.22_160/0.28)] hover:shadow-[0_0_20px_-4px_oklch(0.65_0.22_160/0.7)] transition-all duration-150 active:scale-[0.97]"
       >
         <span className="h-1.5 w-1.5 rounded-full bg-[var(--neon-secondary)] animate-pulse" />
         Join live
       </Link>
     );
   }
-
   return (
     <Link
       to="/meeting/$id"
       params={{ id: group.meetingId }}
       onClick={(e) => e.stopPropagation()}
-      className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-        bg-white/[0.05] border border-white/10 text-muted-foreground
-        hover:bg-[oklch(0.82_0.16_210/0.1)] hover:border-[oklch(0.82_0.16_210/0.25)]
-        hover:text-[var(--neon-secondary)] transition-all duration-150 active:scale-[0.97]"
+      className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white/[0.05] border border-white/10 text-muted-foreground hover:bg-[oklch(0.82_0.16_210/0.1)] hover:border-[oklch(0.82_0.16_210/0.25)] hover:text-[var(--neon-secondary)] transition-all duration-150 active:scale-[0.97]"
     >
       <RotateCcw className="h-3 w-3" />
       Rejoin
@@ -1150,9 +1185,6 @@ function MeetingCTA({ group }: { group: MeetingGroup }) {
 }
 
 // ─── MeetingGroupRow ──────────────────────────────────────────────────────────
-//
-// CHANGED: accepts onDeleteRequest prop and renders the delete button.
-//
 
 function MeetingGroupRow({
   group,
@@ -1164,7 +1196,6 @@ function MeetingGroupRow({
   onDeleteRequest: (group: MeetingGroup) => void;
 }) {
   const [open, setOpen] = useState(false);
-
   const hasSessions = group.supportsMultipleSessions && group.sessions.length > 0;
   const expired = isScheduledExpired(group);
 
@@ -1179,11 +1210,8 @@ function MeetingGroupRow({
       {expired && (
         <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-[oklch(0.72_0.22_35/0.5)] rounded-r" />
       )}
-
       <div
-        className={`flex items-center gap-3 px-5 py-4 transition hover:bg-white/[0.025] ${
-          hasSessions ? "cursor-pointer" : ""
-        }`}
+        className={`flex items-center gap-3 px-5 py-4 transition hover:bg-white/[0.025] ${hasSessions ? "cursor-pointer" : ""}`}
         onClick={() => hasSessions && setOpen((v) => !v)}
         role={hasSessions ? "button" : undefined}
         aria-expanded={hasSessions ? open : undefined}
@@ -1200,15 +1228,8 @@ function MeetingGroupRow({
             <div className="h-4 w-4" />
           )}
         </div>
-
         <div
-          className={`flex-shrink-0 h-9 w-9 rounded-xl flex items-center justify-center ${
-            expired
-              ? "bg-[oklch(0.72_0.22_35/0.1)]"
-              : group.isActive
-                ? "bg-[oklch(0.65_0.22_160/0.18)] ring-1 ring-[oklch(0.65_0.22_160/0.4)]"
-                : "bg-white/[0.06]"
-          }`}
+          className={`flex-shrink-0 h-9 w-9 rounded-xl flex items-center justify-center ${expired ? "bg-[oklch(0.72_0.22_35/0.1)]" : group.isActive ? "bg-[oklch(0.65_0.22_160/0.18)] ring-1 ring-[oklch(0.65_0.22_160/0.4)]" : "bg-white/[0.06]"}`}
         >
           {expired ? (
             <AlertTriangle className="h-4 w-4 text-[oklch(0.72_0.22_35)]" />
@@ -1222,7 +1243,6 @@ function MeetingGroupRow({
             <Zap className="h-4 w-4 text-[var(--neon-accent)]" />
           )}
         </div>
-
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <p className={`font-medium truncate ${expired ? "text-muted-foreground" : ""}`}>
@@ -1230,7 +1250,6 @@ function MeetingGroupRow({
             </p>
             <MeetingTypeBadge group={group} />
           </div>
-
           <div className="mt-1 flex items-center gap-3 flex-wrap">
             {expired && group.scheduledFor && (
               <StatPill icon={<AlertTriangle className="h-3 w-3 text-[oklch(0.72_0.22_35)]" />}>
@@ -1260,16 +1279,8 @@ function MeetingGroupRow({
             )}
           </div>
         </div>
-
-        {/* ── Action cluster: CTA + Delete ─────────────────────────────── */}
         <div className="flex items-center gap-2 flex-shrink-0">
           <MeetingCTA group={group} />
-
-          {/*
-           * Delete button — always visible on hover, always present in DOM.
-           * Uses opacity + scale transition so it feels like it "appears".
-           * Stops click propagation so the row expand/collapse isn't triggered.
-           */}
           <motion.button
             onClick={(e) => {
               e.stopPropagation();
@@ -1281,10 +1292,8 @@ function MeetingGroupRow({
               "flex h-7 w-7 items-center justify-center rounded-lg border transition-all duration-150",
               "opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100",
               group.isActive
-                ? // Active — muted red, cursor blocked, no hover glow (can't delete)
-                  "border-[oklch(0.72_0.22_35/0.2)] bg-transparent text-[oklch(0.72_0.22_35/0.35)] cursor-not-allowed"
-                : // Deletable — full danger red on hover
-                  "border-white/10 bg-transparent text-muted-foreground/50 hover:border-[oklch(0.72_0.22_35/0.45)] hover:bg-[oklch(0.72_0.22_35/0.1)] hover:text-[oklch(0.82_0.2_35)] active:scale-[0.93]",
+                ? "border-[oklch(0.72_0.22_35/0.2)] bg-transparent text-[oklch(0.72_0.22_35/0.35)] cursor-not-allowed"
+                : "border-white/10 bg-transparent text-muted-foreground/50 hover:border-[oklch(0.72_0.22_35/0.45)] hover:bg-[oklch(0.72_0.22_35/0.1)] hover:text-[oklch(0.82_0.2_35)] active:scale-[0.93]",
             )}
             whileTap={group.isActive ? undefined : { scale: 0.9 }}
           >
@@ -1332,13 +1341,8 @@ function SessionTimeline({
             className="relative py-2.5"
           >
             <span
-              className={`absolute -left-[1.4rem] top-1/2 -translate-y-1/2 h-2.5 w-2.5 rounded-full border-2 ${
-                session.leftAt == null
-                  ? "border-[var(--neon-secondary)] bg-[oklch(0.65_0.22_160/0.4)] animate-pulse"
-                  : "border-white/20 bg-white/[0.06]"
-              }`}
+              className={`absolute -left-[1.4rem] top-1/2 -translate-y-1/2 h-2.5 w-2.5 rounded-full border-2 ${session.leftAt == null ? "border-[var(--neon-secondary)] bg-[oklch(0.65_0.22_160/0.4)] animate-pulse" : "border-white/20 bg-white/[0.06]"}`}
             />
-
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">
                 <p className="text-[13px] font-medium text-foreground/90">
@@ -1363,15 +1367,11 @@ function SessionTimeline({
                   </span>
                 </div>
               </div>
-
               <Link
                 to="/meeting/$id"
                 params={{ id: meetingId }}
                 onClick={(e) => e.stopPropagation()}
-                className="flex-shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium
-                  bg-white/[0.04] border border-white/[0.08] text-muted-foreground
-                  hover:bg-[oklch(0.82_0.16_210/0.1)] hover:border-[oklch(0.82_0.16_210/0.2)]
-                  hover:text-[var(--neon-secondary)] transition-all duration-150 active:scale-[0.97]"
+                className="flex-shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-white/[0.04] border border-white/[0.08] text-muted-foreground hover:bg-[oklch(0.82_0.16_210/0.1)] hover:border-[oklch(0.82_0.16_210/0.2)] hover:text-[var(--neon-secondary)] transition-all duration-150 active:scale-[0.97]"
               >
                 <ExternalLink className="h-3 w-3" />
                 Open
@@ -1434,16 +1434,10 @@ function ActionCard({
       whileHover={{ y: -3 }}
       whileTap={{ scale: 0.98 }}
       onClick={onClick}
-      className={`group relative overflow-hidden rounded-2xl p-6 text-left transition ${
-        primary
-          ? "bg-gradient-neon text-white shadow-[0_12px_40px_-12px_oklch(0.65_0.22_280/0.7)]"
-          : "glass hover:border-white/20"
-      }`}
+      className={`group relative overflow-hidden rounded-2xl p-6 text-left transition ${primary ? "bg-gradient-neon text-white shadow-[0_12px_40px_-12px_oklch(0.65_0.22_280/0.7)]" : "glass hover:border-white/20"}`}
     >
       <div
-        className={`flex h-10 w-10 items-center justify-center rounded-xl ${
-          primary ? "bg-white/20" : "bg-gradient-neon"
-        }`}
+        className={`flex h-10 w-10 items-center justify-center rounded-xl ${primary ? "bg-white/20" : "bg-gradient-neon"}`}
       >
         <span className="text-white">{icon}</span>
       </div>
@@ -1453,11 +1447,7 @@ function ActionCard({
       </p>
       <div className="mt-4">
         <span
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 ${
-            primary
-              ? "bg-white/20 text-white hover:bg-white/30"
-              : "bg-white/[0.06] border border-white/10 text-[var(--neon-secondary)] group-hover:bg-[oklch(0.65_0.22_280/0.15)] group-hover:border-[oklch(0.65_0.22_280/0.3)]"
-          }`}
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 ${primary ? "bg-white/20 text-white hover:bg-white/30" : "bg-white/[0.06] border border-white/10 text-[var(--neon-secondary)] group-hover:bg-[oklch(0.65_0.22_280/0.15)] group-hover:border-[oklch(0.65_0.22_280/0.3)]"}`}
         >
           <Plus className="h-3 w-3" />
           {primary ? "Start now" : "Open"}
@@ -1475,24 +1465,28 @@ function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void })
   const [loadingInvite, setLoadingInvite] = useState(false);
   const [resultLink, setResultLink] = useState<string | null>(null);
 
+  // Duplicate title state scoped to this dialog
+  const [dupTitle, setDupTitle] = useState<string | null>(null);
+
   const handleClose = () => {
     setEmails("");
     setTitle("");
     setResultLink(null);
+    setDupTitle(null);
     onClose();
   };
 
-  const send = async () => {
+  const send = async (overrideTitle?: string) => {
     const list = emails
       .split(/[,\s]+/)
       .map((s) => s.trim())
       .filter(Boolean);
-
     if (!list.length) {
       toast.error("Add at least one email");
       return;
     }
-    const trimmedTitle = title.trim();
+
+    const trimmedTitle = (overrideTitle ?? title).trim();
     if (!trimmedTitle) {
       toast.error("Add a meeting title");
       return;
@@ -1503,84 +1497,98 @@ function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void })
       const res = await meetingService.generateAndInvite({ emails: list, title: trimmedTitle });
       setResultLink(res.link);
       toast.success(
-        `Invites sent to ${res.sent} recipient${res.sent !== 1 ? "s" : ""}${
-          res.failed > 0 ? ` (${res.failed} failed)` : ""
-        }`,
+        `Invites sent to ${res.sent} recipient${res.sent !== 1 ? "s" : ""}${res.failed > 0 ? ` (${res.failed} failed)` : ""}`,
       );
       setEmails("");
+      setTitle(trimmedTitle);
+      setDupTitle(null);
     } catch (err) {
-      toast.error(extractError(err).message);
+      const dup = extractDuplicateTitle(err);
+      if (dup) {
+        setDupTitle(dup);
+      } else {
+        toast.error(extractError(err).message);
+      }
     } finally {
       setLoadingInvite(false);
     }
   };
 
+  const handleRetry = async (newTitle: string) => {
+    setDupTitle(null);
+    setTitle(newTitle);
+    await send(newTitle);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && handleClose()}>
-      <DialogContent className="glass-strong border-white/10">
-        <DialogHeader>
-          <DialogTitle>Send invites</DialogTitle>
-        </DialogHeader>
-        <p className="text-xs text-muted-foreground -mt-1">
-          A new meeting room will be created and your guests will receive an email invitation.
-        </p>
-        <div className="space-y-3 mt-2">
-          <FloatingInput
-            label="Meeting title"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder=" "
-            maxLength={200}
-          />
-          <FloatingInput
-            label="Emails (comma or space separated)"
-            value={emails}
-            onChange={(e) => setEmails(e.target.value)}
-            placeholder=" "
-          />
-          <NeonButton fullWidth loading={loadingInvite} onClick={send}>
-            <Send className="h-4 w-4" />
-            {loadingInvite ? "Sending…" : "Send invites"}
-          </NeonButton>
+    <>
+      <Dialog open={open} onOpenChange={(v) => !v && handleClose()}>
+        <DialogContent className="glass-strong border-white/10">
+          <DialogHeader>
+            <DialogTitle>Send invites</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground -mt-1">
+            A new meeting room will be created and your guests will receive an email invitation.
+          </p>
+          <div className="space-y-3 mt-2">
+            <FloatingInput
+              label="Meeting title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder=" "
+              maxLength={200}
+            />
+            <FloatingInput
+              label="Emails (comma or space separated)"
+              value={emails}
+              onChange={(e) => setEmails(e.target.value)}
+              placeholder=" "
+            />
+            <NeonButton fullWidth loading={loadingInvite} onClick={() => send()}>
+              <Send className="h-4 w-4" />
+              {loadingInvite ? "Sending…" : "Send invites"}
+            </NeonButton>
 
-          {resultLink && (
-            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                Meeting link
-              </p>
-              <p className="text-xs break-all text-[var(--neon-secondary)] font-mono leading-relaxed">
-                {resultLink}
-              </p>
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(resultLink).catch(() => {});
-                    toast.success("Link copied!");
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-                    bg-[oklch(0.65_0.22_280/0.1)] border border-[oklch(0.65_0.22_280/0.25)]
-                    text-[var(--neon-primary)] hover:bg-[oklch(0.65_0.22_280/0.2)]
-                    hover:border-[oklch(0.65_0.22_280/0.45)] transition-all duration-150 active:scale-[0.97]"
-                >
-                  <Copy className="h-3 w-3" />
-                  Copy link
-                </button>
-
-                <button
-                  onClick={() => setResultLink(null)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-                    bg-white/[0.04] border border-white/[0.08] text-muted-foreground
-                    hover:bg-white/[0.08] hover:text-foreground transition-all duration-150 active:scale-[0.97]"
-                >
-                  <RefreshCw className="h-3 w-3" />
-                  New meeting
-                </button>
+            {resultLink && (
+              <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  Meeting link
+                </p>
+                <p className="text-xs break-all text-[var(--neon-secondary)] font-mono leading-relaxed">
+                  {resultLink}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(resultLink).catch(() => {});
+                      toast.success("Link copied!");
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[oklch(0.65_0.22_280/0.1)] border border-[oklch(0.65_0.22_280/0.25)] text-[var(--neon-primary)] hover:bg-[oklch(0.65_0.22_280/0.2)] hover:border-[oklch(0.65_0.22_280/0.45)] transition-all duration-150 active:scale-[0.97]"
+                  >
+                    <Copy className="h-3 w-3" />
+                    Copy link
+                  </button>
+                  <button
+                    onClick={() => setResultLink(null)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white/[0.04] border border-white/[0.08] text-muted-foreground hover:bg-white/[0.08] hover:text-foreground transition-all duration-150 active:scale-[0.97]"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    New meeting
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Duplicate title modal — shown when generateAndInvite returns 409 */}
+      <DuplicateTitleModal
+        open={!!dupTitle}
+        conflictingTitle={dupTitle ?? ""}
+        onRetry={handleRetry}
+        onClose={() => setDupTitle(null)}
+      />
+    </>
   );
 }

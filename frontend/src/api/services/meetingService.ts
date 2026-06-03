@@ -11,49 +11,25 @@ export interface HistoryItem {
 
 // ─── New grouped / session-aware types ───────────────────────────────────────
 
-/** One discrete usage of a meeting link */
 export interface MeetingSession {
   sessionId: string;
-  joinedAt: number; // unix ms
-  leftAt: number | null; // unix ms, null if still active
+  joinedAt: number;
+  leftAt: number | null;
   durationMin: number;
 }
 
-/**
- * Badge type shown beside the meeting title in the dashboard.
- *  "instant"   — created by this user via "Instant meeting"
- *  "scheduled" — created via the schedule flow
- *  "joined"    — joined via a pasted link (someone else's meeting)
- */
 export type MeetingBadgeType = "instant" | "scheduled" | "joined";
 
-/**
- * A meeting "group" — one meeting link that may have been used multiple times.
- * Each entry in the dashboard history represents one of these.
- */
 export interface MeetingGroup {
   meetingId: string;
   title: string;
   type: MeetingBadgeType;
-  /** When the meeting link was first created / first joined */
   createdAt: number;
-  /**
-   * For scheduled meetings: the scheduled date (shown in the badge area).
-   * null for instant and joined.
-   */
   scheduledFor: number | null;
-  /** Total number of sessions (how many times the link was used) */
   sessionCount: number;
-  /** Total combined duration across all sessions, in minutes */
   totalDurationMin: number;
-  /** Individual usage sessions, newest-first */
   sessions: MeetingSession[];
-  /** Whether the meeting is currently active */
   isActive: boolean;
-  /**
-   * Whether this meeting supports multi-session tracking.
-   * true for instant and joined; false for scheduled.
-   */
   supportsMultipleSessions: boolean;
 }
 
@@ -71,6 +47,35 @@ export function formatDuration(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+// ─── Duplicate-title error detection ─────────────────────────────────────────
+
+/**
+ * Returns the conflicting title string if the API error is a DUPLICATE_TITLE
+ * 409, otherwise returns null.
+ *
+ * Usage:
+ *   const dup = extractDuplicateTitle(err);
+ *   if (dup) { open modal with dup } else { toast generic error }
+ */
+export function extractDuplicateTitle(err: unknown): string | null {
+  if (!err || typeof err !== "object") return null;
+  const response = (err as any)?.response;
+  if (!response) return null;
+
+  const status = response.status;
+  const data = response.data;
+
+  if (status !== 409) return null;
+  if (data?.code !== "DUPLICATE_TITLE") return null;
+
+  // Prefer the server-returned conflicting title (exact casing from DB),
+  // fall back to extracting it from the message string.
+  if (data?.details?.conflictingTitle) return data.details.conflictingTitle as string;
+
+  const match = (data?.message as string)?.match(/titled "(.+?)"/);
+  return match ? match[1] : null;
 }
 
 // ─── Raw backend meeting shape ────────────────────────────────────────────────
@@ -124,7 +129,6 @@ function toMeetingGroup(raw: RawMeeting, index: number): MeetingGroup {
     ];
   }
 
-  // Sort sessions newest-first
   sessions.sort((a, b) => b.joinedAt - a.joinedAt);
 
   const totalDurationMin = sessions.reduce((sum, s) => sum + s.durationMin, 0);
@@ -151,7 +155,8 @@ function toMeetingGroup(raw: RawMeeting, index: number): MeetingGroup {
 export const meetingService = {
   /**
    * Create an instant meeting.
-   * Title is now REQUIRED — the modal collects it before calling this.
+   * On DUPLICATE_TITLE (409) the error propagates — callers should use
+   * extractDuplicateTitle() to detect it and open the DuplicateTitleModal.
    */
   generate: (data: { title: string }): Promise<{ link: string; meetingId: string }> =>
     apiClient.post(API_ENDPOINTS.GENERATE_MEETING, data).then((r) => ({
@@ -161,17 +166,12 @@ export const meetingService = {
 
   /**
    * Schedule a meeting.
-   *
-   * FIX: scheduledFor MUST be an ISO 8601 string (e.g. "2026-05-26T05:31:00.000Z").
-   * The backend validator uses .isISO8601() — sending a unix timestamp number
-   * causes a 400 "Invalid date format" validation error.
-   *
-   * FIX: Backend returns { data: { meeting, joinUrl, invitationsSent } }.
-   * scheduledFor lives inside `meeting`, not at the response root.
+   * scheduledFor MUST be an ISO 8601 string.
+   * On DUPLICATE_TITLE (409) the error propagates.
    */
   schedule: (data: {
     title: string;
-    scheduledFor: string; // ISO 8601 string — NOT a unix timestamp number
+    scheduledFor: string;
     description?: string;
     duration?: number;
   }): Promise<{ link: string; meeting: RawMeeting }> =>
@@ -183,6 +183,10 @@ export const meetingService = {
   invite: (data: { meetingId: string; emails: string[] }) =>
     apiClient.post(API_ENDPOINTS.SEND_INVITE, data).then((r) => r.data.data),
 
+  /**
+   * Generate a meeting + email invitations in one shot.
+   * On DUPLICATE_TITLE (409) the error propagates.
+   */
   generateAndInvite: (data: {
     emails: string[];
     title: string;
@@ -191,7 +195,7 @@ export const meetingService = {
 
   /**
    * Record a "joined" meeting in the user's history.
-   * Call this when the user joins via a pasted link.
+   * On DUPLICATE_TITLE (409) the error propagates.
    */
   recordJoined: (data: { meetingLink: string; title: string }): Promise<void> =>
     apiClient.post(API_ENDPOINTS.RECORD_JOINED_MEETING, data).then(() => undefined),
@@ -214,13 +218,6 @@ export const meetingService = {
 
   /**
    * Permanently hard-delete a meeting from the database.
-   *
-   * Rules enforced server-side:
-   *  - Only the host can delete.
-   *  - Active meetings cannot be deleted (end them first → 409 MEETING_ACTIVE).
-   *  - Cloudinary recordings are NOT removed — only the DB record is wiped.
-   *
-   * On success the meeting should be removed from local state immediately.
    */
   deleteMeeting: (meetingId: string): Promise<void> =>
     apiClient.delete(`${API_ENDPOINTS.DELETE_MEETING}/${meetingId}`).then(() => undefined),

@@ -125,13 +125,11 @@ export const historyValidation = [
     .withMessage("Invalid status"),
 ];
 
-// ─── STEP 1: Add this validation (alongside the other export const *Validation arrays) ───
-
 export const deleteMeetingValidation = [
   param("meetingId").trim().notEmpty().withMessage("Meeting ID is required"),
 ];
 
-// ─── Shared helper ────────────────────────────────────────────────────────────
+// ─── Shared helpers ───────────────────────────────────────────────────────────
 
 async function createUniqueMeetingId() {
   let meetingId;
@@ -148,6 +146,35 @@ async function createUniqueMeetingId() {
     "Failed to generate unique meeting ID. Please try again.",
     "MEETING_ID_COLLISION",
   );
+}
+
+/**
+ * Checks whether the given user already has a meeting with this exact title
+ * (case-insensitive). Throws a structured 409 APIError if a duplicate is found
+ * so the frontend can detect DUPLICATE_TITLE and open the modal.
+ *
+ * Scope: all meetings where host === userId, regardless of type or status.
+ * This intentionally covers cancelled/completed meetings too — titles are
+ * permanently reserved so history stays unambiguous.
+ */
+async function assertUniqueTitleForUser(userId, title) {
+  const normalised = title.trim();
+  const existing = await Meeting.findOne({
+    host: userId,
+    title: {
+      $regex: `^${normalised.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+      $options: "i",
+    },
+  });
+
+  if (existing) {
+    throw new APIError(
+      409,
+      `You already have a meeting titled "${existing.title}". Please choose a different title.`,
+      "DUPLICATE_TITLE",
+      { conflictingTitle: existing.title },
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -170,6 +197,9 @@ export const generateInstantMeeting = asyncHandler(async (req, res) => {
 
   const { title, settings = {} } = req.body;
   const userId = req.userId;
+
+  // ── Duplicate title check ─────────────────────────────────────────────────
+  await assertUniqueTitleForUser(userId, title);
 
   const meetingId = await createUniqueMeetingId();
   const clientUrl = process.env.CLIENT_URL;
@@ -233,6 +263,9 @@ export const generateAndInvite = asyncHandler(async (req, res) => {
 
   const { emails, title } = req.body;
   const userId = req.userId;
+
+  // ── Duplicate title check ─────────────────────────────────────────────────
+  await assertUniqueTitleForUser(userId, title);
 
   const meetingId = await createUniqueMeetingId();
   const clientUrl = process.env.CLIENT_URL;
@@ -334,6 +367,10 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
     emails = [],
   } = req.body;
   const userId = req.userId;
+
+  // ── Duplicate title check ─────────────────────────────────────────────────
+  await assertUniqueTitleForUser(userId, title);
+
   const scheduledDate = new Date(scheduledFor);
   const now = new Date();
 
@@ -438,23 +475,6 @@ export const scheduleMeeting = asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // 4. JOIN MEETING
 // ─────────────────────────────────────────────────────────────────────────────
-//
-// CHANGES vs original:
-//
-// ── NEW: Expiry check for scheduled meetings ────────────────────────────────
-//   A scheduled meeting is considered EXPIRED when:
-//     now > scheduledFor + duration (minutes)
-//   i.e. the entire meeting window has passed.
-//
-//   When expired AND still "pending" we auto-cancel it (saves DB clutter) and
-//   return a 410 MEETING_EXPIRED error so the frontend can show a clear
-//   "This meeting has expired" screen instead of silently connecting or
-//   showing a generic error.
-//
-//   The expiry window uses `meeting.duration` (default 60 min) so hosts who
-//   set a 3-hour meeting get the full window.
-//
-// ── UNCHANGED: everything else (password, waiting room, participant limits) ──
 
 export const joinMeeting = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
@@ -494,10 +514,6 @@ export const joinMeeting = asyncHandler(async (req, res) => {
   if (meeting.status === "completed")
     throw new APIError(410, "This meeting has already ended.", "MEETING_ENDED");
 
-  // ── NEW: Scheduled meeting expiry enforcement ─────────────────────────────
-  // Only applies to scheduled meetings that are still "pending" (never activated).
-  // If the meeting was already made "active" by a previous join we skip this —
-  // the host can end it manually via the room controls.
   if (
     meeting.type === "scheduled" &&
     meeting.status === "pending" &&
@@ -508,7 +524,6 @@ export const joinMeeting = asyncHandler(async (req, res) => {
     const expiresAt = new Date(meeting.scheduledFor.getTime() + durationMs);
 
     if (now > expiresAt) {
-      // Auto-cancel the meeting so it won't keep showing as "pending" forever
       meeting.status = "cancelled";
       meeting.completedAt = now;
       await meeting.save();
@@ -524,7 +539,6 @@ export const joinMeeting = asyncHandler(async (req, res) => {
       );
     }
   }
-  // ── END NEW ───────────────────────────────────────────────────────────────
 
   if (meeting.type === "scheduled" && meeting.status === "pending") {
     if (!meeting.canJoin()) {
@@ -626,6 +640,8 @@ export const recordJoinedMeeting = asyncHandler(async (req, res) => {
     );
   }
 
+  // Check if this exact meeting (same host + meetingId + type joined) already
+  // exists — if so skip the duplicate-title check (it's a re-record of the same link).
   let meeting = await Meeting.findOne({
     host: userId,
     meetingId,
@@ -633,6 +649,9 @@ export const recordJoinedMeeting = asyncHandler(async (req, res) => {
   });
 
   if (!meeting) {
+    // ── Duplicate title check (only for brand-new joined records) ────────────
+    await assertUniqueTitleForUser(userId, title);
+
     const clientUrl = process.env.CLIENT_URL;
     const canonicalLink = `${clientUrl}/meeting/${meetingId}`;
     meeting = await Meeting.create({
@@ -800,6 +819,27 @@ export const updateMeeting = asyncHandler(async (req, res) => {
   allowedUpdates.forEach((field) => {
     if (updates[field] !== undefined) actualUpdates[field] = updates[field];
   });
+
+  // If title is being updated, enforce uniqueness (skip check for same meeting)
+  if (updates.title !== undefined) {
+    const normalisedNew = updates.title.trim();
+    const conflict = await Meeting.findOne({
+      host: userId,
+      title: {
+        $regex: `^${normalisedNew.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+        $options: "i",
+      },
+      _id: { $ne: meeting._id },
+    });
+    if (conflict) {
+      throw new APIError(
+        409,
+        `You already have a meeting titled "${conflict.title}". Please choose a different title.`,
+        "DUPLICATE_TITLE",
+        { conflictingTitle: conflict.title },
+      );
+    }
+  }
 
   if (updates.scheduledFor && meeting.status === "pending") {
     const newDate = new Date(updates.scheduledFor);
@@ -1007,11 +1047,6 @@ export const endMeeting = asyncHandler(async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 10. PERMANENTLY DELETE MEETING
-//
-// Hard-deletes the meeting document from MongoDB.
-// Only the host can delete their own meeting.
-// Cannot delete a meeting that is currently ACTIVE (someone is in the room).
-// Cloudinary recordings are NOT deleted here — only the DB record is removed.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const deleteMeeting = asyncHandler(async (req, res) => {
@@ -1037,7 +1072,6 @@ export const deleteMeeting = asyncHandler(async (req, res) => {
     throw new APIError(404, "Meeting not found", "MEETING_NOT_FOUND");
   }
 
-  // Only the host can delete their meeting
   if (!meeting.isHost(userId)) {
     throw new APIError(
       403,
@@ -1046,7 +1080,6 @@ export const deleteMeeting = asyncHandler(async (req, res) => {
     );
   }
 
-  // Prevent deletion of an actively running meeting — end it first
   if (meeting.status === "active") {
     throw new APIError(
       409,
