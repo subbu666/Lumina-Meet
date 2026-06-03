@@ -4,4 +4,4 @@ Disallow: /dashboard
 Disallow: /meeting/
 Disallow: /api/
 
-Sitemap: https://lumina-meet.app/sitemap.xml
+Sitemap: https://lumina-meet.saladisubrahmanyam6.workers.dev/sitemap.xml

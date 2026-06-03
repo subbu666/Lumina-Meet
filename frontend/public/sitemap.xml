@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://lumina-meet.app/</loc>
+    <loc>https://lumina-meet.saladisubrahmanyam6.workers.dev/</loc>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://lumina-meet.app/signup</loc>
+    <loc>https://lumina-meet.saladisubrahmanyam6.workers.dev/signup</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://lumina-meet.app/login</loc>
+    <loc>https://lumina-meet.saladisubrahmanyam6.workers.dev/login</loc>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
