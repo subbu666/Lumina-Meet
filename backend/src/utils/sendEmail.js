@@ -1,18 +1,18 @@
 /**
- * Lumina Meet — Premium Email Service
+ * Lumina Meet - Premium Email Service
  *
  * Design principles:
- *  • Zero SVG, zero CSS flexbox/grid — only table-based layouts (Gmail/Outlook safe)
- *  • OTP displayed as a SINGLE unified box — easy to select & copy on mobile and desktop
+ *  • Zero SVG, zero CSS flexbox/grid - only table-based layouts (Gmail/Outlook safe)
+ *  • OTP displayed as a SINGLE unified box - easy to select & copy on mobile and desktop
  *  • Inline styles only (Gmail strips <style> blocks on mobile)
  *  • Gradient text replaced with solid colored text where -webkit-text-fill-color may fail
  *  • VML-safe for Outlook desktop
  *  • Tested viewport: 320px → 700px
  *
- * COPY OTP — the copy button has been intentionally removed.
+ * COPY OTP - the copy button has been intentionally removed.
  * The OTP is now rendered as a single monospace text cell, so users can:
  *  - Triple-click / long-press to select all digits at once on any device
- *  - Standard OS text selection works perfectly — no JS required, no Gmail sandbox issues
+ *  - Standard OS text selection works perfectly - no JS required, no Gmail sandbox issues
  */
 
 const BREVO_API_URL = "https://api.brevo.com/v3/smtp/email";
@@ -94,7 +94,7 @@ const T = {
 // ─── Shared layout helpers ────────────────────────────────────────────────────
 
 /**
- * Outer shell — centers card, sets background, resets box model.
+ * Outer shell - centers card, sets background, resets box model.
  * Uses a 1-column table so Outlook respects the max-width.
  */
 const shell = (innerHtml, previewText = "") => `<!DOCTYPE html>
@@ -176,14 +176,14 @@ const shell = (innerHtml, previewText = "") => `<!DOCTYPE html>
 </html>`;
 
 /**
- * Single unified OTP box — jaw-dropping, elegant design.
+ * Single unified OTP box - jaw-dropping, elegant design.
  *
  * WHY SINGLE BOX vs individual digit cells:
  *  - Individual digit cells (separate <td> per digit) cannot be selected as a unit on mobile.
  *    Long-pressing on mobile selects only the tapped cell's content.
  *  - A single <td> with the full OTP string as plain text allows triple-click (desktop)
  *    or long-press → Select All (mobile) to grab all digits in one gesture.
- *  - No JS, no clipboard API, no Gmail sandbox issues — pure HTML text selection.
+ *  - No JS, no clipboard API, no Gmail sandbox issues - pure HTML text selection.
  *
  * Design: a single rounded pill/rectangle with:
  *  - Deep dark glass background with subtle gradient
@@ -277,7 +277,7 @@ const badge = (text, color, bgColor, borderColor) => `
   </table>`;
 
 /**
- * Icon circle using text/emoji — zero image dependency, renders everywhere
+ * Icon circle using text/emoji - zero image dependency, renders everywhere
  */
 const iconCircle = (emoji, bgFrom, bgTo, glowColor) => `
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 20px;">
@@ -298,7 +298,7 @@ const iconCircle = (emoji, bgFrom, bgTo, glowColor) => `
   </table>`;
 
 /**
- * Primary CTA button — full-width, table-based so it's clickable in Outlook
+ * Primary CTA button - full-width, table-based so it's clickable in Outlook
  */
 const ctaButton = (href, label, bgFrom, bgTo, glowColor) => `
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
@@ -384,7 +384,7 @@ const detailRow = (emoji, label, value, iconBg, isLast = false) => `
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const sendOTPEmail = async (toEmail, otpCode, username = "there") => {
-  const preview = `Your Lumina Meet verification code is ${otpCode} — expires in 5 minutes`;
+  const preview = `Your Lumina Meet verification code is ${otpCode} - expires in 5 minutes`;
 
   const inner = `
     <!-- ══ HEADER ══ -->
@@ -471,7 +471,7 @@ export const sendOTPEmail = async (toEmail, otpCode, username = "there") => {
 
   return sendEmail({
     to: toEmail,
-    subject: `${otpCode} — Your Lumina Meet Verification Code`,
+    subject: `${otpCode} - Your Lumina Meet Verification Code`,
     html: shell(inner, preview),
     text: `Hi ${username},\n\nYour Lumina Meet verification code is: ${otpCode}\n\nExpires in 5 minutes. Never share this code with anyone.`,
   });
@@ -503,7 +503,7 @@ export const sendMeetingInvitationEmail = async (
         month: "long",
         day: "numeric",
       })
-    : "Instant Meeting — Available Now";
+    : "Instant Meeting - Available Now";
   const meetingTime = scheduledFor
     ? new Date(scheduledFor).toLocaleTimeString("en-US", {
         hour: "2-digit",
@@ -644,7 +644,7 @@ export const sendMeetingInvitationEmail = async (
 
   return sendEmail({
     to: toEmail,
-    subject: `Meeting Invitation: ${title} — Lumina Meet`,
+    subject: `Meeting Invitation: ${title} - Lumina Meet`,
     html: shell(inner, preview),
     text: `${inviterName} invited you to: ${title}\n\nDate: ${meetingDate}${meetingTime ? `\nTime: ${meetingTime}` : ""}\nMeeting ID: ${meetingId}\n\nJoin: ${meetingLink}${isPasswordProtected ? `\nPassword: ${password}` : ""}`,
   });
@@ -659,7 +659,7 @@ export const sendPasswordResetEmail = async (
   otpCode,
   username = "there",
 ) => {
-  const preview = `Your Lumina Meet password reset code is ${otpCode} — expires in 10 minutes`;
+  const preview = `Your Lumina Meet password reset code is ${otpCode} - expires in 10 minutes`;
 
   const inner = `
     <!-- ══ HEADER ══ -->
@@ -718,7 +718,7 @@ export const sendPasswordResetEmail = async (
               ["1", "Select and copy the code above"],
               ["2", "Paste it in the OTP Field and click verify"],
               ["3", "Set your new password"],
-              ["4", "You're in — log in with your new credentials"],
+              ["4", "You're in - log in with your new credentials"],
             ]
               .map(
                 ([num, step]) => `
@@ -776,7 +776,7 @@ export const sendPasswordResetEmail = async (
 
   return sendEmail({
     to: toEmail,
-    subject: "Password Reset — Lumina Meet",
+    subject: "Password Reset - Lumina Meet",
     html: shell(inner, preview),
     text: `Hi ${username},\n\nYour password reset code is: ${otpCode}\n\nExpires in 10 minutes.\n\nIf you didn't request this, please secure your account immediately.`,
   });
@@ -800,7 +800,7 @@ export const sendMeetingReminderEmail = async (
       })
     : null;
 
-  const preview = `Your meeting "${title}" starts in ${minutesBefore} minutes — join now`;
+  const preview = `Your meeting "${title}" starts in ${minutesBefore} minutes - join now`;
 
   const urgencyColor =
     minutesBefore <= 5 ? T.red : minutesBefore <= 10 ? T.amber : T.indigo;
@@ -902,7 +902,7 @@ export const sendMeetingReminderEmail = async (
 
   return sendEmail({
     to: toEmail,
-    subject: `Starting in ${minutesBefore} min: ${title} — Lumina Meet`,
+    subject: `Starting in ${minutesBefore} min: ${title} - Lumina Meet`,
     html: shell(inner, preview),
     text: `Your meeting "${title}" starts in ${minutesBefore} minutes.\n\nMeeting ID: ${meetingId}\n${meetingTime ? `Time: ${meetingTime}\n` : ""}Join: ${meetingLink}`,
   });
@@ -948,7 +948,7 @@ export const sendRecordingReadyEmail = async (toEmail, recordingData) => {
     timeZoneName: "short",
   });
 
-  const preview = `Your "${meetingTitle}" recording is ready — ${formatDur(durationSec)}`;
+  const preview = `Your "${meetingTitle}" recording is ready - ${formatDur(durationSec)}`;
 
   const accentColors = {
     screen_voice: {
@@ -1225,7 +1225,7 @@ export const sendRecordingReadyEmail = async (toEmail, recordingData) => {
 
   return sendEmail({
     to: toEmail,
-    subject: `Recording Ready: ${meetingTitle} — Lumina Meet`,
+    subject: `Recording Ready: ${meetingTitle} - Lumina Meet`,
     html: shell(inner, preview),
     text: `Hi ${hostName},\n\nYour "${meetingTitle}" recording is ready!\n\nType: ${modeLabel}\nDuration: ${formatDur(durationSec)}\n\nWatch it here: ${cloudinaryUrl}\n\nThis link will also appear in your Recordings tab on the dashboard.`,
   });
@@ -1304,7 +1304,7 @@ export const sendMeetingTitleChangedEmail = async (toEmail, data) => {
         </table>
 
         <p class="title-text" style="margin:0 0 8px 0;font-size:26px;font-weight:800;color:#e8eaff;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;letter-spacing:-0.5px;">Your meeting has a new name</p>
-        <p style="margin:0;font-size:14px;color:rgba(255,255,255,0.50);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Title updated successfully — your link is unchanged</p>
+        <p style="margin:0;font-size:14px;color:rgba(255,255,255,0.50);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">Title updated successfully - your link is unchanged</p>
       </td>
     </tr>
 
@@ -1506,7 +1506,7 @@ export const sendMeetingTitleChangedEmail = async (toEmail, data) => {
           <tr>
             <td style="background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.20);border-radius:14px;padding:16px 20px;">
               <p style="margin:0;font-size:13px;color:rgba(255,255,255,0.55);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.7;">
-                &#128274;&nbsp; <strong style="color:#6ee7b7;">Your meeting link stays the same.</strong> Anyone with the existing link can still join — no need to reshare it.
+                &#128274;&nbsp; <strong style="color:#6ee7b7;">Your meeting link stays the same.</strong> Anyone with the existing link can still join - no need to reshare it.
               </p>
             </td>
           </tr>
@@ -1556,9 +1556,9 @@ export const sendMeetingTitleChangedEmail = async (toEmail, data) => {
 
   return sendEmail({
     to: toEmail,
-    subject: `Meeting Renamed: "${newTitle}" — Lumina Meet`,
+    subject: `Meeting Renamed: "${newTitle}" - Lumina Meet`,
     html: shell(inner, preview),
-    text: `Hi ${hostName},\n\nYour meeting has been renamed.\n\nPrevious title: ${oldTitle}\nNew title: ${newTitle}\n\nMeeting ID: ${meetingId}\nMeeting link (unchanged): ${meetingLink}${scheduledStr ? `\nScheduled for: ${scheduledStr}` : ""}\n\nYour link remains the same — no need to reshare it.\n\nIf you did not make this change, please secure your account.`,
+    text: `Hi ${hostName},\n\nYour meeting has been renamed.\n\nPrevious title: ${oldTitle}\nNew title: ${newTitle}\n\nMeeting ID: ${meetingId}\nMeeting link (unchanged): ${meetingLink}${scheduledStr ? `\nScheduled for: ${scheduledStr}` : ""}\n\nYour link remains the same - no need to reshare it.\n\nIf you did not make this change, please secure your account.`,
   });
 };
 

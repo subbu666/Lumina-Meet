@@ -31,10 +31,10 @@ export const API_ENDPOINTS = {
   RENAME_MEETING: "/api/meeting",
 
   // ── Recordings ─────────────────────────────────────────────────────────────
-  /** Get Cloudinary signed upload params — POST { meetingId, mode, durationSec, fileType } */
+  /** Get Cloudinary signed upload params - POST { meetingId, mode, durationSec, fileType } */
   RECORDING_SIGNATURE: "/api/meeting/recording/signature",
-  /** Save recording metadata after Cloudinary upload — POST { meetingId, publicId, mode, durationSec, fileSizeBytes, mimeType } */
+  /** Save recording metadata after Cloudinary upload - POST { meetingId, publicId, mode, durationSec, fileSizeBytes, mimeType } */
   RECORDING_SAVE: "/api/meeting/recording/save",
-  /** All recordings for the current user (dashboard Recordings tab) — GET */
+  /** All recordings for the current user (dashboard Recordings tab) - GET */
   USER_RECORDINGS: "/api/meeting/recordings",
 } as const;

@@ -1,6 +1,6 @@
 # Lumina Meet
 
-> **Production-grade real-time video meeting platform** — dark-themed SaaS with a React 19 frontend and a Node.js/Express backend, connected over WebRTC and Socket.IO.
+> **Production-grade real-time video meeting platform** - dark-themed SaaS with a React 19 frontend and a Node.js/Express backend, connected over WebRTC and Socket.IO.
 
 ---
 
@@ -15,7 +15,7 @@
   - [Folder Structure](#frontend-folder-structure)
   - [Design System](#design-system)
   - [Key Routes](#key-routes)
-  - [WebRTC Hook — `useWebRTC`](#webrtc-hook--usewebrtc)
+  - [WebRTC Hook - `useWebRTC`](#webrtc-hook--usewebrtc)
   - [Video Room UI](#video-room-ui)
   - [Feature Modules](#feature-modules)
 - [Backend](#backend)
@@ -64,7 +64,7 @@ npm run build    # production build
 ```bash
 cd backend
 npm install
-cp .env.example .env   # configure variables — see below
+cp .env.example .env   # configure variables - see below
 npm run dev            # http://localhost:5000
 npm start              # production
 ```
@@ -113,7 +113,7 @@ CLOUDINARY_CLOUD_NAME=your-cloud-name
 CLOUDINARY_API_KEY=your-api-key
 CLOUDINARY_API_SECRET=your-api-secret
 
-# Redis (Optional — falls back to in-memory)
+# Redis (Optional - falls back to in-memory)
 REDIS_URL=redis://localhost:6379
 
 # CORS
@@ -132,23 +132,23 @@ RATE_LIMIT_MAX_REQUESTS=8
 | ----------------- | ------------------------------------------------ | --------------------------------------------- |
 | Runtime           | Browser (Vite)                                   | Node.js 18+                                   |
 | Framework         | React 19, TanStack Start v1                      | Express.js 4.x                                |
-| Styling           | Tailwind CSS v4 (oklch palette)                  | —                                             |
-| Animation         | Framer Motion                                    | —                                             |
-| State             | Zustand                                          | —                                             |
-| HTTP              | Axios + mock adapter                             | —                                             |
-| Database          | —                                                | MongoDB Atlas (Mongoose 8.x)                  |
-| Cache             | —                                                | Redis (ioredis) + in-memory fallback          |
+| Styling           | Tailwind CSS v4 (oklch palette)                  | -                                             |
+| Animation         | Framer Motion                                    | -                                             |
+| State             | Zustand                                          | -                                             |
+| HTTP              | Axios + mock adapter                             | -                                             |
+| Database          | -                                                | MongoDB Atlas (Mongoose 8.x)                  |
+| Cache             | -                                                | Redis (ioredis) + in-memory fallback          |
 | Auth              | JWT (localStorage)                               | JWT + bcrypt + token rotation                 |
 | Real-time         | Socket.IO client                                 | Socket.IO 4.x server                          |
 | Video/Audio       | Native WebRTC, getUserMedia, getDisplayMedia     | WebRTC signaling relay                        |
-| VAD               | Web Audio API (AnalyserNode)                     | —                                             |
-| Noise suppression | AudioWorklet (RNNoise WASM) + gain-gate fallback | —                                             |
-| Background blur   | MediaPipe Selfie Segmentation WASM + canvas      | —                                             |
-| Soundscapes       | Web Audio API (procedural, no audio files)       | —                                             |
+| VAD               | Web Audio API (AnalyserNode)                     | -                                             |
+| Noise suppression | AudioWorklet (RNNoise WASM) + gain-gate fallback | -                                             |
+| Background blur   | MediaPipe Selfie Segmentation WASM + canvas      | -                                             |
+| Soundscapes       | Web Audio API (procedural, no audio files)       | -                                             |
 | Recording         | MediaRecorder → Cloudinary XHR                   | Cloudinary signed upload, Mongoose metadata   |
-| Email             | —                                                | Nodemailer + Brevo SMTP                       |
-| Components        | shadcn/ui, custom NeonButton / FloatingInput     | —                                             |
-| Security          | —                                                | Helmet, express-rate-limit, express-validator |
+| Email             | -                                                | Nodemailer + Brevo SMTP                       |
+| Components        | shadcn/ui, custom NeonButton / FloatingInput     | -                                             |
+| Security          | -                                                | Helmet, express-rate-limit, express-validator |
 
 ---
 
@@ -210,7 +210,7 @@ All visual decisions live in `client/src/styles.css` using oklch color tokens.
 
 Utility classes: `glass`, `glass-strong`, `text-gradient`, `glow-primary`, `animate-pulse-glow`, `animate-pulse-danger`, `shimmer`, `animate-float`
 
-NeonButton variants: `primary` / `outline` / `ghost` / `danger` — all consume tokens, never hardcoded hex.
+NeonButton variants: `primary` / `outline` / `ghost` / `danger` - all consume tokens, never hardcoded hex.
 
 ### Key Routes
 
@@ -226,7 +226,7 @@ NeonButton variants: `primary` / `outline` / `ghost` / `danger` — all consume 
 | `/meeting/:id`                   | Live video room                            |
 | `/meeting/:id?scheduledFor=<ts>` | Countdown screen if meeting hasn't started |
 
-### WebRTC Hook — `useWebRTC`
+### WebRTC Hook - `useWebRTC`
 
 All peer-connection and signaling logic lives in `client/src/hooks/useWebRTC.ts`. The video room UI (`meeting.$id.tsx`) consumes the hook's return surface.
 
@@ -270,7 +270,7 @@ For deployments behind symmetric NAT, add a TURN server to `ICE_SERVERS` in both
 
 | Control           | Implementation                                                                                               |
 | ----------------- | ------------------------------------------------------------------------------------------------------------ |
-| Mute mic          | `track.enabled = false` — track stays alive, bandwidth drops to near zero                                    |
+| Mute mic          | `track.enabled = false` - track stays alive, bandwidth drops to near zero                                    |
 | Stop cam          | `track.stop()` → LED off; replaces sender with a silent black canvas track via `RTCRtpSender.replaceTrack()` |
 | Start cam         | `getUserMedia({ video })` → fresh track, replaced in all peer senders                                        |
 | Screen share      | `getDisplayMedia()` → replaces video sender track; `track.onended` restores camera                           |
@@ -329,7 +329,7 @@ interface RemotePeer {
 
 **Footer controls:**
 
-Mic, Camera, Screen share, Raise hand, React (emoji picker), Whiteboard, Cinema mode, Noise suppression, Soundscapes, Record (host only), Leave — each with distinct active/inactive visual states. A pulsing REC chip with elapsed time appears in the header during recording.
+Mic, Camera, Screen share, Raise hand, React (emoji picker), Whiteboard, Cinema mode, Noise suppression, Soundscapes, Record (host only), Leave - each with distinct active/inactive visual states. A pulsing REC chip with elapsed time appears in the header during recording.
 
 **Side panels** (spring-animated, slide in from right): Chat, Participants, Whiteboard, Polls, Agenda, Lobby (host/co-host only).
 
@@ -349,7 +349,7 @@ Tries `AudioWorkletNode("noise-suppressor-processor")` first (RNNoise WASM). Fal
 MediaPipe Selfie Segmentation is loaded lazily from jsDelivr CDN. Frames are processed at ~15 fps via `requestAnimationFrame`; the composited canvas stream replaces the video sender in all peer connections. Falls back to full-frame CSS blur if CDN load fails.
 
 **Ambient Soundscapes (`useAmbientSound`)**
-Three procedurally generated soundscapes via Web Audio API — no audio files required.
+Three procedurally generated soundscapes via Web Audio API - no audio files required.
 
 | Soundscape | Technique                                                                        |
 | ---------- | -------------------------------------------------------------------------------- |
@@ -445,7 +445,7 @@ backend/src/
 { "success": false, "message": "Error description", "code": "ERROR_CODE" }
 ```
 
-#### Authentication — `/api/auth`
+#### Authentication - `/api/auth`
 
 | Method | Endpoint                | Auth | Description                    |
 | ------ | ----------------------- | ---- | ------------------------------ |
@@ -463,7 +463,7 @@ backend/src/
 
 **Forgot password always returns 200** to prevent email enumeration.
 
-#### Meetings — `/api/meeting`
+#### Meetings - `/api/meeting`
 
 | Method | Endpoint            | Auth     | Description                  |
 | ------ | ------------------- | -------- | ---------------------------- |
@@ -478,7 +478,7 @@ backend/src/
 | DELETE | `/meeting/:id`      | Yes      | Cancel meeting               |
 | POST   | `/meeting/:id/end`  | Yes      | End active meeting           |
 
-#### Recordings — `/api/meeting/recording`
+#### Recordings - `/api/meeting/recording`
 
 | Method | Endpoint                       | Auth | Description                                    |
 | ------ | ------------------------------ | ---- | ---------------------------------------------- |
@@ -486,7 +486,7 @@ backend/src/
 | POST   | `/meeting/recording/save`      | Yes  | Save recording metadata + send email           |
 | GET    | `/meeting/recordings`          | Yes  | List all recordings for the authenticated host |
 
-The `/signature` endpoint returns `{ signature, timestamp, cloudName, apiKey, publicId, resourceType }`. The `publicId` encodes the full storage path (`lumina-meet/{meetingId}/{mode}-{timestamp}`) — do not pass `folder` separately or the path will double-nest.
+The `/signature` endpoint returns `{ signature, timestamp, cloudName, apiKey, publicId, resourceType }`. The `publicId` encodes the full storage path (`lumina-meet/{meetingId}/{mode}-{timestamp}`) - do not pass `folder` separately or the path will double-nest.
 
 ### WebRTC Signaling
 
@@ -520,7 +520,7 @@ Newcomer                   Server                   Existing Peer
    │◀── answer ─────────────│                           │
    │◀──▶ ice-candidate ─────│──────────────────────────▶│
    │                        │                           │
-   │  [P2P media flows directly — server not involved]  │
+   │  [P2P media flows directly - server not involved]  │
 ```
 
 **Key client → server events:**
@@ -528,15 +528,15 @@ Newcomer                   Server                   Existing Peer
 | Event                                                                           | Payload                                   | Notes                                        |
 | ------------------------------------------------------------------------------- | ----------------------------------------- | -------------------------------------------- |
 | `join-room`                                                                     | `{ roomId, username, userId }`            | Triggers lobby check                         |
-| `leave-room`                                                                    | —                                         | Server emits `you-left` back before cleanup  |
-| `end-meeting`                                                                   | —                                         | Host only; tears down room for all           |
+| `leave-room`                                                                    | -                                         | Server emits `you-left` back before cleanup  |
+| `end-meeting`                                                                   | -                                         | Host only; tears down room for all           |
 | `offer` / `answer` / `ice-candidate`                                            | `{ to, offer/answer/candidate }`          | SDP relay                                    |
 | `media-state`                                                                   | `{ mic?, cam?, screen? }`                 | Broadcast media toggle                       |
 | `host-action`                                                                   | `{ action, targetSocketId }`              | `mute` / `cam-off` / `remove` / `lower-hand` |
 | `admit-participant` / `reject-participant`                                      | `{ targetSocketId }`                      | Lobby management                             |
 | `transfer-host`                                                                 | `{ targetSocketId, mode: "full"\|"sub" }` | Full transfer or co-host grant               |
 | `chat-message`                                                                  | `{ text, replyTo?, recipients? }`         | Broadcast or private                         |
-| `whiteboard-draw` / `whiteboard-erase` / `whiteboard-clear` / `whiteboard-sync` | element / id / — / elements               | Whiteboard sync                              |
+| `whiteboard-draw` / `whiteboard-erase` / `whiteboard-clear` / `whiteboard-sync` | element / id / - / elements               | Whiteboard sync                              |
 | `poll-create` / `poll-vote` / `poll-close` / `poll-dismiss`                     | varies                                    | Poll lifecycle                               |
 | `agenda-set` / `agenda-next` / `agenda-prev` / `agenda-goto`                    | varies                                    | Agenda navigation                            |
 | `recording-state`                                                               | `{ recording, mode }`                     | Broadcasts REC indicator to all peers        |
@@ -565,7 +565,7 @@ When `meeting.settings.waitingRoom` is `true` (default), participants are queued
 `host-action` targets a specific participant. `end-meeting` calls `teardownRoom()` which broadcasts `meeting-ended`, kicks lobby waiters, clears all in-memory maps, and closes the session in MongoDB.
 
 **Post-meeting dialogs:**
-`meeting-ended` includes `hostUsername`. Clients show "You ended this meeting" to the host and "Meeting ended by \<name\>" to participants — no second network call needed. Intentional leave (`leave-room` → `you-left`) shows a "You left — rejoin or go to dashboard" dialog before `socket.disconnect()`.
+`meeting-ended` includes `hostUsername`. Clients show "You ended this meeting" to the host and "Meeting ended by \<name\>" to participants - no second network call needed. Intentional leave (`leave-room` → `you-left`) shows a "You left - rejoin or go to dashboard" dialog before `socket.disconnect()`.
 
 ### Authentication Flow
 
@@ -624,18 +624,18 @@ Phase 3: POST /auth/reset-password → verify OTP → hash password → revoke a
 
 ### Security Features
 
-- **Helmet.js** — HSTS, CSP, X-Frame-Options, and other security headers
-- **bcrypt** — Password hashing with 12 salt rounds
-- **JWT** — Signed tokens with issuer/audience verification; access tokens expire in 15 m
-- **Token rotation** — Refresh tokens rotated on each use; old token immediately revoked
-- **Multi-tier rate limiting** — Redis-backed; falls back to in-memory
-- **Input validation** — express-validator on all REST endpoints; `sanitizeText()` in signaling (HTML stripped, max 2000 chars, only 10 allowed reaction emoji)
-- **CORS** — Restricted to `CLIENT_URL` origin only
-- **NoSQL injection prevention** — Mongoose parameterized queries
-- **Email enumeration prevention** — Consistent 200 on forgot-password
-- **Cloudinary signed uploads** — Binary content never routes through the API server
-- **Poll vote integrity** — One vote per `socketId` stored server-side; double-counting impossible
-- **Whiteboard authorship** — Server attaches `author`/`authorId` server-side; clients cannot spoof
+- **Helmet.js** - HSTS, CSP, X-Frame-Options, and other security headers
+- **bcrypt** - Password hashing with 12 salt rounds
+- **JWT** - Signed tokens with issuer/audience verification; access tokens expire in 15 m
+- **Token rotation** - Refresh tokens rotated on each use; old token immediately revoked
+- **Multi-tier rate limiting** - Redis-backed; falls back to in-memory
+- **Input validation** - express-validator on all REST endpoints; `sanitizeText()` in signaling (HTML stripped, max 2000 chars, only 10 allowed reaction emoji)
+- **CORS** - Restricted to `CLIENT_URL` origin only
+- **NoSQL injection prevention** - Mongoose parameterized queries
+- **Email enumeration prevention** - Consistent 200 on forgot-password
+- **Cloudinary signed uploads** - Binary content never routes through the API server
+- **Poll vote integrity** - One vote per `socketId` stored server-side; double-counting impossible
+- **Whiteboard authorship** - Server attaches `author`/`authorId` server-side; clients cannot spoof
 
 ### Database Models
 

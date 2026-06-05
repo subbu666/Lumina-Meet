@@ -14,7 +14,7 @@ const search = z.object({ email: z.string().email(), otp: z.string() });
 export const Route = createFileRoute("/reset-password")({
   component: ResetPasswordPage,
   validateSearch: search.parse,
-  head: () => ({ meta: [{ title: "New password — Lumina Meet" }] }),
+  head: () => ({ meta: [{ title: "New password - Lumina Meet" }] }),
 });
 
 function ResetPasswordPage() {
@@ -40,7 +40,7 @@ function ResetPasswordPage() {
   };
 
   return (
-    <AuthShell title="Set a new password" subtitle="Make it strong — you've got this.">
+    <AuthShell title="Set a new password" subtitle="Make it strong - you've got this.">
       <div className="space-y-4">
         <div>
           <FloatingInput

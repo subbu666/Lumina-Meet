@@ -1,7 +1,7 @@
 /**
- * meeting.$id.tsx — Lumina Meet
+ * meeting.$id.tsx - Lumina Meet
  *
- * FULLY REFACTORED — All patches merged (original + Patch 1-5 including PreJoinLobby).
+ * FULLY REFACTORED - All patches merged (original + Patch 1-5 including PreJoinLobby).
  *
  * PATCHES INCLUDED (original set):
  * ─ FIX A   useWebRTC() onMeetingEnded callback for host "end for all" nav
@@ -27,7 +27,7 @@
  * PreJoinLobby patches:
  * ─ PATCH 1   Import PreJoinLobby
  * ─ PATCH 2   PreJoinConfig type
- * ─ PATCH 3   MeetingRoom gates on preJoinConfig state — shows PreJoinLobby first
+ * ─ PATCH 3   MeetingRoom gates on preJoinConfig state - shows PreJoinLobby first
  * ─ PATCH 4   Room accepts initialStream / initialMic / initialCam props
  * ─ PATCH 5   useWebRTC receives initialStream, initialMic, initialCam
  */
@@ -144,7 +144,7 @@ const search = z.object({ scheduledFor: z.number().optional() }).partial();
 export const Route = createFileRoute("/meeting/$id")({
   component: MeetingRoom,
   validateSearch: search.parse,
-  head: () => ({ meta: [{ title: "Meeting — Lumina Meet" }] }),
+  head: () => ({ meta: [{ title: "Meeting - Lumina Meet" }] }),
 });
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_BASE_URL;
@@ -1081,7 +1081,7 @@ function CountdownScreen({
         </div>
         <h2 className="mt-5 text-2xl font-semibold">Meeting not started yet</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Hang tight — we'll let you in automatically.
+          Hang tight - we'll let you in automatically.
         </p>
         <div className="mt-6 flex justify-center gap-3 font-mono text-3xl">
           {[
@@ -1309,7 +1309,7 @@ function Room({
     respondToPermissionRequest,
   } = webrtc;
 
-  // ── RECORDING EMIT — crash-safe callback ──────────────────────────────────
+  // ── RECORDING EMIT - crash-safe callback ──────────────────────────────────
   const recordingEmit = useCallback((event: string, payload: unknown) => {
     (window as any).__luminaSocket?.emit(event, payload);
   }, []);
@@ -1836,7 +1836,7 @@ function Room({
             exit={{ y: -60, opacity: 0 }}
             className="relative z-10 flex items-center justify-between border-b border-white/5 bg-black/40 backdrop-blur-xl px-4 py-3 sm:px-6 gap-2"
           >
-            {/* Left — brand */}
+            {/* Left - brand */}
             <div className="flex items-center gap-3 min-w-0 shrink-0">
               <div className="h-7 w-7 shrink-0 rounded-lg bg-gradient-neon animate-pulse-glow" />
               <div className="min-w-0 hidden sm:block">
@@ -1845,7 +1845,7 @@ function Room({
               </div>
             </div>
 
-            {/* Center — contextual chips */}
+            {/* Center - contextual chips */}
             <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide">
               <AnimatePresence>
                 {raisedHands.length > 0 && (
@@ -1923,7 +1923,7 @@ function Room({
               </AnimatePresence>
             </div>
 
-            {/* Right — status, badges, panel toggles, layout */}
+            {/* Right - status, badges, panel toggles, layout */}
             <div className="flex items-center gap-1.5 shrink-0">
               {/* Status picker */}
               <button
@@ -2438,7 +2438,7 @@ function Room({
               highlightColor="oklch(0.8 0.18 80)"
             />
 
-            {/* Recording button — host and co-host only */}
+            {/* Recording button - host and co-host only */}
             {canManage &&
               (isRecording ? (
                 <motion.button
@@ -3146,7 +3146,7 @@ function WhiteboardOverlay({
             : activeTool === "sticky" || activeTool === "text"
               ? "Click anywhere to place"
               : activeTool === "select"
-                ? "Select mode — drag to move (coming soon)"
+                ? "Select mode - drag to move (coming soon)"
                 : "Click and drag to draw shape"}
       </div>
     </motion.div>
@@ -4088,7 +4088,7 @@ function RemoteVideoTile({
           : "border-white/10",
       )}
     >
-      {/* FIX C: muted — audio rendered by dedicated <audio> element in useWebRTC */}
+      {/* FIX C: muted - audio rendered by dedicated <audio> element in useWebRTC */}
       {peer.stream && (
         <video
           ref={videoRef}
@@ -5194,7 +5194,7 @@ function YouLeftModal({ onDismiss, onRejoin }: { onDismiss: () => void; onRejoin
             </motion.div>
             <h2 className="text-3xl font-bold text-gradient mb-3">You left the meeting</h2>
             <p className="text-base text-muted-foreground mb-8 leading-relaxed">
-              No worries — the meeting is still in progress.
+              No worries - the meeting is still in progress.
               <br />
               You can rejoin anytime using the same link.
             </p>

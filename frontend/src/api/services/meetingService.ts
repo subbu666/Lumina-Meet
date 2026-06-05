@@ -155,7 +155,7 @@ function toMeetingGroup(raw: RawMeeting, index: number): MeetingGroup {
 export const meetingService = {
   /**
    * Create an instant meeting.
-   * On DUPLICATE_TITLE (409) the error propagates — callers should use
+   * On DUPLICATE_TITLE (409) the error propagates - callers should use
    * extractDuplicateTitle() to detect it and open the DuplicateTitleModal.
    */
   generate: (data: { title: string }): Promise<{ link: string; meetingId: string }> =>
@@ -226,7 +226,7 @@ export const meetingService = {
    * Rename a meeting title.
    * Works for all types (instant, scheduled, joined).
    * Only the record owner (host) can call this.
-   * On DUPLICATE_TITLE (409) the error propagates — use extractDuplicateTitle().
+   * On DUPLICATE_TITLE (409) the error propagates - use extractDuplicateTitle().
    * On success, a confirmation email is sent to the host automatically.
    */
   renameMeeting: (

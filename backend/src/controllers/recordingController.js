@@ -1,24 +1,24 @@
 /**
- * recordingController.js — Lumina Meet
+ * recordingController.js - Lumina Meet
  *
  * Two endpoints:
  *
  *  POST /api/meeting/recording/signature
- *    — Generates a Cloudinary upload signature so the frontend can upload
+ *    - Generates a Cloudinary upload signature so the frontend can upload
  *      directly without routing the binary through our server.
- *    — Auth required (host or co-host only enforced client-side; backend
+ *    - Auth required (host or co-host only enforced client-side; backend
  *      verifies the user is authenticated and is associated with the meeting).
- *    — SERVER-SIDE LIMIT: rejects any request where durationSec exceeds
+ *    - SERVER-SIDE LIMIT: rejects any request where durationSec exceeds
  *      MAX_RECORDING_DURATION_SEC (900 s = 15 min). The client enforces
  *      the same limit and auto-stops the MediaRecorder, but we double-check
  *      here so a tampered client cannot bypass the cap and upload an
  *      oversized file to our Cloudinary account.
  *
  *  POST /api/meeting/recording/save
- *    — Called after the Cloudinary upload completes.
- *    — Saves the recording metadata to Meeting.recordings[].
- *    — Sends the recording-ready email to the host.
- *    — Returns the full RecordingEntry.
+ *    - Called after the Cloudinary upload completes.
+ *    - Saves the recording metadata to Meeting.recordings[].
+ *    - Sends the recording-ready email to the host.
+ *    - Returns the full RecordingEntry.
  *
  * Cloudinary credentials live in env:
  *   CLOUDINARY_CLOUD_NAME
@@ -27,7 +27,7 @@
  *
  * FIX: publicId already contains the full folder path
  * (lumina-meet/{meetingId}/{mode}-{ts}), so we must NOT also pass `folder`
- * to Cloudinary — doing so caused double-nesting and a 404 on delivery.
+ * to Cloudinary - doing so caused double-nesting and a 404 on delivery.
  * The signature now only covers: public_id + timestamp (+ transformation).
  */
 
@@ -92,7 +92,7 @@ function generateCloudinarySignature(params, apiSecret) {
  * Pattern: lumina-meet/{meetingId}/{mode}-{timestamp}
  *
  * IMPORTANT: Because public_id encodes the full path, do NOT also pass
- * a `folder` param to Cloudinary — it would prepend the folder a second
+ * a `folder` param to Cloudinary - it would prepend the folder a second
  * time and produce a double-nested path that 404s on delivery.
  */
 function buildPublicId(meetingId, mode) {
@@ -118,7 +118,7 @@ function getResourceType(mode, fileType) {
  *
  * Returns everything the frontend needs to upload directly to Cloudinary.
  * The signature covers timestamp + public_id (+ transformation for video).
- * `folder` is intentionally excluded — public_id already contains the path.
+ * `folder` is intentionally excluded - public_id already contains the path.
  *
  * LIMIT ENFORCEMENT:
  * The express-validator rule above already rejects durationSec >
@@ -215,7 +215,7 @@ export const getUploadSignature = asyncHandler(async (req, res) => {
       timestamp,
       cloudName,
       apiKey,
-      // folder is intentionally omitted — public_id encodes the full path
+      // folder is intentionally omitted - public_id encodes the full path
       publicId,
       resourceType,
       transformation: transformation || null,
@@ -294,7 +294,7 @@ export const saveRecording = asyncHandler(async (req, res) => {
   meeting.recordings.push(recordingEntry);
   await meeting.save();
 
-  // Send email notification (fire and forget — don't fail the API if email fails)
+  // Send email notification (fire and forget - don't fail the API if email fails)
   try {
     const host = meeting.host;
     const hostEmail = host?.email;

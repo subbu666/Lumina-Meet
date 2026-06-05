@@ -167,7 +167,7 @@ async function createUniqueMeetingId() {
  * so the frontend can detect DUPLICATE_TITLE and open the modal.
  *
  * Scope: all meetings where host === userId, regardless of type or status.
- * This intentionally covers cancelled/completed meetings too — titles are
+ * This intentionally covers cancelled/completed meetings too - titles are
  * permanently reserved so history stays unambiguous.
  */
 async function assertUniqueTitleForUser(userId, title) {
@@ -654,7 +654,7 @@ export const recordJoinedMeeting = asyncHandler(async (req, res) => {
   }
 
   // Check if this exact meeting (same host + meetingId + type joined) already
-  // exists — if so skip the duplicate-title check (it's a re-record of the same link).
+  // exists - if so skip the duplicate-title check (it's a re-record of the same link).
   let meeting = await Meeting.findOne({
     host: userId,
     meetingId,
@@ -1139,7 +1139,7 @@ export const renameMeeting = asyncHandler(async (req, res) => {
 
   // Only the owner of the record can rename it.
   // For "joined" meetings this is the user who saved the link, not the
-  // original room host — that's intentional and correct.
+  // original room host - that's intentional and correct.
   if (!meeting.isHost(userId)) {
     throw new APIError(
       403,
@@ -1164,7 +1164,7 @@ export const renameMeeting = asyncHandler(async (req, res) => {
     });
   }
 
-  // Duplicate-title check — exclude this meeting itself
+  // Duplicate-title check - exclude this meeting itself
   const conflict = await Meeting.findOne({
     host: userId,
     title: {
@@ -1187,7 +1187,7 @@ export const renameMeeting = asyncHandler(async (req, res) => {
   meeting.title = newTitle;
   await meeting.save();
 
-  // Fire confirmation email (non-fatal — never block the response)
+  // Fire confirmation email (non-fatal - never block the response)
   const User = (await import("../models/User.js")).default;
   const host = await User.findById(userId);
 
@@ -1203,7 +1203,7 @@ export const renameMeeting = asyncHandler(async (req, res) => {
         ? meeting.scheduledFor.toISOString()
         : null,
     }).catch((emailErr) => {
-      // Log but never throw — the rename already succeeded
+      // Log but never throw - the rename already succeeded
       console.error(
         "[renameMeeting] Confirmation email failed:",
         emailErr.message,

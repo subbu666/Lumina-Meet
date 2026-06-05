@@ -63,7 +63,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       try {
         const parsed = JSON.parse(userStr);
         if (!isValidUser(parsed)) {
-          // shape mismatch — wipe and force re-login
+          // shape mismatch - wipe and force re-login
           localStorage.removeItem("auth_access_token");
           localStorage.removeItem("auth_refresh_token");
           localStorage.removeItem("auth_user");

@@ -1,15 +1,15 @@
 /**
- * DeleteMeetingModal.tsx — Lumina Meet
+ * DeleteMeetingModal.tsx - Lumina Meet
  *
  * A cinematic, multi-phase confirmation dialog for permanent meeting deletion.
  *
  * Phases:
- *   "idle"     — danger warning, cancel / confirm buttons
- *   "deleting" — animated orbital loader with dissolving particles
- *   "done"     — success implosion with checkmark
+ *   "idle"     - danger warning, cancel / confirm buttons
+ *   "deleting" - animated orbital loader with dissolving particles
+ *   "done"     - success implosion with checkmark
  *
  * Design language: matches the oklch dark-glass aesthetic of the dashboard
- * — same CSS variables, same glass/border tokens, framer-motion throughout.
+ * - same CSS variables, same glass/border tokens, framer-motion throughout.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -109,7 +109,7 @@ function OrbitalLoader() {
         animate={{ rotate: 360 }}
         transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
       />
-      {/* Mid ring — counter */}
+      {/* Mid ring - counter */}
       <motion.div
         className="absolute inset-3 rounded-full border-2 border-transparent"
         style={{
@@ -297,7 +297,7 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
 
               {/* ── Content ──────────────────────────────────────────────── */}
               <div className="relative z-10 p-7">
-                {/* Close button — only in idle */}
+                {/* Close button - only in idle */}
                 <AnimatePresence>
                   {isIdle && (
                     <motion.button
@@ -474,7 +474,7 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
                           style={{ color: "oklch(0.72 0.12 35)" }}
                         >
                           Recordings stored on Cloudinary are{" "}
-                          <span className="font-semibold text-white/80">not deleted</span> — only
+                          <span className="font-semibold text-white/80">not deleted</span> - only
                           the meeting record is removed from Lumina Meet.
                         </p>
                       </div>

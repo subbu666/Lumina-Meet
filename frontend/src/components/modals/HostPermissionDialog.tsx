@@ -1,8 +1,8 @@
 /**
- * HostPermissionDialog.tsx — Lumina Meet
+ * HostPermissionDialog.tsx - Lumina Meet
  *
  * Shown to a participant when the host requests they turn their mic/cam on.
- * The participant can accept or decline — their choice is theirs alone.
+ * The participant can accept or decline - their choice is theirs alone.
  *
  * Design: full-screen backdrop, spring-animated card, pulsing icon, clear
  * action buttons. The host's name is shown prominently so the participant
@@ -32,7 +32,7 @@ const CONFIG = {
         </span>{" "}
         is asking you to{" "}
         <span className="font-semibold text-foreground">unmute your microphone</span>. You are in
-        control — accept only if you're comfortable.
+        control - accept only if you're comfortable.
       </>
     ),
     acceptLabel: "Unmute mic",
@@ -51,7 +51,7 @@ const CONFIG = {
           {name}
         </span>{" "}
         is asking you to <span className="font-semibold text-foreground">turn your camera on</span>.
-        You are in control — accept only if you're comfortable.
+        You are in control - accept only if you're comfortable.
       </>
     ),
     acceptLabel: "Turn camera on",
@@ -76,7 +76,7 @@ const CONFIG = {
         </span>{" "}
         is asking you to{" "}
         <span className="font-semibold text-foreground">unmute and turn your camera on</span>. You
-        are in control — accept only if you're comfortable.
+        are in control - accept only if you're comfortable.
       </>
     ),
     acceptLabel: "Enable mic & camera",

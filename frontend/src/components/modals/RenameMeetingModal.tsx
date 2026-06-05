@@ -4,7 +4,7 @@
  * Jaw-dropping, animated rename-meeting confirmation dialog.
  *
  * Flow:
- *   1. Opens showing the "confirmation" phase — title input pre-filled with
+ *   1. Opens showing the "confirmation" phase - title input pre-filled with
  *      current title, sparkle animation, neon aesthetics.
  *   2. User edits the title and clicks "Rename Meeting".
  *   3. Shows a "loading" phase while the API call is in flight.
@@ -419,7 +419,7 @@ export function RenameMeetingModal({ open, meeting, onClose, onSuccess }: Props)
                     <div className="mb-5 flex items-center gap-2.5 rounded-xl border border-[oklch(0.65_0.22_160/0.2)] bg-[oklch(0.65_0.22_160/0.06)] px-3.5 py-2.5">
                       <span className="h-1.5 w-1.5 rounded-full bg-[var(--neon-secondary)] shrink-0" />
                       <p className="text-[12px] text-[oklch(0.82_0.16_210/0.8)] leading-snug">
-                        Your meeting link stays the same — no need to reshare it.
+                        Your meeting link stays the same - no need to reshare it.
                       </p>
                     </div>
 

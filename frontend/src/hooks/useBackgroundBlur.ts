@@ -1,5 +1,5 @@
 /**
- * useBackgroundBlur.ts — Lumina Meet
+ * useBackgroundBlur.ts - Lumina Meet
  *
  * Client-side background blur / virtual backgrounds using the
  * MediaPipe Selfie Segmentation WASM model.
@@ -16,7 +16,7 @@
  * CDN NOTE:
  *   MediaPipe is loaded from:
  *     https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/
- *   No NPM install needed — the WASM runs entirely in the browser.
+ *   No NPM install needed - the WASM runs entirely in the browser.
  *
  * PERFORMANCE:
  *   The model runs at ~15 fps on a typical laptop. The canvas overlay is
@@ -137,7 +137,7 @@ export function useBackgroundBlur(
 
       setBackgroundModeState(mode);
 
-      // If already processing, just change mode — the render loop will pick it up
+      // If already processing, just change mode - the render loop will pick it up
       if (isProcessing) return;
 
       setIsProcessing(true);
@@ -166,7 +166,7 @@ export function useBackgroundBlur(
         SelfieSegmentation = await loadMediaPipe();
       } catch (err) {
         console.warn("[BackgroundBlur] MediaPipe unavailable, using blur fallback:", err);
-        // Simple CSS blur fallback — just shows blur without segmentation
+        // Simple CSS blur fallback - just shows blur without segmentation
         startSimpleBlurLoop(canvas, hiddenVideo, camStream, mode);
         return;
       }

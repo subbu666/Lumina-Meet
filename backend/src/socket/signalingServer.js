@@ -1,16 +1,16 @@
 /**
- * WebRTC Signaling Server — Lumina Meet
+ * WebRTC Signaling Server - Lumina Meet
  *
  * CHANGES IN THIS VERSION (on top of previous fixes):
  *
- * NEW — Meeting-ended dialogs (host name propagation):
+ * NEW - Meeting-ended dialogs (host name propagation):
  *   teardownRoom now accepts a `hostUsername` argument and passes it in the
  *   "meeting-ended" broadcast payload as `{ reason, hostUsername }`.
  *   The client uses this to decide which dialog to show:
  *     • host receives  → "You ended this meeting"   (hostUsername === own username)
  *     • others receive → "Meeting ended by <hostUsername>"
  *
- * NEW — "user-left" self-navigation:
+ * NEW - "user-left" self-navigation:
  *   When a regular participant disconnects intentionally (leaveRoom()),
  *   the server now emits "you-left" back to that socket BEFORE it leaves
  *   the room, so the client can show the "You left" dialog.
@@ -18,7 +18,7 @@
  *   emits; if leaveRoom() only disconnects the socket we fire it on disconnect
  *   when data.intentionalLeave is true.
  *
- * NEW — Host Permission Dialogs (Feature 2):
+ * NEW - Host Permission Dialogs (Feature 2):
  *   Hosts can request individual participants to turn their mic or cam back on.
  *   Three new socket events: request-mic-on, request-cam-on, request-mic-cam-on.
  *   Participant response is relayed back to the host via permission-response.
@@ -114,7 +114,7 @@ async function teardownRoom(
 ) {
   const room = rooms.get(roomId);
   if (room) {
-    // Broadcast to everyone still in the room — include hostUsername so the
+    // Broadcast to everyone still in the room - include hostUsername so the
     // client knows whether to show the "you ended" or "host ended" dialog.
     io.to(roomId).emit("meeting-ended", { reason, hostUsername });
 
@@ -377,7 +377,7 @@ export function initSignaling(io) {
      */
     socket.on("leave-room", () => {
       socket.data.intentionalLeave = true;
-      // Tell this socket it left intentionally — client shows "You left" dialog
+      // Tell this socket it left intentionally - client shows "You left" dialog
       socket.emit("you-left");
     });
 

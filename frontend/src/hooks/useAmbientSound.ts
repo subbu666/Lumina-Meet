@@ -1,14 +1,14 @@
 /**
- * useAmbientSound.ts — Lumina Meet
+ * useAmbientSound.ts - Lumina Meet
  *
  * Fixes vs previous version:
  *  1. AudioContext is created lazily on first user gesture (satisfies autoplay policy).
- *  2. volumeRef is always current — eliminates the stale closure bug where
+ *  2. volumeRef is always current - eliminates the stale closure bug where
  *     the master gain was set to the initial 0.35 even after the user changed it.
  *  3. `toggleSoundscape(null)` and toggling the same soundscape both stop correctly.
  *  4. ctx.resume() is awaited before building any nodes so Safari doesn't
  *     silently fail.
- *  5. Each soundscape builder is pure — only touches nodes it creates, making
+ *  5. Each soundscape builder is pure - only touches nodes it creates, making
  *     teardown reliable with no node leaks.
  */
 
@@ -294,7 +294,7 @@ export function useAmbientSound(): AmbientSoundReturn {
       typeof (window as any).webkitAudioContext !== "undefined",
   );
 
-  // Refs — never stale inside callbacks
+  // Refs - never stale inside callbacks
   const volumeRef = useRef(0.35);
   const ctxRef = useRef<AudioContext | null>(null);
   const masterRef = useRef<GainNode | null>(null);
@@ -305,7 +305,7 @@ export function useAmbientSound(): AmbientSoundReturn {
     activeSoundscapeRef.current = activeSoundscape;
   }, [activeSoundscape]);
 
-  // Lazily create (or resume) the AudioContext — must be called from a user gesture
+  // Lazily create (or resume) the AudioContext - must be called from a user gesture
   const ensureCtx = useCallback(async (): Promise<AudioContext | null> => {
     if (!isSupported) return null;
 
@@ -353,7 +353,7 @@ export function useAmbientSound(): AmbientSoundReturn {
         stopCurrentRef.current = null;
       }
 
-      // Null means "just stop" — or same id toggled off
+      // Null means "just stop" - or same id toggled off
       if (id === null || id === activeSoundscapeRef.current) {
         setActiveSoundscape(null);
         return;

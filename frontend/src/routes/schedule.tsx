@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/schedule")({
   component: SchedulePage,
-  head: () => ({ meta: [{ title: "Schedule meeting — Lumina Meet" }] }),
+  head: () => ({ meta: [{ title: "Schedule meeting - Lumina Meet" }] }),
 });
 
 function SchedulePage() {
@@ -33,7 +33,7 @@ function SchedulePage() {
   const [dupModalOpen, setDupModalOpen] = useState(false);
   const [dupConflictingTitle, setDupConflictingTitle] = useState("");
 
-  // ── Core submit — accepts an optional title override for retries ─────────────
+  // ── Core submit - accepts an optional title override for retries ─────────────
   const submit = async (titleOverride?: string) => {
     const resolvedTitle = (titleOverride ?? title).trim();
 
@@ -59,7 +59,7 @@ function SchedulePage() {
       setResult({ link: res.link, scheduledFor: scheduledForMs });
       toast.success("Meeting scheduled");
     } catch (err) {
-      // ── DUPLICATE_TITLE 409 — open the rename modal ────────────────────────
+      // ── DUPLICATE_TITLE 409 - open the rename modal ────────────────────────
       const conflicting = extractDuplicateTitle(err);
       if (conflicting) {
         setDupConflictingTitle(conflicting);

@@ -1,13 +1,13 @@
 /**
- * useRecording — Lumina Meet
+ * useRecording - Lumina Meet
  *
- * Refactored v2 — all stale-closure and ref-sync bugs fixed.
+ * Refactored v2 - all stale-closure and ref-sync bugs fixed.
  *
  * Key changes from original:
  *  • Callback refs are assigned synchronously in the render body (not inside
  *    useEffect) so the interval closure always reads the latest handler even
  *    when the parent re-renders between ticks.
- *  • The options object is never depended upon as a whole — only the individual
+ *  • The options object is never depended upon as a whole - only the individual
  *    callback values are extracted, which are now stable useCallback refs in
  *    the parent.
  *  • warnFiredRef and limitExceededRef reset correctly on every new recording.
@@ -15,9 +15,9 @@
  *    is never a dangling interval.
  *
  * Recording modes:
- *  "screen_voice" — screen share + microphone
- *  "voice"        — microphone only (audio/webm)
- *  "screen"       — screen video only (no audio)
+ *  "screen_voice" - screen share + microphone
+ *  "voice"        - microphone only (audio/webm)
+ *  "screen"       - screen video only (no audio)
  *
  * Limit constants (mirror backend constants/index.js):
  *  MAX_RECORDING_DURATION_SEC   = 300  (5 min hard cap)
@@ -119,7 +119,7 @@ export function useRecording(
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<number>(0);
 
-  // ── Callback refs — assigned synchronously every render ───────────────────
+  // ── Callback refs - assigned synchronously every render ───────────────────
   //
   // WHY NOT useEffect: useEffect runs after paint (async). The setInterval
   // callback closes over these refs and fires every second. If a parent
@@ -134,7 +134,7 @@ export function useRecording(
   const onApproachingLimitRef = useRef<(() => void) | undefined>(undefined);
   const onLimitExceededRef = useRef<(() => void) | undefined>(undefined);
 
-  // Synchronous ref sync — no useEffect needed.
+  // Synchronous ref sync - no useEffect needed.
   emitFnRef.current = emitFn;
   onApproachingLimitRef.current = options?.onApproachingLimit;
   onLimitExceededRef.current = options?.onLimitExceeded;
@@ -314,7 +314,7 @@ export function useRecording(
         };
 
         recorder.onstop = async () => {
-          // Always clear the timer here — it may already be null if the hard
+          // Always clear the timer here - it may already be null if the hard
           // stop path cleared it first, but clearInterval(null) is a no-op.
           clearTimer();
 
@@ -330,7 +330,7 @@ export function useRecording(
           setRecordingDurationSec(0);
           broadcastRecordingState(false, null);
 
-          // Upload the recording whether it stopped normally or hit the limit —
+          // Upload the recording whether it stopped normally or hit the limit -
           // the captured content up to the cut-off point is valid.
           await uploadToCloudinary(blob, mode, durationSec, mimeType);
         };

@@ -1,5 +1,5 @@
 /**
- * PermissionResponseToastLayer.tsx — Lumina Meet
+ * PermissionResponseToastLayer.tsx - Lumina Meet
  *
  * Shown to the HOST when a participant responds (accept/decline) to a
  * mic/cam permission request.
@@ -66,21 +66,22 @@ function PermissionToastItem({
 
   useEffect(() => {
     timerRef.current = setTimeout(onDismiss, 5000);
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
   }, [onDismiss]);
 
   const accepted = toast.accepted;
   const typeLabel =
-    toast.type === "mic" ? "microphone"
-    : toast.type === "cam" ? "camera"
-    : "mic & camera";
+    toast.type === "mic" ? "microphone" : toast.type === "cam" ? "camera" : "mic & camera";
 
   const acceptedConfig = {
     border: "oklch(0.75 0.18 145 / 0.5)",
     bg: "oklch(0.75 0.18 145 / 0.07)",
     glow: "0 8px 40px -8px oklch(0.75 0.18 145 / 0.5)",
     accentColor: "oklch(0.85 0.15 145)",
-    label: "bg-[oklch(0.75_0.18_145/0.2)] text-[oklch(0.85_0.15_145)] border-[oklch(0.75_0.18_145/0.4)]",
+    label:
+      "bg-[oklch(0.75_0.18_145/0.2)] text-[oklch(0.85_0.15_145)] border-[oklch(0.75_0.18_145/0.4)]",
     shimmer: "oklch(0.75 0.18 145)",
   };
   const declinedConfig = {
@@ -88,7 +89,8 @@ function PermissionToastItem({
     bg: "oklch(0.65 0.15 260 / 0.05)",
     glow: "0 8px 40px -8px oklch(0.55 0.15 260 / 0.3)",
     accentColor: "oklch(0.75 0.12 260)",
-    label: "bg-[oklch(0.65_0.15_260/0.15)] text-[oklch(0.75_0.12_260)] border-[oklch(0.65_0.15_260/0.3)]",
+    label:
+      "bg-[oklch(0.65_0.15_260/0.15)] text-[oklch(0.75_0.12_260)] border-[oklch(0.65_0.15_260/0.3)]",
     shimmer: "oklch(0.65 0.15 260)",
   };
   const cfg = accepted ? acceptedConfig : declinedConfig;
@@ -138,9 +140,7 @@ function PermissionToastItem({
               transition={{ type: "spring", stiffness: 400, delay: 0.05 }}
               className="relative flex h-10 w-10 items-center justify-center rounded-xl"
               style={{
-                background: accepted
-                  ? "oklch(0.75 0.18 145 / 0.2)"
-                  : "oklch(0.65 0.15 260 / 0.15)",
+                background: accepted ? "oklch(0.75 0.18 145 / 0.2)" : "oklch(0.65 0.15 260 / 0.15)",
                 border: `1px solid ${cfg.border}`,
               }}
             >
@@ -183,9 +183,7 @@ function PermissionToastItem({
               transition={{ delay: 0.16 }}
               className="text-[12px] text-muted-foreground leading-relaxed mt-0.5"
             >
-              {accepted
-                ? `turned their ${typeLabel} on`
-                : `declined to enable ${typeLabel}`}
+              {accepted ? `turned their ${typeLabel} on` : `declined to enable ${typeLabel}`}
             </motion.p>
           </div>
 
@@ -195,7 +193,12 @@ function PermissionToastItem({
             className="shrink-0 text-muted-foreground hover:text-foreground transition mt-0.5"
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              <path
+                d="M2 2l10 10M12 2L2 12"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
             </svg>
           </button>
         </div>
@@ -243,10 +246,7 @@ export function PermissionResponseToastLayer({
       <AnimatePresence mode="popLayout">
         {toasts.slice(-4).map((t) => (
           <div key={t.id} className="pointer-events-auto">
-            <PermissionToastItem
-              toast={t}
-              onDismiss={() => onDismiss(t.id)}
-            />
+            <PermissionToastItem toast={t} onDismiss={() => onDismiss(t.id)} />
           </div>
         ))}
       </AnimatePresence>

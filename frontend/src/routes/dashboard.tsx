@@ -1,5 +1,5 @@
 /**
- * dashboard.tsx — Lumina Meet Dashboard
+ * dashboard.tsx - Lumina Meet Dashboard
  *
  * CHANGES in this version:
  *   - Duplicate-title detection for instant meetings (handleGenerate),
@@ -69,7 +69,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 
 export const Route = createFileRoute("/dashboard")({
   component: Dashboard,
-  head: () => ({ meta: [{ title: "Dashboard — Lumina Meet" }] }),
+  head: () => ({ meta: [{ title: "Dashboard - Lumina Meet" }] }),
 });
 
 // ─── Tab type ──────────────────────────────────────────────────────────────────
@@ -631,8 +631,8 @@ function Dashboard() {
   const [renameTarget, setRenameTarget] = useState<MeetingGroup | null>(null);
 
   // ── Duplicate title state ───────────────────────────────────────────────────
-  // duplicateTitle   — the exact conflicting title from the server (drives modal open)
-  // pendingAction    — what to retry once the user picks a new title
+  // duplicateTitle   - the exact conflicting title from the server (drives modal open)
+  // pendingAction    - what to retry once the user picks a new title
   //   "instant"      → retry meetingService.generate with new title
   //   "join"         → retry meetingService.recordJoined with new title, then navigate
   const [duplicateTitle, setDuplicateTitle] = useState<string | null>(null);
@@ -715,7 +715,7 @@ function Dashboard() {
           setJoinOpen(false);
           return; // don't navigate yet
         }
-        // Non-fatal — we still allow joining even if recordJoined fails for other reasons
+        // Non-fatal - we still allow joining even if recordJoined fails for other reasons
       }
 
       navigate({ to: "/meeting/$id", params: { id } });
@@ -742,12 +742,12 @@ function Dashboard() {
         await meetingService.recordJoined({ meetingLink: link, title: newTitle });
         loadHistory();
       } catch {
-        // Non-fatal — navigate anyway
+        // Non-fatal - navigate anyway
       }
 
       navigate({ to: "/meeting/$id", params: { id } });
     } catch {
-      toast.error("Something went wrong — please try again.");
+      toast.error("Something went wrong - please try again.");
     }
   };
 
@@ -954,7 +954,7 @@ function Dashboard() {
 
       {/* ── Modals ─────────────────────────────────────────────────────── */}
 
-      {/* Instant meeting modal — passes duplicateTitle so it can open DuplicateTitleModal internally */}
+      {/* Instant meeting modal - passes duplicateTitle so it can open DuplicateTitleModal internally */}
       <MeetingGenerationModal
         open={genOpen}
         link={genLink}
@@ -983,7 +983,7 @@ function Dashboard() {
               placeholder=" "
             />
             <FloatingInput
-              label="Title (optional — saved to your history)"
+              label="Title (optional - saved to your history)"
               value={joinTitle}
               onChange={(e) => setJoinTitle(e.target.value)}
               placeholder=" "
@@ -1288,7 +1288,7 @@ function MeetingGroupRow({
             {expired && group.scheduledFor && (
               <StatPill icon={<AlertTriangle className="h-3 w-3 text-[oklch(0.72_0.22_35)]" />}>
                 <span className="text-[oklch(0.72_0.22_35/0.8)]">
-                  Was scheduled for {shortDate(group.scheduledFor)} — link no longer valid
+                  Was scheduled for {shortDate(group.scheduledFor)} - link no longer valid
                 </span>
               </StatPill>
             )}
@@ -1318,7 +1318,7 @@ function MeetingGroupRow({
         <div className="flex items-center gap-2 flex-shrink-0">
           <MeetingCTA group={group} />
 
-          {/* Rename button — appears on row hover for ALL meeting types */}
+          {/* Rename button - appears on row hover for ALL meeting types */}
           <motion.button
             onClick={(e) => {
               e.stopPropagation();
@@ -1338,7 +1338,7 @@ function MeetingGroupRow({
             <Pencil className="h-3.5 w-3.5" />
           </motion.button>
 
-          {/* Delete button — unchanged */}
+          {/* Delete button - unchanged */}
           <motion.button
             onClick={(e) => {
               e.stopPropagation();
@@ -1640,7 +1640,7 @@ function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void })
         </DialogContent>
       </Dialog>
 
-      {/* Duplicate title modal — shown when generateAndInvite returns 409 */}
+      {/* Duplicate title modal - shown when generateAndInvite returns 409 */}
       <DuplicateTitleModal
         open={!!dupTitle}
         conflictingTitle={dupTitle ?? ""}

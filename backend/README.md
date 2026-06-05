@@ -1,6 +1,6 @@
 # Lumina Meet API
 
-> **Production-grade backend API** for a real-time video meeting SaaS platform. Built with Node.js, Express, MongoDB, Redis, and Socket.IO — designed for scalability, security, and seamless real-time communication.
+> **Production-grade backend API** for a real-time video meeting SaaS platform. Built with Node.js, Express, MongoDB, Redis, and Socket.IO - designed for scalability, security, and seamless real-time communication.
 
 ---
 
@@ -51,7 +51,7 @@ Client (React / Browser)
     │                   ├── meetingController   (CRUD, scheduling, history, invites)
     │                   └── recordingController (Cloudinary signature, save, list)
     │
-    └──▶ WebSocket (Socket.IO — /socket.io, shared port)
+    └──▶ WebSocket (Socket.IO - /socket.io, shared port)
               │
               └──▶ signallingServer.js
                         │
@@ -67,7 +67,7 @@ Client (React / Browser)
                         └── disconnect (peer cleanup + session tracking)
 
 Email: Brevo SMTP (OTP verification, meeting invites, reminders, recording-ready)
-Storage: Cloudinary (direct signed upload — binary never routes through this server)
+Storage: Cloudinary (direct signed upload - binary never routes through this server)
 ```
 
 ---
@@ -144,7 +144,7 @@ src/
 - **MongoDB Atlas** account ([Sign up](https://www.mongodb.com/cloud/atlas))
 - **Brevo** (formerly Sendinblue) account for SMTP ([Sign up](https://www.brevo.com/))
 - **Cloudinary** account for recording storage ([Sign up](https://cloudinary.com/))
-- **Redis** (optional — falls back to in-memory if unavailable)
+- **Redis** (optional - falls back to in-memory if unavailable)
 
 ### Installation
 
@@ -177,7 +177,7 @@ npm start
 | Socket.IO (WebRTC signaling) | 5000 | ws://localhost:5000   |
 | Frontend (CORS)              | 5173 | http://localhost:5173 |
 
-> Socket.IO shares the same port as the REST API — both are attached to the same `http.Server` instance in `server.js`.
+> Socket.IO shares the same port as the REST API - both are attached to the same `http.Server` instance in `server.js`.
 
 ---
 
@@ -191,7 +191,7 @@ NODE_ENV=development
 # MongoDB Atlas (Required)
 MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/video-meet-db?retryWrites=true&w=majority
 
-# JWT Secrets (Required — generate strong random strings, min 32 chars)
+# JWT Secrets (Required - generate strong random strings, min 32 chars)
 JWT_ACCESS_SECRET=your-super-secret-access-key-min-32-chars
 JWT_REFRESH_SECRET=your-super-secret-refresh-key-min-32-chars
 JWT_ACCESS_EXPIRY=15m
@@ -212,7 +212,7 @@ CLOUDINARY_CLOUD_NAME=your-cloud-name
 CLOUDINARY_API_KEY=your-api-key
 CLOUDINARY_API_SECRET=your-api-secret
 
-# Redis (Optional — falls back to in-memory)
+# Redis (Optional - falls back to in-memory)
 REDIS_URL=redis://localhost:6379
 
 # Client URL for CORS
@@ -273,10 +273,10 @@ All auth endpoints are prefixed with `/api/auth`.
 | POST   | `/auth/refresh`         | No   | 100/min    | Refresh access token           |
 | POST   | `/auth/forgot-password` | No   | 3/hour     | Request password reset OTP     |
 | POST   | `/auth/reset-password`  | No   | 3/hour     | Reset password with OTP        |
-| POST   | `/auth/logout`          | No   | —          | Logout (revokes refresh token) |
-| POST   | `/auth/logout-all`      | Yes  | —          | Logout all devices             |
-| GET    | `/auth/me`              | Yes  | —          | Get current user profile       |
-| PATCH  | `/auth/profile`         | Yes  | —          | Update user profile            |
+| POST   | `/auth/logout`          | No   | -          | Logout (revokes refresh token) |
+| POST   | `/auth/logout-all`      | Yes  | -          | Logout all devices             |
+| GET    | `/auth/me`              | Yes  | -          | Get current user profile       |
+| PATCH  | `/auth/profile`         | Yes  | -          | Update user profile            |
 
 ---
 
@@ -427,14 +427,14 @@ All meeting endpoints are prefixed with `/api/meeting`.
 | ------ | ------------------- | -------- | ---------- | ------------------------------------------------------------ |
 | POST   | `/meeting/generate` | Yes      | 10/min     | Create instant meeting                                       |
 | POST   | `/meeting/schedule` | Yes      | 10/min     | Schedule future meeting                                      |
-| POST   | `/meeting/join/:id` | Optional | —          | Join a meeting                                               |
+| POST   | `/meeting/join/:id` | Optional | -          | Join a meeting                                               |
 | POST   | `/meeting/invite`   | Yes      | 10/min     | Invite participants                                          |
-| GET    | `/meeting/history`  | Yes      | —          | Get meeting history                                          |
-| GET    | `/meeting/upcoming` | Yes      | —          | Get upcoming meetings                                        |
-| GET    | `/meeting/:id`      | Yes      | —          | Get meeting details                                          |
-| PATCH  | `/meeting/:id`      | Yes      | —          | Update meeting                                               |
-| DELETE | `/meeting/:id`      | Yes      | —          | Cancel meeting                                               |
-| POST   | `/meeting/:id/end`  | Yes      | —          | End active meeting (REST complement to socket `end-meeting`) |
+| GET    | `/meeting/history`  | Yes      | -          | Get meeting history                                          |
+| GET    | `/meeting/upcoming` | Yes      | -          | Get upcoming meetings                                        |
+| GET    | `/meeting/:id`      | Yes      | -          | Get meeting details                                          |
+| PATCH  | `/meeting/:id`      | Yes      | -          | Update meeting                                               |
+| DELETE | `/meeting/:id`      | Yes      | -          | Cancel meeting                                               |
+| POST   | `/meeting/:id/end`  | Yes      | -          | End active meeting (REST complement to socket `end-meeting`) |
 
 ---
 
@@ -494,14 +494,14 @@ Called by the frontend **before** uploading to Cloudinary. Returns a pre-signed 
 | -------------- | ----------------------------- | ------------ |
 | `voice`        | No                            | `raw`        |
 | `voice`        | Yes                           | `video`      |
-| `screen`       | —                             | `video`      |
-| `screen_voice` | —                             | `video`      |
+| `screen`       | -                             | `video`      |
+| `screen_voice` | -                             | `video`      |
 
 ---
 
 ### POST `/meeting/recording/save`
 
-Called by the frontend after the Cloudinary XHR upload completes. Persists metadata and fires the recording-ready email (fire-and-forget — email failure does not fail the API).
+Called by the frontend after the Cloudinary XHR upload completes. Persists metadata and fires the recording-ready email (fire-and-forget - email failure does not fail the API).
 
 **Request:**
 
@@ -585,7 +585,7 @@ Newcomer joins room → server sends "room-peers" list to newcomer
 Newcomer creates offer → sends to each existing peer via server
 Existing peer receives offer → creates answer → sends back via server
 Both sides exchange ICE candidates via server
-WebRTC peer connection established — media flows directly P2P
+WebRTC peer connection established - media flows directly P2P
 Server is no longer involved in the media streams
 ```
 
@@ -620,41 +620,41 @@ Rooms are created on first join and cleaned up when the last participant leaves 
 
 | Event                | Payload                                     | Auth         | Description                                        |
 | -------------------- | ------------------------------------------- | ------------ | -------------------------------------------------- |
-| `join-room`          | `{ roomId, username, userId }`              | —            | Join a meeting room (triggers lobby check)         |
-| `leave-room`         | —                                           | —            | Intentional leave; server emits `you-left` back    |
-| `end-meeting`        | —                                           | Host only    | End meeting for all participants                   |
-| `offer`              | `{ to, offer }`                             | —            | Send SDP offer to a specific peer                  |
-| `answer`             | `{ to, answer }`                            | —            | Send SDP answer to a specific peer                 |
-| `ice-candidate`      | `{ to, candidate }`                         | —            | Relay ICE candidate to a specific peer             |
-| `media-state`        | `{ mic?, cam?, screen? }`                   | —            | Broadcast local media toggle to room               |
+| `join-room`          | `{ roomId, username, userId }`              | -            | Join a meeting room (triggers lobby check)         |
+| `leave-room`         | -                                           | -            | Intentional leave; server emits `you-left` back    |
+| `end-meeting`        | -                                           | Host only    | End meeting for all participants                   |
+| `offer`              | `{ to, offer }`                             | -            | Send SDP offer to a specific peer                  |
+| `answer`             | `{ to, answer }`                            | -            | Send SDP answer to a specific peer                 |
+| `ice-candidate`      | `{ to, candidate }`                         | -            | Relay ICE candidate to a specific peer             |
+| `media-state`        | `{ mic?, cam?, screen? }`                   | -            | Broadcast local media toggle to room               |
 | `host-action`        | `{ action, targetSocketId }`                | Host/co-host | Send control action to a specific participant      |
 | `admit-participant`  | `{ targetSocketId }`                        | Host/co-host | Admit a waiting participant from the lobby         |
 | `reject-participant` | `{ targetSocketId }`                        | Host/co-host | Reject a waiting participant                       |
 | `transfer-host`      | `{ targetSocketId, mode: "full" \| "sub" }` | Host only    | Transfer host or grant co-host                     |
-| `chat-message`       | `{ text, replyTo?, recipients? }`           | —            | Send a chat message (broadcast or private)         |
-| `chat-reaction`      | `{ messageId, emoji }`                      | —            | Toggle a reaction on a message                     |
-| `chat-typing`        | `{ isTyping }`                              | —            | Broadcast typing indicator                         |
-| `status-update`      | `{ status }`                                | —            | Update participant status                          |
-| `raise-hand`         | —                                           | —            | Raise hand (idempotent)                            |
-| `lower-hand`         | —                                           | —            | Lower own hand                                     |
+| `chat-message`       | `{ text, replyTo?, recipients? }`           | -            | Send a chat message (broadcast or private)         |
+| `chat-reaction`      | `{ messageId, emoji }`                      | -            | Toggle a reaction on a message                     |
+| `chat-typing`        | `{ isTyping }`                              | -            | Broadcast typing indicator                         |
+| `status-update`      | `{ status }`                                | -            | Update participant status                          |
+| `raise-hand`         | -                                           | -            | Raise hand (idempotent)                            |
+| `lower-hand`         | -                                           | -            | Lower own hand                                     |
 | `host-lower-hand`    | `{ targetSocketId }`                        | Host/co-host | Force-lower a participant's hand                   |
-| `reaction`           | `{ emoji }`                                 | —            | Send floating emoji reaction to room               |
-| `whiteboard-draw`    | `{ element }`                               | —            | Add or update a whiteboard element                 |
-| `whiteboard-erase`   | `{ elementId }`                             | —            | Remove a whiteboard element by ID                  |
-| `whiteboard-clear`   | —                                           | Host/co-host | Clear all whiteboard elements                      |
-| `whiteboard-sync`    | `{ elements }`                              | —            | Replace full whiteboard state (undo/redo)          |
-| `whiteboard-cursor`  | `{ x, y }`                                  | —            | Broadcast cursor position (fractional 0–1)         |
+| `reaction`           | `{ emoji }`                                 | -            | Send floating emoji reaction to room               |
+| `whiteboard-draw`    | `{ element }`                               | -            | Add or update a whiteboard element                 |
+| `whiteboard-erase`   | `{ elementId }`                             | -            | Remove a whiteboard element by ID                  |
+| `whiteboard-clear`   | -                                           | Host/co-host | Clear all whiteboard elements                      |
+| `whiteboard-sync`    | `{ elements }`                              | -            | Replace full whiteboard state (undo/redo)          |
+| `whiteboard-cursor`  | `{ x, y }`                                  | -            | Broadcast cursor position (fractional 0–1)         |
 | `poll-create`        | `{ question, options }`                     | Host/co-host | Create and launch a live poll                      |
-| `poll-vote`          | `{ optionIndex }`                           | —            | Cast a vote (one per participant)                  |
-| `poll-close`         | —                                           | Host/co-host | Close voting on current poll                       |
-| `poll-dismiss`       | —                                           | Host/co-host | Remove poll from all screens                       |
+| `poll-vote`          | `{ optionIndex }`                           | -            | Cast a vote (one per participant)                  |
+| `poll-close`         | -                                           | Host/co-host | Close voting on current poll                       |
+| `poll-dismiss`       | -                                           | Host/co-host | Remove poll from all screens                       |
 | `agenda-set`         | `{ items: [{ title, durationSec }] }`       | Host/co-host | Set the meeting agenda                             |
-| `agenda-next`        | —                                           | Host/co-host | Advance to next agenda item                        |
-| `agenda-prev`        | —                                           | Host/co-host | Go back to previous agenda item                    |
+| `agenda-next`        | -                                           | Host/co-host | Advance to next agenda item                        |
+| `agenda-prev`        | -                                           | Host/co-host | Go back to previous agenda item                    |
 | `agenda-goto`        | `{ index }`                                 | Host/co-host | Jump to a specific agenda item                     |
-| `agenda-timer-start` | —                                           | Host/co-host | Start the per-item countdown timer                 |
-| `agenda-timer-pause` | —                                           | Host/co-host | Pause the per-item countdown timer                 |
-| `recording-state`    | `{ recording, mode }`                       | —            | Broadcast recording in-progress state to all peers |
+| `agenda-timer-start` | -                                           | Host/co-host | Start the per-item countdown timer                 |
+| `agenda-timer-pause` | -                                           | Host/co-host | Pause the per-item countdown timer                 |
+| `recording-state`    | `{ recording, mode }`                       | -            | Broadcast recording in-progress state to all peers |
 
 #### Server → Client
 
@@ -669,13 +669,13 @@ Rooms are created on first join and cleaned up when the last participant leaves 
 | `user-left`           | `{ socketId }`                                                                | A peer disconnected                                                       |
 | `host-action`         | `{ action }`                                                                  | Host command targeting you (`mute` / `cam-off` / `remove` / `lower-hand`) |
 | `meeting-ended`       | `{ reason, hostUsername }`                                                    | Host ended meeting for all; `hostUsername` drives which dialog to show    |
-| `you-left`            | —                                                                             | Confirms this socket's intentional leave (triggers "You left" dialog)     |
-| `you-are-host`        | —                                                                             | This socket is the meeting host                                           |
-| `you-are-subhost`     | —                                                                             | This socket has been granted co-host                                      |
-| `you-are-participant` | —                                                                             | Host role revoked (after full transfer)                                   |
+| `you-left`            | -                                                                             | Confirms this socket's intentional leave (triggers "You left" dialog)     |
+| `you-are-host`        | -                                                                             | This socket is the meeting host                                           |
+| `you-are-subhost`     | -                                                                             | This socket has been granted co-host                                      |
+| `you-are-participant` | -                                                                             | Host role revoked (after full transfer)                                   |
 | `host-transferred`    | `{ mode, newHostSocketId?, targetSocketId?, ... }`                            | Host or co-host assignment changed                                        |
 | `waiting`             | `{ message }`                                                                 | Participant placed in lobby queue                                         |
-| `admitted`            | —                                                                             | Host admitted this participant from lobby                                 |
+| `admitted`            | -                                                                             | Host admitted this participant from lobby                                 |
 | `join-rejected`       | `{ reason }`                                                                  | Host rejected this participant                                            |
 | `join-error`          | `{ message }`                                                                 | Room not found or other join error                                        |
 | `join-request`        | `{ socketId, username, userId }`                                              | (Host/co-host) A participant is knocking                                  |
@@ -693,15 +693,15 @@ Rooms are created on first join and cleaned up when the last participant leaves 
 | `whiteboard-state`    | `Element[]`                                                                   | Full whiteboard state on join or after sync                               |
 | `whiteboard-draw`     | `{ element, from }`                                                           | Element added or updated                                                  |
 | `whiteboard-erase`    | `{ elementId, from }`                                                         | Element removed                                                           |
-| `whiteboard-clear`    | —                                                                             | All elements cleared by host                                              |
+| `whiteboard-clear`    | -                                                                             | All elements cleared by host                                              |
 | `whiteboard-cursor`   | `{ socketId, username, x, y }`                                                | Peer cursor position                                                      |
 | `poll-state`          | `{ id, question, options, votes, totalVoters, closed }`                       | Full poll state on join or creation                                       |
 | `poll-update`         | `{ id, votes, totalVoters }`                                                  | Live vote count update                                                    |
 | `poll-closed`         | `{ id, votes }`                                                               | Poll closed, final results                                                |
-| `poll-dismissed`      | —                                                                             | Poll removed from all screens                                             |
+| `poll-dismissed`      | -                                                                             | Poll removed from all screens                                             |
 | `agenda-state`        | `AgendaState`                                                                 | Full agenda state on join or set                                          |
 | `agenda-tick`         | `AgendaState`                                                                 | Timer tick or navigation update (every 5 s + on control events)           |
-| `agenda-complete`     | —                                                                             | All agenda items exhausted                                                |
+| `agenda-complete`     | -                                                                             | All agenda items exhausted                                                |
 
 ---
 
@@ -781,7 +781,7 @@ All draw operations attach `author` (username) and `authorId` (socket ID) server
 
 ### Live Polls
 
-The server maintains one active poll per room in `pollState`. Votes are stored as `Map<socketId, optionIndex>` — one vote per participant, replaceable until the poll is closed.
+The server maintains one active poll per room in `pollState`. Votes are stored as `Map<socketId, optionIndex>` - one vote per participant, replaceable until the poll is closed.
 
 **Poll lifecycle:**
 
@@ -792,7 +792,7 @@ poll-close   → marks poll.closed = true, broadcasts "poll-closed" with final r
 poll-dismiss → deletes poll from pollState, broadcasts "poll-dismissed"
 ```
 
-Votes are serialized as `{ [optionIndex]: count }` before broadcasting — the raw `Map<socketId, optionIndex>` is never sent to clients.
+Votes are serialized as `{ [optionIndex]: count }` before broadcasting - the raw `Map<socketId, optionIndex>` is never sent to clients.
 
 ---
 
@@ -819,7 +819,7 @@ The server maintains one `agendaState` per room. A `setInterval` runs every 5 se
 }
 ```
 
-When `timerPaused` is `false` and `timerEnd` is set, `timerRemaining` is `null` — the client derives remaining time from `Date.now()`. When paused, `timerEnd` is `null` and `timerRemaining` holds the saved milliseconds.
+When `timerPaused` is `false` and `timerEnd` is set, `timerRemaining` is `null` - the client derives remaining time from `Date.now()`. When paused, `timerEnd` is `null` and `timerRemaining` holds the saved milliseconds.
 
 **Input limits:** 1–20 items, each title max 100 chars, duration 30 s – 7200 s (2 h).
 
@@ -832,7 +832,7 @@ When `timerPaused` is `false` and `timerEnd` is set, `timerRemaining` is `null` 
 **Private messages** (`recipients` array supplied):
 
 - Delivered only to `new Set([socket.id, ...recipients])`.
-- **Not** pushed to `chatHistory` — late joiners never see them.
+- **Not** pushed to `chatHistory` - late joiners never see them.
 - The message includes `isPrivate: true` and the `recipients` array so clients can render the lock badge and "Visible to:" annotation.
 
 **Text sanitization:** HTML tags are stripped and text is capped at 2000 characters. Only the 10 allowed reaction emoji are accepted for `chat-reaction`.
@@ -847,7 +847,7 @@ Allowed values: `available` | `busy` | `away` | `presenting` | `brb`. Any unreco
 
 **Hand raise:**
 
-`raise-hand` is idempotent — if the peer is already raised the event is silently ignored. `handRaisedAt` is set server-side to `Date.now()` for deterministic queue ordering on the client.
+`raise-hand` is idempotent - if the peer is already raised the event is silently ignored. `handRaisedAt` is set server-side to `Date.now()` for deterministic queue ordering on the client.
 
 **Floating reactions:**
 
@@ -899,7 +899,7 @@ Newcomer                   Server                   Existing Peer
    │◀── answer ───────────────│                           │
    │◀──▶ ice-candidate ───────│──────────────────────────▶│
    │                          │                           │
-   │  [P2P media flows directly — server not involved]    │
+   │  [P2P media flows directly - server not involved]    │
 ```
 
 ### ICE / STUN Configuration
@@ -945,7 +945,7 @@ Access token expires (15 m default)
 ```
 Phase 1 → POST /auth/forgot-password { email }
            Server sends OTP to email (10 min TTL in Redis)
-           Always returns 200 — prevents email enumeration
+           Always returns 200 - prevents email enumeration
 
 Phase 2 → User reads OTP from email
 
@@ -1002,20 +1002,20 @@ Phase 3 → POST /auth/reset-password { email, otp, newPassword }
 
 ## Security Features
 
-- **Helmet.js** — Security headers (HSTS, CSP, X-Frame-Options, etc.)
-- **bcrypt** — Password hashing with 12 salt rounds
-- **JWT** — Signed tokens with issuer/audience verification
-- **Token rotation** — Refresh tokens rotated on each use; old token revoked
-- **Rate limiting** — Multi-tier Redis-backed protection against brute force
-- **Input validation** — express-validator on all endpoints + `sanitizeText()` in signaling
-- **CORS** — Configured for specific `CLIENT_URL` origin only
-- **NoSQL injection prevention** — Mongoose parameterized queries
-- **Email enumeration prevention** — Consistent 200 response on forgot-password
-- **Account lockout** — Suspended/deleted account handling
-- **WebRTC privacy** — ICE candidates exchanged via server; peer IPs only exposed after mutual consent
-- **Cloudinary signed uploads** — Binary content never routes through the API server
-- **Poll vote integrity** — Server stores one vote per `socketId`; overwrites are allowed, double-counting is not
-- **Whiteboard authorship** — Server attaches `author`/`authorId` to all whiteboard elements server-side
+- **Helmet.js** - Security headers (HSTS, CSP, X-Frame-Options, etc.)
+- **bcrypt** - Password hashing with 12 salt rounds
+- **JWT** - Signed tokens with issuer/audience verification
+- **Token rotation** - Refresh tokens rotated on each use; old token revoked
+- **Rate limiting** - Multi-tier Redis-backed protection against brute force
+- **Input validation** - express-validator on all endpoints + `sanitizeText()` in signaling
+- **CORS** - Configured for specific `CLIENT_URL` origin only
+- **NoSQL injection prevention** - Mongoose parameterized queries
+- **Email enumeration prevention** - Consistent 200 response on forgot-password
+- **Account lockout** - Suspended/deleted account handling
+- **WebRTC privacy** - ICE candidates exchanged via server; peer IPs only exposed after mutual consent
+- **Cloudinary signed uploads** - Binary content never routes through the API server
+- **Poll vote integrity** - Server stores one vote per `socketId`; overwrites are allowed, double-counting is not
+- **Whiteboard authorship** - Server attaches `author`/`authorId` to all whiteboard elements server-side
 
 ---
 
@@ -1091,7 +1091,7 @@ Phase 3 → POST /auth/reset-password { email, otp, newPassword }
     participantVideo: Boolean,
     hostAudio: Boolean,
     participantAudio: Boolean,
-    waitingRoom: Boolean,     // default: true — controls lobby
+    waitingRoom: Boolean,     // default: true - controls lobby
     allowJoinBeforeHost: Boolean,
     muteParticipantsOnEntry: Boolean,
     allowRecording: Boolean,
@@ -1139,7 +1139,7 @@ Phase 3 → POST /auth/reset-password { email, otp, newPassword }
        Returns: { signature, timestamp, cloudName, apiKey, publicId, resourceType }
 
 2. Client → XHR direct upload to Cloudinary
-       Uses signed params (no folder param — publicId is the full path)
+       Uses signed params (no folder param - publicId is the full path)
        onprogress → upload progress bar (capped at 85%)
 
 3. Client → POST /recording/save

@@ -14,7 +14,7 @@ import { NoAccountModal } from "@/components/modals/NoAccountModal";
 
 export const Route = createFileRoute("/forgot-password")({
   component: ForgotPasswordPage,
-  head: () => ({ meta: [{ title: "Reset password — Lumina Meet" }] }),
+  head: () => ({ meta: [{ title: "Reset password - Lumina Meet" }] }),
 });
 
 function ForgotPasswordPage() {
@@ -26,7 +26,7 @@ function ForgotPasswordPage() {
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // Resend timer — starts when we move to step 1
+  // Resend timer - starts when we move to step 1
   const [timer, setTimer] = useState(60);
 
   useEffect(() => {
@@ -39,7 +39,7 @@ function ForgotPasswordPage() {
   // Controls the "no account found" modal
   const [noAccountOpen, setNoAccountOpen] = useState(false);
 
-  // Phase 1 — send OTP to email
+  // Phase 1 - send OTP to email
   const send = async () => {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast.error("Enter a valid email");
     setLoading(true);
@@ -53,7 +53,7 @@ function ForgotPasswordPage() {
         return;
       }
 
-      toast.success("Reset code sent — check your inbox");
+      toast.success("Reset code sent - check your inbox");
       setTimer(60); // reset timer each time an OTP is freshly sent
       setStep(1);
     } catch (err) {
@@ -68,7 +68,7 @@ function ForgotPasswordPage() {
     }
   };
 
-  // Phase 2 — verify OTP against the backend
+  // Phase 2 - verify OTP against the backend
   const verify = async () => {
     if (otp.length < 6) return toast.error("Enter all 6 digits");
     setLoading(true);
@@ -84,14 +84,14 @@ function ForgotPasswordPage() {
     }
   };
 
-  // Phase 3 — send email + otp + newPassword together
+  // Phase 3 - send email + otp + newPassword together
   const reset = async () => {
     if (computeStrength(password).score < 3) return toast.error("Choose a stronger password");
     if (password !== confirm) return toast.error("Passwords don't match");
     setLoading(true);
     try {
       await authService.resetPassword({ email, otp, password });
-      toast.success("Password updated — please log in");
+      toast.success("Password updated - please log in");
       navigate({ to: "/login" });
     } catch (err) {
       toast.error(extractError(err).message);
@@ -104,7 +104,7 @@ function ForgotPasswordPage() {
   const resend = async () => {
     try {
       await authService.forgotPassword({ email });
-      toast.success("New code sent — check your inbox");
+      toast.success("New code sent - check your inbox");
       setOtp("");
       setTimer(60);
     } catch (err) {
@@ -169,7 +169,7 @@ function ForgotPasswordPage() {
                   Verify code
                 </NeonButton>
 
-                {/* Resend with circular countdown — mirrors verify-otp page */}
+                {/* Resend with circular countdown - mirrors verify-otp page */}
                 <div className="flex items-center justify-center gap-3 text-sm text-muted-foreground">
                   {timer > 0 ? (
                     <>
@@ -248,7 +248,7 @@ function ForgotPasswordPage() {
         </div>
       </AuthShell>
 
-      {/* No-account modal — shown when forgotPassword detects USER_NOT_FOUND */}
+      {/* No-account modal - shown when forgotPassword detects USER_NOT_FOUND */}
       <NoAccountModal open={noAccountOpen} email={email} onClose={() => setNoAccountOpen(false)} />
     </>
   );

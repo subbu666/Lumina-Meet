@@ -49,7 +49,7 @@ router.post(
 );
 
 // ── Generate + invite in one shot ─────────────────────────────────────────────
-// MUST be before /:meetingId routes — avoids Express treating "generate-and-invite" as a param.
+// MUST be before /:meetingId routes - avoids Express treating "generate-and-invite" as a param.
 router.post(
   "/generate-and-invite",
   authenticate,
@@ -82,10 +82,10 @@ router.post(
 // Express treating "recording" as a meetingId param.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// GET  /api/meeting/recordings          — all recordings for the current user
+// GET  /api/meeting/recordings          - all recordings for the current user
 router.get("/recordings", authenticate, getUserRecordings);
 
-// POST /api/meeting/recording/signature — get Cloudinary signed upload params
+// POST /api/meeting/recording/signature - get Cloudinary signed upload params
 router.post(
   "/recording/signature",
   authenticate,
@@ -94,7 +94,7 @@ router.post(
   getUploadSignature,
 );
 
-// POST /api/meeting/recording/save      — save recording metadata + send email
+// POST /api/meeting/recording/save      - save recording metadata + send email
 router.post(
   "/recording/save",
   authenticate,
@@ -124,7 +124,7 @@ router.get("/upcoming", authenticate, getUpcomingMeetings);
 // ── Single meeting CRUD (param routes last) ───────────────────────────────────
 router.get("/:meetingId", authenticate, getMeeting);
 
-// Title-only rename (dedicated endpoint — sends confirmation email)
+// Title-only rename (dedicated endpoint - sends confirmation email)
 // MUST be before /:meetingId to avoid Express treating "rename" as a meetingId value.
 router.patch(
   "/:meetingId/rename",
@@ -137,10 +137,10 @@ router.patch(
 // Full update (title, description, duration, settings, maxParticipants)
 router.patch("/:meetingId", authenticate, updateMeeting);
 
-// DELETE /:meetingId/cancel  — soft cancel (status → "cancelled"), keeps DB record
+// DELETE /:meetingId/cancel  - soft cancel (status → "cancelled"), keeps DB record
 router.delete("/:meetingId/cancel", authenticate, cancelMeeting);
 
-// DELETE /:meetingId         — hard delete (removes document from DB entirely)
+// DELETE /:meetingId         - hard delete (removes document from DB entirely)
 router.delete(
   "/:meetingId",
   authenticate,

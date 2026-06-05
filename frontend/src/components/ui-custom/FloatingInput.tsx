@@ -71,7 +71,7 @@ export const FloatingInput = forwardRef<HTMLInputElement, Props>(function Floati
           {...rest}
         />
 
-        {/* Eye toggle — only for password fields, only while focused */}
+        {/* Eye toggle - only for password fields, only while focused */}
         {isPassword && focused && (
           <button
             type="button"

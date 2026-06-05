@@ -81,7 +81,7 @@ const startServer = async () => {
     console.log(`🌐 HTTP URL     : http://${HOST}:${PORT}`);
     console.log(`🔌 Socket.IO    : ws://${HOST}:${PORT}`);
     console.log(
-      `🔓 CORS origins : ${allowedOrigins.join(", ") || "(none — check CLIENT_URL in .env)"}`,
+      `🔓 CORS origins : ${allowedOrigins.join(", ") || "(none - check CLIENT_URL in .env)"}`,
     );
     console.log(`⏱️  Startup time : ${startupTime}ms`);
     console.log("=".repeat(50));
@@ -95,7 +95,7 @@ const startServer = async () => {
 
   // Graceful shutdown
   const gracefulShutdown = async (signal) => {
-    console.log(`\n${signal} received — shutting down...`);
+    console.log(`\n${signal} received - shutting down...`);
     io.close(() => console.log("🔌 Socket.IO closed"));
     httpServer.close(async () => {
       console.log("🔌 HTTP server closed");

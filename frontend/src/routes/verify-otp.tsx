@@ -18,7 +18,7 @@ const searchSchema = z.object({
 export const Route = createFileRoute("/verify-otp")({
   component: VerifyOtpPage,
   validateSearch: searchSchema.parse,
-  head: () => ({ meta: [{ title: "Verify OTP — Lumina Meet" }] }),
+  head: () => ({ meta: [{ title: "Verify OTP - Lumina Meet" }] }),
 });
 
 function VerifyOtpPage() {
@@ -41,15 +41,15 @@ function VerifyOtpPage() {
     setLoading(true);
     try {
       if (flow === "signup") {
-        // Signup flow — verifies OTP, creates account, returns tokens
+        // Signup flow - verifies OTP, creates account, returns tokens
         const res = await authService.verifyOtp({ email, otp });
         setSession(res.user, res.tokens);
         toast.success("Verified! Please login 🎉");
         navigate({ to: "/login" });
       } else {
-        // Reset flow — verifies OTP against password:reset: Redis key
+        // Reset flow - verifies OTP against password:reset: Redis key
         await authService.verifyResetOtp({ email, otp });
-        toast.success("OTP verified — set your new password");
+        toast.success("OTP verified - set your new password");
         navigate({ to: "/reset-password", search: { email, otp } });
       }
     } catch (err) {
@@ -67,7 +67,7 @@ function VerifyOtpPage() {
         // Re-trigger forgot password to generate a fresh OTP
         await authService.forgotPassword({ email });
       }
-      toast.success("New code sent — check your inbox");
+      toast.success("New code sent - check your inbox");
       setOtp("");
       setTimer(60);
     } catch (err) {

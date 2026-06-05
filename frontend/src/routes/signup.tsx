@@ -10,7 +10,7 @@ import { extractError } from "@/api/apiClient";
 
 export const Route = createFileRoute("/signup")({
   component: SignupPage,
-  head: () => ({ meta: [{ title: "Sign up — Lumina Meet" }] }),
+  head: () => ({ meta: [{ title: "Sign up - Lumina Meet" }] }),
 });
 
 function SignupPage() {

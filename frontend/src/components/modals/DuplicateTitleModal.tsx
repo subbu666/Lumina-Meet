@@ -66,7 +66,7 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
       return;
     }
     if (trimmed.toLowerCase() === conflictingTitle.trim().toLowerCase()) {
-      setTitleError("This is the same title — please choose something different");
+      setTitleError("This is the same title - please choose something different");
       return;
     }
     onRetry(trimmed);

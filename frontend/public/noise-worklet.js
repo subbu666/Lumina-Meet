@@ -1,13 +1,13 @@
 /**
- * noise-worklet.js — Lumina Meet
+ * noise-worklet.js - Lumina Meet
  *
  * Drop this into /public/noise-worklet.js (served as a static asset).
  *
  * Pipeline (runs in AudioWorkletGlobalScope, off the main thread):
- *   1. Spectral gate    — suppresses frames below an adaptive noise floor
- *   2. 3-band EQ        — rolls off mud (<120 Hz) and harshness (>8 kHz),
+ *   1. Spectral gate    - suppresses frames below an adaptive noise floor
+ *   2. 3-band EQ        - rolls off mud (<120 Hz) and harshness (>8 kHz),
  *                         gently lifts presence (2-5 kHz) for speech clarity
- *   3. Transient limiter— prevents clipping on sudden loud events
+ *   3. Transient limiter- prevents clipping on sudden loud events
  *
  * Falls back gracefully to the gain-gate in useNoiseSuppression.ts if
  * this file 404s or the browser doesn't support AudioWorklet.
@@ -153,7 +153,7 @@ class NoiseSuppressorProcessor extends AudioWorkletProcessor {
     this._calibFrames = 0;
     this._CALIB = 20; // first 20 FFT frames used to calibrate noise floor
 
-    // EQ chain — sculpt for speech clarity
+    // EQ chain - sculpt for speech clarity
     // 1. High-pass at 100 Hz (roll off room rumble, HVAC)
     // 2. Peaking -3 dB at 300 Hz (reduce mud / boxiness)
     // 3. Peaking +2 dB at 3.5 kHz (presence lift for intelligibility)

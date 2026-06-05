@@ -60,7 +60,7 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
 // ─── Canonical origin ─────────────────────────────────────────────
 // Replace with your real domain once you deploy.
 const SITE_URL = import.meta.env.VITE_SITE_URL;
-const OG_IMAGE = `${SITE_URL}/og-image.png`; // 1200×630 — create this separately
+const OG_IMAGE = `${SITE_URL}/og-image.png`; // 1200×630 - create this separately
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   head: () => ({
@@ -73,7 +73,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "google-site-verification", content: "cda-1J3zM-EProWfhmaORXCcCeCpKBteklmb46UR7sA" },
 
       // ── Primary SEO ─────────────────────────────────────────────
-      { title: "Lumina Meet — Real-time meetings, beautifully fast" },
+      { title: "Lumina Meet - Real-time meetings, beautifully fast" },
       {
         name: "description",
         content:
@@ -95,7 +95,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       // ── Open Graph ──────────────────────────────────────────────
       { property: "og:type", content: "website" },
       { property: "og:site_name", content: "Lumina Meet" },
-      { property: "og:title", content: "Lumina Meet — Real-time meetings, beautifully fast" },
+      { property: "og:title", content: "Lumina Meet - Real-time meetings, beautifully fast" },
       {
         property: "og:description",
         content:
@@ -105,11 +105,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { property: "og:image", content: OG_IMAGE },
       { property: "og:image:width", content: "1200" },
       { property: "og:image:height", content: "630" },
-      { property: "og:image:alt", content: "Lumina Meet — cinematic video meetings" },
+      { property: "og:image:alt", content: "Lumina Meet - cinematic video meetings" },
 
       // ── Twitter / X ─────────────────────────────────────────────
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:title", content: "Lumina Meet — Real-time meetings, beautifully fast" },
+      { name: "twitter:title", content: "Lumina Meet - Real-time meetings, beautifully fast" },
       {
         name: "twitter:description",
         content:

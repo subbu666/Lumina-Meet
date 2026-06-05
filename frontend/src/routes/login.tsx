@@ -11,7 +11,7 @@ import { useAuthStore } from "@/store/authStore";
 
 export const Route = createFileRoute("/login")({
   component: LoginPage,
-  head: () => ({ meta: [{ title: "Log in — Lumina Meet" }] }),
+  head: () => ({ meta: [{ title: "Log in - Lumina Meet" }] }),
 });
 
 function LoginPage() {

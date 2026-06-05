@@ -18,9 +18,9 @@ const ANIMATION_DURATION = 5000;
 
 /**
  * Three internal screens:
- *  "title"    — user types a meeting title and hits Enter / "Create"
- *  "loading"  — circular progress animation while API call runs
- *  "done"     — link ready, copy + join actions
+ *  "title"    - user types a meeting title and hits Enter / "Create"
+ *  "loading"  - circular progress animation while API call runs
+ *  "done"     - link ready, copy + join actions
  */
 type Screen = "title" | "loading" | "done";
 
@@ -39,7 +39,7 @@ interface Props {
    */
   duplicateTitle?: string | null;
   onClose: () => void;
-  /** Called with the title when the user confirms — parent triggers the API call */
+  /** Called with the title when the user confirms - parent triggers the API call */
   onGenerate: (title: string) => void;
 }
 
@@ -353,7 +353,7 @@ export function MeetingGenerationModal({
                   </motion.div>
                 )}
 
-                {/* ── SCREEN 3: Done — link ready ────────────────────────────── */}
+                {/* ── SCREEN 3: Done - link ready ────────────────────────────── */}
                 {screen === "done" && (
                   <motion.div
                     key="done-screen"
@@ -412,7 +412,7 @@ export function MeetingGenerationModal({
         )}
       </AnimatePresence>
 
-      {/* ── Duplicate Title Modal — rendered outside the main modal so it sits  */}
+      {/* ── Duplicate Title Modal - rendered outside the main modal so it sits  */}
       {/* on its own z-index layer (z-[60]) above the generation modal (z-50).   */}
       <DuplicateTitleModal
         open={dupModalOpen}

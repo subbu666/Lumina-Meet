@@ -1,4 +1,4 @@
-# Lumina Meet — Premium Real-Time Meeting Platform
+# Lumina Meet - Premium Real-Time Meeting Platform
 
 A production-grade, dark-themed SaaS frontend for video meetings built with TanStack Start, React 19, Tailwind v4, Framer Motion, Zustand, and Axios. The video layer uses **real WebRTC** peer connections coordinated through a Socket.IO signaling server, with voice activity detection, screen sharing, noise suppression, background blur, ambient soundscapes, a collaborative whiteboard, live polls, meeting agendas, recording with Cloudinary upload, a full lobby system, private chat, spatial layout mode, and host controls.
 
@@ -74,7 +74,7 @@ All visual decisions live in `src/styles.css`:
 
 **Utility classes:** `glass`, `glass-strong`, `text-gradient`, `glow-primary`, `animate-pulse-glow`, `animate-pulse-danger`, `shimmer`, `animate-float`
 
-Component variants (NeonButton: `primary` / `outline` / `ghost` / `danger`) consume tokens — components never hardcode hex colors.
+Component variants (NeonButton: `primary` / `outline` / `ghost` / `danger`) consume tokens - components never hardcode hex colors.
 
 ---
 
@@ -200,17 +200,17 @@ interface RemotePeer {
 }
 ```
 
-### Media Controls — What Actually Happens
+### Media Controls - What Actually Happens
 
 | Control               | Implementation                                                                                                                            |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| **Mute mic**          | `track.enabled = false` on all audio tracks — track stays alive, bandwidth drops to near zero                                             |
+| **Mute mic**          | `track.enabled = false` on all audio tracks - track stays alive, bandwidth drops to near zero                                             |
 | **Stop cam**          | `track.stop()` → LED off; replaces sender with a silent black canvas track via `RTCRtpSender.replaceTrack()` so the connection stays open |
 | **Start cam**         | `getUserMedia({ video })` → adds fresh track, replaces in all peer senders                                                                |
 | **Screen share**      | `getDisplayMedia()` → replaces video sender track in all PCs; `track.onended` restores camera when user stops via browser UI              |
 | **Stop screen share** | Restores original camera track to all senders; restores previous status                                                                   |
 
-### Audio Tracks — Separate Streams
+### Audio Tracks - Separate Streams
 
 Remote audio is delivered via dedicated hidden `<audio>` elements injected into `document.body`. Video and audio senders use separate `MediaStream` objects so background blur, noise suppression, and VAD can each tap into the right stream independently.
 
@@ -218,9 +218,9 @@ Remote audio is delivered via dedicated hidden `<audio>` elements injected into 
 
 Two VAD loops run via `AudioContext` + `AnalyserNode`:
 
-**Local VAD** — polls every 80 ms, sets `isSpeaking` with a 600 ms silence debounce.
+**Local VAD** - polls every 80 ms, sets `isSpeaking` with a 600 ms silence debounce.
 
-**Remote VAD** — polls the `AnalyserNode` of each peer's incoming audio stream every 80 ms, surfaces the loudest peer's socket ID as `speakingPeerId`. Drives the cyan speaking ring on video tiles and the banner above the footer.
+**Remote VAD** - polls the `AnalyserNode` of each peer's incoming audio stream every 80 ms, surfaces the loudest peer's socket ID as `speakingPeerId`. Drives the cyan speaking ring on video tiles and the banner above the footer.
 
 ```
 VAD_THRESHOLD  = 18    (RMS volume 0–255)
@@ -242,12 +242,12 @@ For deployments behind symmetric NAT (corporate networks, some mobile carriers),
 
 ### Post-Meeting Modals
 
-The hook accepts two callbacks that control navigation after a session ends — navigation is intentionally deferred until the user dismisses the dialog:
+The hook accepts two callbacks that control navigation after a session ends - navigation is intentionally deferred until the user dismisses the dialog:
 
 | Event                         | Callback                 | Dialog shown                                                                  |
 | ----------------------------- | ------------------------ | ----------------------------------------------------------------------------- |
 | Host calls `endMeeting`       | `onMeetingEndedWithInfo` | "Meeting ended by \<host\>" for guests; "You ended this meeting" for the host |
-| Participant calls `leaveRoom` | `onYouLeft`              | "You left — rejoin or go to dashboard"                                        |
+| Participant calls `leaveRoom` | `onYouLeft`              | "You left - rejoin or go to dashboard"                                        |
 
 `leaveRoom()` emits `leave-room` to the server (which fires `you-left` back) before disconnecting, giving the UI a clean hook to show the dialog before navigating.
 
@@ -317,7 +317,7 @@ Large central preview of the shared screen; thumbnail strip of all participants 
 
 Each tile (`LocalVideoTile` / `RemoteVideoTile`) renders:
 
-- Live `<video>` element when cam is on — local tile is mirrored (`scale-x-[-1]`)
+- Live `<video>` element when cam is on - local tile is mirrored (`scale-x-[-1]`)
 - Gradient avatar fallback with initials when cam is off
 - Cyan speaking ring + animated audio bars when VAD detects speech
 - Status dot (available / busy / away / presenting / brb) in the top-right corner
@@ -335,7 +335,7 @@ Each tile (`LocalVideoTile` / `RemoteVideoTile`) renders:
 | Mic               | `MicOff` red tint                    | `Mic` neutral                                  |
 | Camera            | `VideoOff` red tint                  | `VideoIcon` neutral                            |
 | Screen share      | `MonitorUp` neutral                  | `MonitorX` + pulse-glow                        |
-| Leave             | Always red gradient, `PhoneOff` icon | —                                              |
+| Leave             | Always red gradient, `PhoneOff` icon | -                                              |
 | Cinema mode       | `Maximize2` neutral                  | `Minimize2` active glow                        |
 | Noise suppression | `Mic2` neutral                       | Green glow, "Noise ON"                         |
 | Soundscapes       | `Music2` neutral                     | Amber glow, active soundscape name             |
@@ -380,14 +380,14 @@ Full-screen floating emoji layer. Reactions float upward from the bottom with sl
 
 ### For Participants
 
-When a room requires admission, the participant lands on `LobbyGate` — a full-screen waiting room with animated progress steps (Notified → Waiting → Enter). They can leave the lobby at any time.
+When a room requires admission, the participant lands on `LobbyGate` - a full-screen waiting room with animated progress steps (Notified → Waiting → Enter). They can leave the lobby at any time.
 
 ### For Hosts / Co-Hosts
 
-- **Knock toast** — a spring-animated toast appears in the top-right corner for each new knock, with Admit / Decline buttons. Up to 3 toasts stack; additional knocks show a "+N more → Open lobby" link.
-- **Lobby panel** — a dedicated side panel lists all waiting participants with per-participant admit/decline controls and a security notice.
-- **Knock sound** — a subtle two-tap chime plays via `AudioContext` when someone knocks.
-- **Deny confirm modal** — declining a participant requires a confirmation modal to prevent accidental dismissal.
+- **Knock toast** - a spring-animated toast appears in the top-right corner for each new knock, with Admit / Decline buttons. Up to 3 toasts stack; additional knocks show a "+N more → Open lobby" link.
+- **Lobby panel** - a dedicated side panel lists all waiting participants with per-participant admit/decline controls and a security notice.
+- **Knock sound** - a subtle two-tap chime plays via `AudioContext` when someone knocks.
+- **Deny confirm modal** - declining a participant requires a confirmation modal to prevent accidental dismissal.
 - `lobbyKnockCount` badge on the lobby panel toggle button counts unacknowledged knocks.
 
 ---
@@ -396,11 +396,11 @@ When a room requires admission, the participant lands on `LobbyGate` — a full-
 
 ### Features
 
-- **Full history** — server delivers chat history on join; new messages append in real time.
-- **Reply threading** — hover any message and click the reply icon; the reply context box shows above the input and is attached to the sent message.
-- **Emoji reactions** — hover a message and pick from the 10-reaction quick picker. Reactions toggle (same emoji = undo). Reaction counts update live for all participants.
-- **Typing indicators** — animated audio bars + "X is typing…" with a 1.5 s silence debounce.
-- **Private messaging** — a "To:" recipient selector above the input lets the sender choose specific participants. Private messages show a purple **Private** lock badge and a "Visible to:" annotation. The send button and bubble gradient change color for private messages.
+- **Full history** - server delivers chat history on join; new messages append in real time.
+- **Reply threading** - hover any message and click the reply icon; the reply context box shows above the input and is attached to the sent message.
+- **Emoji reactions** - hover a message and pick from the 10-reaction quick picker. Reactions toggle (same emoji = undo). Reaction counts update live for all participants.
+- **Typing indicators** - animated audio bars + "X is typing…" with a 1.5 s silence debounce.
+- **Private messaging** - a "To:" recipient selector above the input lets the sender choose specific participants. Private messages show a purple **Private** lock badge and a "Visible to:" annotation. The send button and bubble gradient change color for private messages.
 - **Unread count** badge on the chat toggle button, cleared when the panel is opened.
 
 ---
@@ -474,8 +474,8 @@ A "Live poll" chip in the header pulses when a poll is active, linking directly 
 
 ### Strategy
 
-1. **RNNoise WASM worklet** — attempts `AudioWorkletNode("noise-suppressor-processor")` loading `/noise-worklet.js`. This gives near-telephony-quality suppression when the worklet is available.
-2. **Gain-gate fallback** — if the worklet is unavailable, a `setInterval`-based RMS analyser auto-calibrates a noise floor over the first ~1 second, then ramps a `GainNode` between 0 and 1 based on how far the live RMS exceeds the floor. Uses only standard Web Audio API nodes (no deprecated `ScriptProcessorNode`).
+1. **RNNoise WASM worklet** - attempts `AudioWorkletNode("noise-suppressor-processor")` loading `/noise-worklet.js`. This gives near-telephony-quality suppression when the worklet is available.
+2. **Gain-gate fallback** - if the worklet is unavailable, a `setInterval`-based RMS analyser auto-calibrates a noise floor over the first ~1 second, then ramps a `GainNode` between 0 and 1 based on how far the live RMS exceeds the floor. Uses only standard Web Audio API nodes (no deprecated `ScriptProcessorNode`).
 
 ### Integration
 
@@ -507,7 +507,7 @@ The hook receives a `sharedAudioCtxRef` from `useWebRTC` to avoid creating a dup
 
 ## Ambient Soundscapes (`useAmbientSound`)
 
-Three procedural soundscapes generated entirely in the browser via Web Audio API — no audio files required.
+Three procedural soundscapes generated entirely in the browser via Web Audio API - no audio files required.
 
 | Soundscape | Generation technique                                                                                                  |
 | ---------- | --------------------------------------------------------------------------------------------------------------------- |
@@ -553,7 +553,7 @@ Three procedural soundscapes generated entirely in the browser via Web Audio API
 - The stop button in the footer shows elapsed time and a pulsing danger ring.
 - The recording state is broadcast to all peers via `recording-state` socket event.
 
-### Socket Emit — Crash-Safe Design
+### Socket Emit - Crash-Safe Design
 
 `useRecording` accepts a plain `emitFn: (event, payload) => void` callback instead of a raw `socketRef`. This eliminates a stale-closure crash where `socketRef.current` was `null` by the time `recorder.onstop` fired during cleanup. The callback reads `window.__luminaSocket` at call time.
 
@@ -565,9 +565,9 @@ Three procedural soundscapes generated entirely in the browser via Web Audio API
 
 The dashboard has two tabs:
 
-**Recent Meetings** — meeting history grouped by meeting ID, with session timeline, duration stats, type badges (Live / Instant / Scheduled / Joined / Expired), and contextual CTAs (Join live, Rejoin, View countdown, Expired).
+**Recent Meetings** - meeting history grouped by meeting ID, with session timeline, duration stats, type badges (Live / Instant / Scheduled / Joined / Expired), and contextual CTAs (Join live, Rejoin, View countdown, Expired).
 
-**Recordings** — all cloud recordings grouped by meeting. Each recording shows:
+**Recordings** - all cloud recordings grouped by meeting. Each recording shows:
 
 - Mode badge (Screen + Voice / Screen Only / Voice Only) with distinct colour coding
 - Video thumbnail (if available) with a play-button hover overlay
@@ -578,10 +578,10 @@ The dashboard has two tabs:
 
 ### Dashboard Actions
 
-- **Instant meeting** — opens `MeetingGenerationModal` (5-phase cinematic animation with progress ring).
-- **Schedule meeting** — navigates to `/schedule`.
-- **Join meeting** — modal with meeting link + optional title that records the join to history.
-- **Send invites** — generates a meeting and emails invitations; reveals the meeting link with copy/new-meeting buttons.
+- **Instant meeting** - opens `MeetingGenerationModal` (5-phase cinematic animation with progress ring).
+- **Schedule meeting** - navigates to `/schedule`.
+- **Join meeting** - modal with meeting link + optional title that records the join to history.
+- **Send invites** - generates a meeting and emails invitations; reveals the meeting link with copy/new-meeting buttons.
 
 ---
 
@@ -592,7 +592,7 @@ The dashboard has two tabs:
 - Axios instance with `baseURL: import.meta.env.VITE_API_BASE_URL`
 - Request interceptor: attaches `Authorization: Bearer <token>` from localStorage
 - Response interceptor: catches `429` and surfaces the global Rate Limit dialog
-- Uses the mock adapter by default — **remove `adapter: mockAdapter` to point at a real backend**
+- Uses the mock adapter by default - **remove `adapter: mockAdapter` to point at a real backend**
 
 ### Environment
 
@@ -629,37 +629,37 @@ Demo OTP: `123456` works for every flow.
 
 ## Key Flows
 
-**Auth** — signup with live password strength meter → OTP verification with circular resend timer → 3-phase forgot-password wizard with sliding transitions → login with confetti-burst Welcome modal.
+**Auth** - signup with live password strength meter → OTP verification with circular resend timer → 3-phase forgot-password wizard with sliding transitions → login with confetti-burst Welcome modal.
 
-**Dashboard** — instant meeting, schedule, join by ID, invite by email, recent history with status badges, recordings tab with Cloudinary-hosted media.
+**Dashboard** - instant meeting, schedule, join by ID, invite by email, recent history with status badges, recordings tab with Cloudinary-hosted media.
 
-**Meeting generation** — full-screen cinematic modal: 5 dynamic phases, animated progress ring, gradient glow that intensifies with progress, then reveals the link with copy & join.
+**Meeting generation** - full-screen cinematic modal: 5 dynamic phases, animated progress ring, gradient glow that intensifies with progress, then reveals the link with copy & join.
 
-**Schedule** — date + time picker generates a link; navigating to the room before start time shows a live countdown.
+**Schedule** - date + time picker generates a link; navigating to the room before start time shows a live countdown.
 
-**Lobby** — participants waiting for admission see an animated LobbyGate. Hosts see knock toasts with one-click admit/decline, and a full lobby manager panel. A gentle two-tap chime plays for each new knock.
+**Lobby** - participants waiting for admission see an animated LobbyGate. Hosts see knock toasts with one-click admit/decline, and a full lobby manager panel. A gentle two-tap chime plays for each new knock.
 
-**Video room** — `useWebRTC` opens camera/mic, joins Socket.IO, negotiates RTCPeerConnection with every peer, streams real video/audio. Supports mic/camera toggle (with hardware LED off), screen share, three layout modes, cinema spotlight, VAD speaking detection, emoji reactions, hand raise, status picker, and all panels below.
+**Video room** - `useWebRTC` opens camera/mic, joins Socket.IO, negotiates RTCPeerConnection with every peer, streams real video/audio. Supports mic/camera toggle (with hardware LED off), screen share, three layout modes, cinema spotlight, VAD speaking detection, emoji reactions, hand raise, status picker, and all panels below.
 
-**Chat** — real-time messaging with reply threads, emoji reactions, typing indicators, and private DMs to specific participants.
+**Chat** - real-time messaging with reply threads, emoji reactions, typing indicators, and private DMs to specific participants.
 
-**Whiteboard** — SVG canvas overlay with 8 drawing tools, 8 colours, 4 stroke widths, undo/redo, real-time cursor sharing, and host clear-all.
+**Whiteboard** - SVG canvas overlay with 8 drawing tools, 8 colours, 4 stroke widths, undo/redo, real-time cursor sharing, and host clear-all.
 
-**Polls** — host creates a live poll; all participants vote; results update in real time; host closes or dismisses.
+**Polls** - host creates a live poll; all participants vote; results update in real time; host closes or dismisses.
 
-**Agenda** — host sets timed items; countdown timer with pause/resume; all participants see the same view.
+**Agenda** - host sets timed items; countdown timer with pause/resume; all participants see the same view.
 
-**Noise suppression** — one-click toggle; tries RNNoise WASM worklet first, falls back to gain-gate; processed track replaces the audio sender in all peer connections.
+**Noise suppression** - one-click toggle; tries RNNoise WASM worklet first, falls back to gain-gate; processed track replaces the audio sender in all peer connections.
 
-**Background blur** — choose blur or a gradient virtual background; MediaPipe segments the person at 15 fps; processed canvas stream replaces the video sender.
+**Background blur** - choose blur or a gradient virtual background; MediaPipe segments the person at 15 fps; processed canvas stream replaces the video sender.
 
-**Soundscapes** — procedurally generated rain, lo-fi, or café audio via Web Audio API nodes; volume slider; toggles off cleanly with no node leaks.
+**Soundscapes** - procedurally generated rain, lo-fi, or café audio via Web Audio API nodes; volume slider; toggles off cleanly with no node leaks.
 
-**Recording** — host/co-host picks screen+voice, voice-only, or screen-only; live REC indicator in header; stop uploads directly to Cloudinary; link revealed in a modal with copy button and email notification.
+**Recording** - host/co-host picks screen+voice, voice-only, or screen-only; live REC indicator in header; stop uploads directly to Cloudinary; link revealed in a modal with copy button and email notification.
 
-**Post-meeting dialogs** — host-ended shows personalised "ended by \<name\>" dialog to guests and "you ended it" confirmation to the host; voluntary leave shows a rejoin option. Navigation is always inside the dialog, never immediate.
+**Post-meeting dialogs** - host-ended shows personalised "ended by \<name\>" dialog to guests and "you ended it" confirmation to the host; voluntary leave shows a rejoin option. Navigation is always inside the dialog, never immediate.
 
-**Rate limit** — dramatic pulsing dialog with retry countdown appears automatically on any `429` response.
+**Rate limit** - dramatic pulsing dialog with retry countdown appears automatically on any `429` response.
 
 ---
 
@@ -678,7 +678,7 @@ Demo OTP: `123456` works for every flow.
 | VAD               | Web Audio API (`AudioContext`, `AnalyserNode`)                             |
 | Noise suppression | AudioWorklet (RNNoise WASM) + gain-gate fallback                           |
 | Background blur   | MediaPipe Selfie Segmentation WASM (CDN, lazy-loaded) + canvas compositing |
-| Soundscapes       | Web Audio API (procedural — no audio files)                                |
+| Soundscapes       | Web Audio API (procedural - no audio files)                                |
 | Recording         | `MediaRecorder` API → Cloudinary signed upload via XHR                     |
 | Components        | shadcn/ui (Dialog, Popover, Calendar, Sonner)                              |
 

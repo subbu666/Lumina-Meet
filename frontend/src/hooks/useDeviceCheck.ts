@@ -1,5 +1,5 @@
 /**
- * useDeviceCheck.ts — Lumina Meet
+ * useDeviceCheck.ts - Lumina Meet
  *
  * Manages the pre-join device-check lobby state:
  *  - Enumerates available cameras / microphones
@@ -33,7 +33,7 @@ export interface UseDeviceCheckReturn {
   micEnabled: boolean;
   /** Whether the camera is enabled in the preview */
   camEnabled: boolean;
-  /** 0-100 — updated ~15× per second from the audio analyser */
+  /** 0-100 - updated ~15× per second from the audio analyser */
   audioLevel: number;
   /** List of available video input devices */
   cameras: DeviceInfo[];
@@ -45,7 +45,7 @@ export interface UseDeviceCheckReturn {
   selectedMicId: string;
   /** Toggle mic track on/off (no re-acquire) */
   toggleMic: () => void;
-  /** Toggle camera track on/off — stops track when disabling, re-acquires on enable */
+  /** Toggle camera track on/off - stops track when disabling, re-acquires on enable */
   toggleCam: () => Promise<void>;
   /** Switch to a different camera */
   switchCamera: (deviceId: string) => Promise<void>;
@@ -55,7 +55,7 @@ export interface UseDeviceCheckReturn {
    * Call when the user is ready to join.
    * Returns the live stream so the Room component can pass it directly to
    * useWebRTC (avoiding a second getUserMedia call).
-   * After this call the hook stops managing the stream — caller owns it.
+   * After this call the hook stops managing the stream - caller owns it.
    */
   confirmAndJoin: () => MediaStream | null;
 }
@@ -281,7 +281,7 @@ export function useDeviceCheck(): UseDeviceCheckReturn {
     if (!stream) return;
 
     if (camEnabled) {
-      // Disable — stop the track (LED off)
+      // Disable - stop the track (LED off)
       stream.getVideoTracks().forEach((t) => {
         t.stop();
         stream.removeTrack(t);
@@ -292,7 +292,7 @@ export function useDeviceCheck(): UseDeviceCheckReturn {
       setPreviewStream(updated);
       setCamEnabled(false);
     } else {
-      // Enable — re-acquire camera
+      // Enable - re-acquire camera
       try {
         const newStream = await navigator.mediaDevices.getUserMedia({
           video: { deviceId: selectedCameraId ? { exact: selectedCameraId } : undefined },
@@ -310,7 +310,7 @@ export function useDeviceCheck(): UseDeviceCheckReturn {
         setPreviewStream(updated);
         setCamEnabled(true);
       } catch {
-        // Permission revoked mid-session — don't throw
+        // Permission revoked mid-session - don't throw
       }
     }
   }, [camEnabled, selectedCameraId]);
@@ -375,7 +375,7 @@ export function useDeviceCheck(): UseDeviceCheckReturn {
 
   const confirmAndJoin = useCallback((): MediaStream | null => {
     handedOffRef.current = true;
-    // Stop VAD — useWebRTC will build its own AudioContext
+    // Stop VAD - useWebRTC will build its own AudioContext
     if (vadTimerRef.current) {
       clearInterval(vadTimerRef.current);
       vadTimerRef.current = null;

@@ -38,7 +38,7 @@
 }
 
 :root {
-  /* Premium dark futuristic — light mode mirrors dark for consistency (dark-first) */
+  /* Premium dark futuristic - light mode mirrors dark for consistency (dark-first) */
   --radius: 0.875rem;
   --background: oklch(0.16 0.02 265);
   --foreground: oklch(0.97 0.01 250);

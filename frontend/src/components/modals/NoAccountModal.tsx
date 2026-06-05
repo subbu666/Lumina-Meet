@@ -186,7 +186,7 @@ export function NoAccountModal({ open, email, onClose }: Props) {
               <CornerAccent position="br" />
               <ScanLine />
 
-              {/* Top bloom — danger-to-indigo */}
+              {/* Top bloom - danger-to-indigo */}
               <div
                 className="absolute inset-x-0 top-0 h-48 pointer-events-none"
                 style={{
@@ -417,7 +417,7 @@ export function NoAccountModal({ open, email, onClose }: Props) {
                     Exit
                   </motion.button>
 
-                  {/* Create Account — primary neon CTA */}
+                  {/* Create Account - primary neon CTA */}
                   <motion.button
                     onClick={handleCreateAccount}
                     className="flex-1 flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold"

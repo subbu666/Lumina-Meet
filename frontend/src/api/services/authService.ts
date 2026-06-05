@@ -57,7 +57,7 @@ export const authService = {
     apiClient.post(API_ENDPOINTS.RESEND_OTP, data).then((r) => r.data.data),
 
   /**
-   * FIX: Return the full response body — not just r.data.data.
+   * FIX: Return the full response body - not just r.data.data.
    * When no account exists the backend sends:
    *   { success: false, code: "USER_NOT_FOUND", message: "..." }
    * with HTTP 200 (anti-enumeration). The `data` field is absent in that case,

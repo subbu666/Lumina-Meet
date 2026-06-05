@@ -1,11 +1,11 @@
 /**
- * GenerativeAvatar.tsx — Lumina Meet
+ * GenerativeAvatar.tsx - Lumina Meet
  *
  * A deterministic, Canvas-based generative avatar for participants whose
  * camera is off. Replaces the boring gradient + initials circle.
  *
  * Design goals:
- *  - Fully deterministic from username string — same name always produces
+ *  - Fully deterministic from username string - same name always produces
  *    same pattern across all clients (no randomness at render time)
  *  - Reacts to VAD: when speaking=true, the geometry pulses outward with
  *    a spring-like animation driven by requestAnimationFrame
@@ -13,7 +13,7 @@
  *    Mosaic, Particle Constellation, Flowing Waves, Crystal Lattice
  *  - Each pattern gets a unique oklch color palette derived from the name
  *  - Initials always rendered on top for identity clarity
- *  - Zero dependencies beyond React — pure Canvas 2D API
+ *  - Zero dependencies beyond React - pure Canvas 2D API
  */
 
 import { useEffect, useRef, useCallback } from "react";
@@ -21,7 +21,7 @@ import { useEffect, useRef, useCallback } from "react";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface GenerativeAvatarProps {
-  /** Username — drives ALL visual decisions deterministically */
+  /** Username - drives ALL visual decisions deterministically */
   username: string;
   /** Whether this participant is currently speaking (from VAD) */
   speaking?: boolean;
@@ -31,7 +31,7 @@ interface GenerativeAvatarProps {
   className?: string;
 }
 
-// ─── Seeded PRNG (Mulberry32) — deterministic, fast ──────────────────────────
+// ─── Seeded PRNG (Mulberry32) - deterministic, fast ──────────────────────────
 
 function mulberry32(seed: number) {
   return function () {
@@ -94,7 +94,7 @@ type Renderer = (
   seed: number,
 ) => void;
 
-// Pattern 0 — Sacred Geometry (nested polygons + radial lines)
+// Pattern 0 - Sacred Geometry (nested polygons + radial lines)
 const renderSacredGeometry: Renderer = (ctx, size, rng, pal, pulse) => {
   const cx = size / 2,
     cy = size / 2;
@@ -171,7 +171,7 @@ const renderSacredGeometry: Renderer = (ctx, size, rng, pal, pulse) => {
   ctx.fill();
 };
 
-// Pattern 1 — Voronoi Mosaic (irregular polygon cells)
+// Pattern 1 - Voronoi Mosaic (irregular polygon cells)
 const renderVoronoiMosaic: Renderer = (ctx, size, rng, pal, pulse, seed) => {
   const cx = size / 2,
     cy = size / 2;
@@ -260,7 +260,7 @@ const renderVoronoiMosaic: Renderer = (ctx, size, rng, pal, pulse, seed) => {
   ctx.restore();
 };
 
-// Pattern 2 — Particle Constellation (dots connected by distance)
+// Pattern 2 - Particle Constellation (dots connected by distance)
 const renderConstellation: Renderer = (ctx, size, rng, pal, pulse, seed) => {
   const cx = size / 2,
     cy = size / 2;
@@ -335,7 +335,7 @@ const renderConstellation: Renderer = (ctx, size, rng, pal, pulse, seed) => {
   ctx.fill();
 };
 
-// Pattern 3 — Flowing Waves (layered sine curves)
+// Pattern 3 - Flowing Waves (layered sine curves)
 const renderWaves: Renderer = (ctx, size, rng, pal, pulse, seed) => {
   const cx = size / 2,
     cy = size / 2;
@@ -421,7 +421,7 @@ const renderWaves: Renderer = (ctx, size, rng, pal, pulse, seed) => {
   ctx.restore();
 };
 
-// Pattern 4 — Crystal Lattice (recursive hexagonal grid)
+// Pattern 4 - Crystal Lattice (recursive hexagonal grid)
 const renderCrystalLattice: Renderer = (ctx, size, rng, pal, pulse) => {
   const cx = size / 2,
     cy = size / 2;
@@ -522,12 +522,12 @@ export function GenerativeAvatar({
 }: GenerativeAvatarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Derive everything from username — stable across renders
+  // Derive everything from username - stable across renders
   const seed = hashUsername(username);
   const patternIndex = seed % PATTERNS.length;
   const renderer = PATTERNS[patternIndex];
 
-  // Animation state — only persists inside the RAF loop
+  // Animation state - only persists inside the RAF loop
   const pulseRef = useRef(0); // current interpolated pulse 0→1
   const targetPulseRef = useRef(0); // target driven by speaking prop
   const rafRef = useRef<number>(0);
@@ -542,7 +542,7 @@ export function GenerativeAvatar({
       .join("")
       .toUpperCase() || "?";
 
-  // Memoize palette and rng — recreate only when username changes
+  // Memoize palette and rng - recreate only when username changes
   const stableRng = mulberry32(seed);
   const palette = derivePalette(stableRng, seed);
 
@@ -552,7 +552,7 @@ export function GenerativeAvatar({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Smooth pulse interpolation — ease in fast, ease out slow
+    // Smooth pulse interpolation - ease in fast, ease out slow
     const target = targetPulseRef.current;
     const current = pulseRef.current;
     const diff = target - current;
@@ -567,7 +567,7 @@ export function GenerativeAvatar({
     const rng = mulberry32(seed);
     renderer(ctx, size, rng, palette, pulse, seed);
 
-    // Outer speaking ring — rendered above pattern, below initials
+    // Outer speaking ring - rendered above pattern, below initials
     if (pulse > 0.005) {
       const ringAlpha = pulse * 0.9;
       const ringWidth = 2 + pulse * 3;
@@ -585,7 +585,7 @@ export function GenerativeAvatar({
       ctx.stroke();
     }
 
-    // Initials overlay — always visible, scaled to size
+    // Initials overlay - always visible, scaled to size
     const fontSize = Math.round(size * 0.24);
     ctx.font = `600 ${fontSize}px -apple-system, system-ui, 'Inter', sans-serif`;
     ctx.textAlign = "center";
@@ -652,12 +652,12 @@ export function GenerativeAvatar({
   );
 }
 
-// ─── Compact tile avatar — for the video tile fallback (fills the tile) ───────
+// ─── Compact tile avatar - for the video tile fallback (fills the tile) ───────
 
 /**
- * TileGenerativeAvatar — fills its parent container completely.
+ * TileGenerativeAvatar - fills its parent container completely.
  * Use this inside LocalVideoTile / RemoteVideoTile as the cam-off fallback.
- * The size prop should match the actual rendered tile size in px —
+ * The size prop should match the actual rendered tile size in px -
  * but since tiles are responsive, we default to 200 and scale via CSS.
  */
 export function TileGenerativeAvatar({
@@ -720,7 +720,7 @@ export function TileGenerativeAvatar({
       ctx.stroke();
     }
 
-    // Initials — larger for tile view
+    // Initials - larger for tile view
     const fontSize = Math.round(size * 0.22);
     ctx.font = `600 ${fontSize}px -apple-system, system-ui, 'Inter', sans-serif`;
     ctx.textAlign = "center";

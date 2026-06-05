@@ -1,5 +1,5 @@
 /**
- * PreJoinLobby.tsx — Lumina Meet
+ * PreJoinLobby.tsx - Lumina Meet
  *
  * The pre-join device-check screen shown before any meeting entry
  * (instant, scheduled, or link join).
@@ -15,7 +15,7 @@
  *  - Acquiring / loading skeleton state
  *
  * Design:
- *  Matches Lumina Meet's dark-space theme exactly — oklch palette,
+ *  Matches Lumina Meet's dark-space theme exactly - oklch palette,
  *  glass morphism, neon-primary/secondary/accent glow, Framer Motion
  *  spring transitions throughout.
  */
@@ -51,7 +51,7 @@ export interface PreJoinLobbyProps {
   meetingId: string;
   /** Current user's display name */
   username: string;
-  /** Called when the user clicks "Join now" — receives the live stream */
+  /** Called when the user clicks "Join now" - receives the live stream */
   onJoin: (stream: MediaStream | null, micEnabled: boolean, camEnabled: boolean) => void;
   /** Called when the user wants to go back / cancel */
   onCancel: () => void;
@@ -605,7 +605,7 @@ export function PreJoinLobby({ meetingId, username, onJoin, onCancel }: PreJoinL
                       warning: !micEnabled && !permissionError,
                       error: !!permissionError,
                       okText: "Active & detecting sound",
-                      warnText: "Off — you'll join muted",
+                      warnText: "Off - you'll join muted",
                       errText: "Permission denied",
                     },
                     {
@@ -614,7 +614,7 @@ export function PreJoinLobby({ meetingId, username, onJoin, onCancel }: PreJoinL
                       warning: !camEnabled && !permissionError,
                       error: !!permissionError,
                       okText: "Video feed is live",
-                      warnText: "Off — others won't see you",
+                      warnText: "Off - others won't see you",
                       errText: "Permission denied",
                     },
                     {

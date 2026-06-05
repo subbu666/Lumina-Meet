@@ -465,21 +465,21 @@ export const Route = createFileRoute("/")({
   component: Landing,
   head: () => ({
     meta: [
-      { title: "Lumina Meet — Cinematic Video Meetings for Modern Teams" },
+      { title: "Lumina Meet - Cinematic Video Meetings for Modern Teams" },
       {
         name: "description",
         content:
-          "Spin up a P2P video room in under 5 seconds. AI noise suppression, background blur, collaborative whiteboard, live polls, ambient soundscapes, and cloud recording — free to start.",
+          "Spin up a P2P video room in under 5 seconds. AI noise suppression, background blur, collaborative whiteboard, live polls, ambient soundscapes, and cloud recording - free to start.",
       },
       // OG overrides for the landing page specifically
-      { property: "og:title", content: "Lumina Meet — Cinematic Video Meetings for Modern Teams" },
+      { property: "og:title", content: "Lumina Meet - Cinematic Video Meetings for Modern Teams" },
       {
         property: "og:description",
         content:
           "Spin up a P2P video room in under 5 seconds. Whiteboard, polls, noise suppression, cloud recording. Free to start.",
       },
       { property: "og:url", content: import.meta.env.VITE_SITE_URL },
-      // Landing page IS indexable — no noindex needed
+      // Landing page IS indexable - no noindex needed
       { name: "robots", content: "index, follow" },
     ],
     links: [
@@ -516,7 +516,7 @@ function Landing() {
           icon: Palette,
           title: "Collaborative Whiteboard",
           description:
-            "Full SVG canvas with 8 tools — pen, eraser, text, sticky notes, arrows, shapes. Real-time cursor sharing and 50-step undo/redo.",
+            "Full SVG canvas with 8 tools - pen, eraser, text, sticky notes, arrows, shapes. Real-time cursor sharing and 50-step undo/redo.",
           badge: "Live",
           accent: "indigo" as const,
         },
@@ -538,7 +538,7 @@ function Landing() {
           icon: MessageSquare,
           title: "Full-featured Chat",
           description:
-            "Reply threading, emoji reactions, typing indicators, private DMs, and unread count badges — all in real time.",
+            "Reply threading, emoji reactions, typing indicators, private DMs, and unread count badges - all in real time.",
           badge: "Private DMs",
           accent: "indigo" as const,
         },
@@ -566,7 +566,7 @@ function Landing() {
           icon: Globe,
           title: "Ambient Soundscapes",
           description:
-            "Rain, lo-fi, and café soundscapes generated entirely via Web Audio API — no audio files, zero latency, perfectly looped.",
+            "Rain, lo-fi, and café soundscapes generated entirely via Web Audio API - no audio files, zero latency, perfectly looped.",
           badge: "Procedural",
           accent: "purple" as const,
         },
@@ -593,7 +593,7 @@ function Landing() {
           icon: Shield,
           title: "Host Controls",
           description:
-            "Mute, cam-off, remove participants, lower hands, transfer full host or grant co-host status — all from one panel.",
+            "Mute, cam-off, remove participants, lower hands, transfer full host or grant co-host status - all from one panel.",
           accent: "purple" as const,
         },
         {
@@ -605,7 +605,7 @@ function Landing() {
         },
         {
           icon: Zap,
-          title: "VAD — Voice Activity",
+          title: "VAD - Voice Activity",
           description:
             "Dual AudioContext loops with 80 ms polling and 600 ms silence debounce. Highlights the loudest active speaker across all tiles.",
           badge: "Real-time",
@@ -769,7 +769,7 @@ function Landing() {
               Spin up secure rooms in seconds. Collaborate with a whiteboard, polls, and agenda.
               Record to the cloud. Built with{" "}
               <span className="text-foreground font-medium">WebRTC P2P</span> for zero-latency video
-              — for teams that care about craft.
+              - for teams that care about craft.
             </motion.p>
 
             {/* CTA Buttons */}
@@ -781,7 +781,7 @@ function Landing() {
             >
               <Link to="/signup">
                 <NeonButton className="px-7 py-3.5 text-sm font-semibold">
-                  Start free — no card needed <ArrowRight className="h-4 w-4" />
+                  Start free - no card needed <ArrowRight className="h-4 w-4" />
                 </NeonButton>
               </Link>
               <motion.a
@@ -811,7 +811,7 @@ function Landing() {
             >
               {[
                 "🔒 End-to-end encrypted",
-                "⚡ P2P video — server-free media",
+                "⚡ P2P video - server-free media",
                 "🎙️ AI noise suppression",
                 "☁️ Cloud recording",
               ].map((badge) => (
@@ -891,7 +891,7 @@ function Landing() {
                 Not just video calls. <span className="text-gradient">A collaboration suite.</span>
               </h2>
               <p className="mt-4 text-muted-foreground max-w-xl mx-auto text-sm sm:text-base">
-                Every feature you'd expect — and ten you didn't know you needed.
+                Every feature you'd expect - and ten you didn't know you needed.
               </p>
             </motion.div>
 
@@ -968,7 +968,7 @@ function Landing() {
                 </h2>
                 <p className="text-muted-foreground text-sm mb-8 max-w-lg">
                   Switch between layouts on the fly. From adaptive grid to full cinematic spotlight
-                  — the room adapts to you.
+                  - the room adapts to you.
                 </p>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
@@ -994,7 +994,7 @@ function Landing() {
                   <SoundscapePill label="Lo-fi" icon="🎵" />
                   <SoundscapePill label="Café" icon="☕" />
                   <span className="flex items-center text-xs text-muted-foreground ml-2">
-                    Ambient soundscapes — procedurally generated
+                    Ambient soundscapes - procedurally generated
                   </span>
                 </div>
               </div>
@@ -1006,7 +1006,7 @@ function Landing() {
         <section id="how-it-works" className="py-20 px-4 sm:px-6">
           <div className="mx-auto max-w-5xl">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-              {/* Left — steps */}
+              {/* Left - steps */}
               <div>
                 <motion.div
                   className="inline-flex items-center gap-2 text-xs text-purple-400 font-medium uppercase tracking-widest mb-4"
@@ -1043,12 +1043,12 @@ function Landing() {
                     {
                       step: "3",
                       title: "Share the link & invite",
-                      desc: "One-click email invites. Participants land in the lobby — you admit them with a single tap.",
+                      desc: "One-click email invites. Participants land in the lobby - you admit them with a single tap.",
                     },
                     {
                       step: "4",
                       title: "Collaborate live",
-                      desc: "Whiteboard, polls, agenda, chat, screen share, recording — all from one unified room.",
+                      desc: "Whiteboard, polls, agenda, chat, screen share, recording - all from one unified room.",
                     },
                   ].map((s, i) => (
                     <TimelineStep key={s.step} {...s} delay={i * 0.1} />
@@ -1056,7 +1056,7 @@ function Landing() {
                 </div>
               </div>
 
-              {/* Right — tech highlight */}
+              {/* Right - tech highlight */}
               <motion.div
                 className="space-y-4"
                 initial={{ opacity: 0, x: 30 }}
@@ -1077,7 +1077,7 @@ function Landing() {
                   <div className="space-y-2 text-xs text-muted-foreground leading-relaxed">
                     <p>
                       Video and audio flow{" "}
-                      <span className="text-foreground">directly browser-to-browser</span> — the
+                      <span className="text-foreground">directly browser-to-browser</span> - the
                       server only relays signaling (SDP + ICE) to establish the connection.
                     </p>
                     <p>

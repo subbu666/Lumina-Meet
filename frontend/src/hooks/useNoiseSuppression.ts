@@ -1,5 +1,5 @@
 /**
- * useNoiseSuppression.ts — Lumina Meet
+ * useNoiseSuppression.ts - Lumina Meet
  *
  * Changes vs previous version:
  *  - Passes `sampleRate: 48000` to AudioContext to match getUserMedia
@@ -46,7 +46,7 @@ function buildGainGate(ctx: AudioContext, sourceTrack: MediaStreamTrack): GainGa
   const CALIB_FRAMES = 60;
   const buf = new Uint8Array(analyser.fftSize);
 
-  // Hysteresis state — prevents rapid gate chatter
+  // Hysteresis state - prevents rapid gate chatter
   let gateOpen = true;
   const OPEN_THRESH_MULT = 3.5; // must be this far above floor to open
   const CLOSE_THRESH_MULT = 2.2; // falls below this to close
@@ -232,7 +232,7 @@ export function useNoiseSuppression(
       };
       usedWorklet = true;
     } catch {
-      // Worklet unavailable — use improved gain-gate
+      // Worklet unavailable - use improved gain-gate
     }
 
     // 2. Improved gain-gate fallback
@@ -260,7 +260,7 @@ export function useNoiseSuppression(
 
     setNoiseSuppressionEnabled(true);
     console.info(
-      `[NoiseSuppression] Active — ${usedWorklet ? "spectral gate + 3-band EQ worklet" : "hysteresis gain-gate fallback"}`,
+      `[NoiseSuppression] Active - ${usedWorklet ? "spectral gate + 3-band EQ worklet" : "hysteresis gain-gate fallback"}`,
     );
   }, [noiseSuppressionEnabled, noiseSuppressionSupported, cameraStreamRef, pcsRef, getCtx]);
 

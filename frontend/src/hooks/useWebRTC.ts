@@ -1,9 +1,9 @@
 /**
- * useWebRTC — Lumina Meet
+ * useWebRTC - Lumina Meet
  *
  * CHANGES IN THIS VERSION (PreJoinLobby integration):
  *
- * NEW — Pre-acquired stream support:
+ * NEW - Pre-acquired stream support:
  *   Accepts three new optional parameters:
  *     initialStream?: MediaStream | null
  *     initialMic?: boolean
@@ -12,7 +12,7 @@
  *   When initialStream is provided (from PreJoinLobby), the hook skips the
  *   getUserMedia call entirely and uses the handed-off stream directly.
  *   This means the camera LED never flashes twice and device permissions are
- *   only requested once — in the pre-join screen.
+ *   only requested once - in the pre-join screen.
  *
  *   initialMic / initialCam seed the mic/cam state so the footer controls
  *   already reflect whatever the user set in the pre-join lobby.
@@ -370,17 +370,17 @@ export function useWebRTC(
   onMeetingEndedWithInfo?: (info: MeetingEndedInfo) => void,
   onYouLeft?: () => void,
   /**
-   * NEW — Pre-acquired stream from PreJoinLobby.
+   * NEW - Pre-acquired stream from PreJoinLobby.
    * When provided, useWebRTC skips getUserMedia entirely.
    */
   initialStream?: MediaStream | null,
   /**
-   * NEW — Initial mic state from PreJoinLobby toggle.
+   * NEW - Initial mic state from PreJoinLobby toggle.
    * Seeds the mic state so the footer reflects the user's pre-join choice.
    */
   initialMic?: boolean,
   /**
-   * NEW — Initial cam state from PreJoinLobby toggle.
+   * NEW - Initial cam state from PreJoinLobby toggle.
    * Seeds the cam state so the footer reflects the user's pre-join choice.
    */
   initialCam?: boolean,

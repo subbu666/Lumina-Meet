@@ -13,7 +13,7 @@ import meetingRoutes from "./routes/meetingRoutes.js";
 const app = express();
 const API_PREFIX = "/api";
 
-// Allowed origins — read after dotenv has populated process.env
+// Allowed origins - read after dotenv has populated process.env
 const allowedOrigins = (process.env.CLIENT_URL || "")
   .split(",")
   .map((s) => s.trim())

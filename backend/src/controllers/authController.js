@@ -377,7 +377,7 @@ export const resendOTP = asyncHandler(async (req, res) => {
  * POST /api/auth/login
  *
  * FIX: Returns distinct error codes so the frontend can show a targeted message
- * when no account exists vs. when the password is wrong — without leaking info
+ * when no account exists vs. when the password is wrong - without leaking info
  * to third-party network observers (HTTP status stays 401 in both cases).
  */
 export const login = asyncHandler(async (req, res) => {

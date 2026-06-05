@@ -31,11 +31,11 @@ export const MAX_INVITES_PER_REQUEST = 50;
 
 // ─── Recording Limits ─────────────────────────────────────────────────────────
 /**
- * MAX_RECORDING_DURATION_SEC — hard cap enforced on both client and server.
+ * MAX_RECORDING_DURATION_SEC - hard cap enforced on both client and server.
  *
  * 5 minutes chosen for the following reasons:
  *   • Cloudinary free tier: 10 GB storage, 20 GB bandwidth/month.
- *     A 15-min screen+voice recording at 2800 kbps ≈ 315 MB — leaves
+ *     A 15-min screen+voice recording at 2800 kbps ≈ 315 MB - leaves
  *     comfortable room for multiple recordings without hitting the quota.
  *   • Resume project framing: 15 min is long enough to demonstrate any
  *     real meeting scenario; longer recordings add no showcase value.
@@ -51,7 +51,7 @@ export const MAX_RECORDING_DURATION_SEC = 5 * 60; // 300 seconds = 5 minutes
 export const MAX_RECORDING_DURATION_MIN = 5; // human-readable label used in UI strings
 
 /**
- * WARNING_BEFORE_LIMIT_SEC — how many seconds before the limit the
+ * WARNING_BEFORE_LIMIT_SEC - how many seconds before the limit the
  * useRecording hook fires the onApproachingLimit callback so the UI
  * can show a soft warning banner before the hard stop fires.
  */

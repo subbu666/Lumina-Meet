@@ -1,7 +1,7 @@
 /**
- * RecordingModals — Lumina Meet
+ * RecordingModals - Lumina Meet
  *
- * Refactored v2 — stale-closure and portal bugs fixed.
+ * Refactored v2 - stale-closure and portal bugs fixed.
  *
  * Key changes from original:
  *  • RecordingWarningBanner now renders via createPortal into document.body.
@@ -9,16 +9,16 @@
  *    animated header/footer, which was silently trapping the fixed-position
  *    banner inside an ancestor's containing block.
  *  • RecordingWarningBanner's useEffect dependency on onDismiss is now safe
- *    because the parent always passes a stable useCallback ref — the 8-second
+ *    because the parent always passes a stable useCallback ref - the 8-second
  *    auto-dismiss timer fires exactly once per show=true transition.
- *  • All component interfaces are unchanged — no call-site edits required
+ *  • All component interfaces are unchanged - no call-site edits required
  *    beyond the three changes in meeting.$id.tsx described in the patch.
  *
  * Components exported:
- *  RecordingOptionsModal  — mode picker shown before recording starts
- *  RecordingLimitModal    — full-screen takeover when the 5-min cap is hit
- *  RecordingWarningBanner — inline toast shown at the 1-minute warning mark
- *  RecordingLinkModal     — upload progress + final shareable link
+ *  RecordingOptionsModal  - mode picker shown before recording starts
+ *  RecordingLimitModal    - full-screen takeover when the 5-min cap is hit
+ *  RecordingWarningBanner - inline toast shown at the 1-minute warning mark
+ *  RecordingLinkModal     - upload progress + final shareable link
  */
 
 import { createPortal } from "react-dom";
@@ -73,7 +73,7 @@ const RECORDING_OPTIONS: {
     mode: "screen_voice",
     icon: <MonitorSmartphone className="h-7 w-7" />,
     label: "Screen + Voice",
-    desc: "Capture everything — your screen and microphone together",
+    desc: "Capture everything - your screen and microphone together",
     gradient: "from-[oklch(0.55_0.22_280)] to-[oklch(0.65_0.18_305)]",
     glow: "oklch(0.65 0.22 280 / 0.4)",
     border: "oklch(0.65 0.22 280 / 0.5)",
@@ -83,7 +83,7 @@ const RECORDING_OPTIONS: {
     mode: "screen",
     icon: <Monitor className="h-7 w-7" />,
     label: "Screen Only",
-    desc: "Silent screen capture — great for demos with no narration",
+    desc: "Silent screen capture - great for demos with no narration",
     gradient: "from-[oklch(0.55_0.18_210)] to-[oklch(0.65_0.16_240)]",
     glow: "oklch(0.65 0.18 210 / 0.4)",
     border: "oklch(0.65 0.18 210 / 0.5)",
@@ -93,7 +93,7 @@ const RECORDING_OPTIONS: {
     mode: "voice",
     icon: <Mic2 className="h-7 w-7" />,
     label: "Voice Only",
-    desc: "Audio recording only — lightweight, perfect for audio notes",
+    desc: "Audio recording only - lightweight, perfect for audio notes",
     gradient: "from-[oklch(0.65_0.18_305)] to-[oklch(0.72_0.22_35)]",
     glow: "oklch(0.75 0.18 305 / 0.4)",
     border: "oklch(0.75 0.18 305 / 0.5)",
@@ -190,7 +190,7 @@ export function RecordingOptionsModal({
                     </div>
                     <h2 className="text-2xl font-bold text-gradient">Choose Recording Mode</h2>
                     <p className="text-sm text-muted-foreground mt-1">
-                      Select what to capture — saved securely to cloud
+                      Select what to capture - saved securely to cloud
                     </p>
                   </div>
                   <button
@@ -575,7 +575,7 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
                     boxShadow: "0 8px 40px -8px oklch(0.72 0.28 25 / 0.6)",
                   }}
                 >
-                  Got it — dismiss
+                  Got it - dismiss
                 </motion.button>
               </div>
             </div>
@@ -591,22 +591,22 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
 //
 // Shown at the 1-minute-remaining mark (4:00 into a 5-min recording).
 //
-// FIX 1 — createPortal:
+// FIX 1 - createPortal:
 //   The original rendered into the normal React tree, inside the Room
 //   component's return. Framer Motion applies CSS transforms to the animated
 //   header and footer elements. Any element with a CSS transform creates a new
-//   containing block for position:fixed descendants — so the banner's
+//   containing block for position:fixed descendants - so the banner's
 //   "fixed top-[72px]" was positioned relative to the header's bounding box,
 //   not the viewport, making it invisible or mis-positioned.
 //   Rendering via createPortal into document.body guarantees the banner is
 //   a direct child of <body> and position:fixed works against the true viewport.
 //
-// FIX 2 — stable onDismiss:
+// FIX 2 - stable onDismiss:
 //   The useEffect([show, onDismiss]) sets an 8-second auto-dismiss timer.
 //   If onDismiss is an inline arrow function in the parent, it gets a new
 //   reference every render. Since recordingDurationSec updates every second,
 //   the parent re-renders every second, onDismiss gets a new reference,
-//   useEffect re-runs, the old setTimeout is cancelled and a new one starts —
+//   useEffect re-runs, the old setTimeout is cancelled and a new one starts -
 //   the 8-second timer never completes. This is fixed in the parent by wrapping
 //   onDismiss in useCallback (see meeting.$id.tsx changes).
 
@@ -636,7 +636,7 @@ export function RecordingWarningBanner({ show, onDismiss }: RecordingWarningBann
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -16, scale: 0.96 }}
           transition={{ type: "spring", damping: 22, stiffness: 320 }}
-          // z-[9980] — below recording modals (9999/10000) but above everything else.
+          // z-[9980] - below recording modals (9999/10000) but above everything else.
           className="fixed top-[72px] left-1/2 -translate-x-1/2 z-[9980] pointer-events-auto"
         >
           <div
@@ -654,7 +654,7 @@ export function RecordingWarningBanner({ show, onDismiss }: RecordingWarningBann
             </div>
 
             <p className="text-sm font-medium text-[oklch(0.92_0.12_60)]">
-              <span className="font-bold text-[oklch(0.85_0.22_45)]">1 minute left</span> —
+              <span className="font-bold text-[oklch(0.85_0.22_45)]">1 minute left</span> -
               recording will auto-stop at {MAX_RECORDING_DURATION_MIN} min
             </p>
 

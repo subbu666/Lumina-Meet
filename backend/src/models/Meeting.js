@@ -1,10 +1,10 @@
 import mongoose from "mongoose";
 
 /**
- * Meeting Model — Lumina Meet
+ * Meeting Model - Lumina Meet
  *
  * ADDED IN THIS VERSION:
- *   recordings[] subdocument — stores per-recording metadata after
+ *   recordings[] subdocument - stores per-recording metadata after
  *   each Cloudinary upload. Powers the dashboard Recordings tab and
  *   the recording-ready email.
  *
@@ -103,9 +103,9 @@ const meetingSchema = new mongoose.Schema(
      * frontend finishes uploading to Cloudinary.
      *
      * mode values:
-     *   "screen_voice" — screen video + microphone audio
-     *   "screen"       — screen video only
-     *   "voice"        — microphone audio only
+     *   "screen_voice" - screen video + microphone audio
+     *   "screen"       - screen video only
+     *   "voice"        - microphone audio only
      */
     recordings: [
       {
@@ -130,7 +130,7 @@ const meetingSchema = new mongoose.Schema(
           type: String,
           required: true,
         },
-        /** Cloudinary public_id — needed for deletion or transformations */
+        /** Cloudinary public_id - needed for deletion or transformations */
         cloudinaryPublicId: {
           type: String,
           required: true,
