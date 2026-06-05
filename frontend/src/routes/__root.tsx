@@ -89,7 +89,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
       // ── Theme ───────────────────────────────────────────────────
       { name: "theme-color", content: "#6366f1" },
-      { name: "color-scheme", content: "dark" },
+      { name: "color-scheme", content: "dark light" },
       { name: "application-name", content: "Lumina Meet" },
 
       // ── Open Graph ──────────────────────────────────────────────
@@ -122,7 +122,6 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { rel: "stylesheet", href: appCss },
 
       // ── Favicon suite ───────────────────────────────────────────
-      // Priority order: browsers pick the best match top-to-bottom.
       { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
       { rel: "icon", href: "/favicon.ico", sizes: "any" },
       { rel: "icon", href: "/favicon-16x16.png", type: "image/png", sizes: "16x16" },
@@ -132,6 +131,12 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { rel: "canonical", href: SITE_URL },
 
       // ── Preconnect for perf ─────────────────────────────────────
+      { rel: "preconnect", href: "https://fonts.googleapis.com" },
+      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap",
+      },
       { rel: "preconnect", href: "https://res.cloudinary.com" },
     ],
     scripts: [
@@ -177,11 +182,45 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
   errorComponent: ErrorComponent,
 });
 
+/**
+ * Inline bootstrap script — runs before React hydrates so there is
+ * zero flash-of-wrong-theme (FOWT).
+ *
+ * Storage key: 'nebula-theme'  (Zustand persist store shape)
+ * Reads:  { state: { theme: 'dark' | 'light' } }
+ * Falls back to: system preference, then 'dark'.
+ *
+ * Applies the resolved theme class ('dark' | 'light') to <html> and
+ * sets `colorScheme` so the browser scrollbar / form controls also flip.
+ */
+const themeBootstrap = `(function(){
+  try {
+    var stored = localStorage.getItem('nebula-theme');
+    var theme = 'dark';
+    if (stored) {
+      var parsed = JSON.parse(stored);
+      if (parsed && parsed.state && parsed.state.theme) {
+        theme = parsed.state.theme;
+      }
+    } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+      theme = 'light';
+    }
+    var root = document.documentElement;
+    root.classList.remove('dark', 'light');
+    root.classList.add(theme);
+    root.style.colorScheme = theme;
+  } catch (e) {
+    document.documentElement.classList.add('dark');
+  }
+})();`;
+
 function RootShell({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark">
       <head>
         <HeadContent />
+        {/* Flash-of-wrong-theme prevention — must run before first paint */}
+        <script dangerouslySetInnerHTML={{ __html: themeBootstrap }} />
       </head>
       <body>
         {children}
@@ -194,6 +233,7 @@ function RootShell({ children }: { children: React.ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const hydrate = useAuthStore((s) => s.hydrate);
+
   useEffect(() => {
     hydrate();
   }, [hydrate]);

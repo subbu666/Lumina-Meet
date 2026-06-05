@@ -24,6 +24,7 @@ import { useEffect, useState, useRef } from "react";
 import { useAuthStore } from "@/store/authStore";
 import { NeonButton } from "@/components/ui-custom/NeonButton";
 import { CreatorModal } from "@/components/modals/CreatorModal";
+import { ThemeToggle } from "@/components/ui-custom/ThemeToggle";
 
 // ── Lumina Meet Logo ──────────────────────────────────────────────
 function LuminaLogo({ size = 36 }: { size?: number }) {
@@ -37,12 +38,14 @@ function LuminaLogo({ size = 36 }: { size?: number }) {
     >
       <defs>
         <linearGradient id="lg-main" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#6366f1" />
-          <stop offset="100%" stopColor="#22d3ee" />
+          {/* was: #6366f1 / #22d3ee */}
+          <stop offset="0%" stopColor="var(--neon-primary)" />
+          <stop offset="100%" stopColor="var(--neon-secondary)" />
         </linearGradient>
         <radialGradient id="rg-glow" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="#22d3ee" stopOpacity="0.35" />
-          <stop offset="100%" stopColor="#6366f1" stopOpacity="0" />
+          {/* was: #22d3ee / #6366f1 */}
+          <stop offset="0%" stopColor="var(--neon-secondary)" stopOpacity="0.35" />
+          <stop offset="100%" stopColor="var(--neon-primary)" stopOpacity="0" />
         </radialGradient>
         <linearGradient id="lg-shine" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0%" stopColor="white" stopOpacity="0.3" />
@@ -69,9 +72,11 @@ function LuminaLogo({ size = 36 }: { size?: number }) {
         filter="url(#glow)"
         opacity="0.9"
       />
-      <circle cx="14" cy="18" r="4.5" fill="#0B0F19" />
+      {/* was: fill="#0B0F19" — now uses the theme surface token */}
+      <circle cx="14" cy="18" r="4.5" fill="var(--body-base)" />
       <circle cx="14" cy="18" r="3" fill="url(#lg-main)" opacity="0.7" />
-      <circle cx="14" cy="18" r="1.5" fill="#22d3ee" filter="url(#glow)" />
+      {/* was: fill="#22d3ee" */}
+      <circle cx="14" cy="18" r="1.5" fill="var(--neon-secondary)" filter="url(#glow)" />
       <circle cx="15.2" cy="16.8" r="0.7" fill="white" opacity="0.6" />
       <path
         d="M25 14.5 L31 18 L25 21.5 Z"
@@ -86,6 +91,9 @@ function LuminaLogo({ size = 36 }: { size?: number }) {
 
 // ── Animated Particle Field ───────────────────────────────────────
 function ParticleField() {
+  // was: hardcoded "#6366f1" / "#22d3ee" / "#a78bfa"
+  const colorVars = ["var(--neon-primary)", "var(--neon-secondary)", "var(--neon-accent)"];
+
   const particles = Array.from({ length: 24 }, (_, i) => ({
     id: i,
     x: Math.random() * 100,
@@ -93,7 +101,7 @@ function ParticleField() {
     size: Math.random() * 3 + 1,
     duration: Math.random() * 6 + 6,
     delay: Math.random() * 4,
-    color: i % 3 === 0 ? "#6366f1" : i % 3 === 1 ? "#22d3ee" : "#a78bfa",
+    color: colorVars[i % 3],
   }));
 
   return (
@@ -134,9 +142,10 @@ function GridLines() {
     <div
       className="pointer-events-none absolute inset-0 opacity-[0.04]"
       style={{
+        // was: rgba(99,102,241,0.5) hardcoded
         backgroundImage: `
-          linear-gradient(rgba(99,102,241,0.5) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(99,102,241,0.5) 1px, transparent 1px)
+          linear-gradient(color-mix(in oklch, var(--neon-primary) 50%, transparent) 1px, transparent 1px),
+          linear-gradient(90deg, color-mix(in oklch, var(--neon-primary) 50%, transparent) 1px, transparent 1px)
         `,
         backgroundSize: "80px 80px",
       }}
@@ -172,19 +181,22 @@ function StatCounter({
 
 // ── Video Grid Preview ────────────────────────────────────────────
 function VideoGridPreview() {
+  // Bumped opacity to /60 so tiles have enough depth in light mode
   const tiles = [
-    { name: "Alex K.", speaking: true, cam: true, color: "from-indigo-500/30 to-purple-500/30" },
-    { name: "Maya R.", speaking: false, cam: true, color: "from-cyan-500/30 to-blue-500/30" },
-    { name: "Jordan", speaking: false, cam: false, color: "from-purple-500/30 to-pink-500/30" },
-    { name: "Sam T.", speaking: false, cam: true, color: "from-emerald-500/30 to-teal-500/30" },
+    { name: "Alex K.", speaking: true, cam: true, color: "from-indigo-500/60 to-purple-500/60" },
+    { name: "Maya R.", speaking: false, cam: true, color: "from-cyan-500/60 to-blue-500/60" },
+    { name: "Jordan", speaking: false, cam: false, color: "from-purple-500/60 to-pink-500/60" },
+    { name: "Sam T.", speaking: false, cam: true, color: "from-emerald-500/60 to-teal-500/60" },
   ];
 
   return (
     <div
       className="relative rounded-2xl overflow-hidden"
-      style={{ background: "oklch(0.14 0.02 265)" }}
+      // was: oklch(0.14 0.02 265) — now uses the theme background token
+      style={{ background: "var(--background)" }}
     >
       {/* Top bar */}
+      {/* was: border-white/5 inline — kept as Tailwind class (fine) */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/5">
         <div className="flex items-center gap-2">
           <div className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
@@ -208,10 +220,11 @@ function VideoGridPreview() {
             viewport={{ once: true }}
             transition={{ delay: i * 0.1 + 0.3 }}
           >
-            {/* Speaking indicator */}
+            {/* Speaking indicator — was: border-[#22d3ee] */}
             {tile.speaking && (
               <motion.div
-                className="absolute inset-0 rounded-xl border-2 border-[#22d3ee]"
+                className="absolute inset-0 rounded-xl border-2"
+                style={{ borderColor: "var(--neon-secondary)" }}
                 animate={{ opacity: [1, 0.4, 1] }}
                 transition={{ duration: 1.5, repeat: Infinity }}
               />
@@ -224,21 +237,31 @@ function VideoGridPreview() {
                 </div>
               </div>
             )}
-            {/* Name tag */}
+            {/* Name tag — was: bg-black/40 */}
             <div className="relative z-10 flex items-center gap-1.5">
               {tile.speaking && (
                 <div className="flex gap-0.5 items-end h-3">
                   {[1, 2, 3].map((b) => (
                     <motion.div
                       key={b}
-                      className="w-0.5 rounded-full bg-[#22d3ee]"
+                      className="w-0.5 rounded-full"
+                      // was: bg-[#22d3ee]
+                      style={{ background: "var(--neon-secondary)" }}
                       animate={{ height: ["4px", "12px", "4px"] }}
                       transition={{ duration: 0.6, delay: b * 0.15, repeat: Infinity }}
                     />
                   ))}
                 </div>
               )}
-              <span className="text-[10px] font-medium text-white/80 bg-black/40 rounded px-1.5 py-0.5">
+              <span
+                className="text-[10px] font-medium rounded px-1.5 py-0.5"
+                style={{
+                  // Permanently dark pill — legible on light pastels AND dark tiles
+                  background: "rgba(0, 0, 0, 0.55)",
+                  color: "rgba(255, 255, 255, 0.92)",
+                  backdropFilter: "blur(4px)",
+                }}
+              >
                 {tile.name}
               </span>
             </div>
@@ -291,10 +314,23 @@ function FeatureCard({
   delay?: number;
   accent?: "indigo" | "cyan" | "purple";
 }) {
+  // was: all hardcoded hex + rgba values
   const accentMap = {
-    indigo: { color: "#6366f1", bg: "rgba(99,102,241,0.1)", border: "rgba(99,102,241,0.2)" },
-    cyan: { color: "#22d3ee", bg: "rgba(34,211,238,0.1)", border: "rgba(34,211,238,0.2)" },
-    purple: { color: "#a78bfa", bg: "rgba(167,139,250,0.1)", border: "rgba(167,139,250,0.2)" },
+    indigo: {
+      color: "var(--neon-primary)",
+      bg: "color-mix(in oklch, var(--neon-primary) 10%, transparent)",
+      border: "color-mix(in oklch, var(--neon-primary) 20%, transparent)",
+    },
+    cyan: {
+      color: "var(--neon-secondary)",
+      bg: "color-mix(in oklch, var(--neon-secondary) 10%, transparent)",
+      border: "color-mix(in oklch, var(--neon-secondary) 20%, transparent)",
+    },
+    purple: {
+      color: "var(--neon-accent)",
+      bg: "color-mix(in oklch, var(--neon-accent) 10%, transparent)",
+      border: "color-mix(in oklch, var(--neon-accent) 20%, transparent)",
+    },
   };
   const a = accentMap[accent];
 
@@ -310,7 +346,9 @@ function FeatureCard({
       {/* Hover shimmer */}
       <motion.div
         className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500"
-        style={{ background: `radial-gradient(circle at 50% 0%, ${a.color}15, transparent 70%)` }}
+        style={{
+          background: `radial-gradient(circle at 50% 0%, color-mix(in oklch, ${a.color} 15%, transparent), transparent 70%)`,
+        }}
       />
       <div
         className="flex h-10 w-10 items-center justify-center rounded-xl mb-4"
@@ -372,7 +410,13 @@ function TimelineStep({
       viewport={{ once: true }}
       transition={{ delay }}
     >
-      <div className="flex-shrink-0 h-8 w-8 rounded-full bg-gradient-to-br from-indigo-500 to-cyan-500 flex items-center justify-center text-xs font-bold text-white">
+      <div
+        className="flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold text-white"
+        // was: from-indigo-500 to-cyan-500 Tailwind gradient (fine, but aligns better with vars)
+        style={{
+          background: "linear-gradient(135deg, var(--neon-primary), var(--neon-secondary))",
+        }}
+      >
         {step}
       </div>
       <div>
@@ -398,19 +442,28 @@ function SoundscapePill({
       whileHover={{ scale: 1.05 }}
       className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer transition-all"
       style={{
-        background: active ? "rgba(99,102,241,0.2)" : "rgba(255,255,255,0.05)",
-        border: active ? "1px solid rgba(99,102,241,0.4)" : "1px solid rgba(255,255,255,0.08)",
-        color: active ? "#a5b4fc" : "oklch(0.7 0.03 260)",
+        // was: rgba(99,102,241,0.2) active / rgba(255,255,255,0.05) inactive
+        background: active
+          ? "color-mix(in oklch, var(--neon-primary) 20%, transparent)"
+          : "var(--glass-bg)",
+        // was: rgba(99,102,241,0.4) / rgba(255,255,255,0.08)
+        border: active
+          ? "1px solid color-mix(in oklch, var(--neon-primary) 40%, transparent)"
+          : "1px solid var(--glass-border)",
+        // was: #a5b4fc / oklch(0.7 0.03 260)
+        color: active ? "var(--neon-primary)" : "var(--muted-foreground)",
       }}
     >
       <span>{icon}</span>
       {label}
       {active && (
-        <motion.div className="flex gap-0.5 items-end h-3" animate={{}}>
+        <motion.div className="flex gap-0.5 items-end h-3">
           {[1, 2, 3].map((b) => (
             <motion.div
               key={b}
-              className="w-0.5 rounded-full bg-indigo-400"
+              className="w-0.5 rounded-full"
+              // was: bg-indigo-400
+              style={{ background: "var(--neon-primary)" }}
               animate={{ height: ["3px", "10px", "3px"] }}
               transition={{ duration: 0.8, delay: b * 0.2, repeat: Infinity }}
             />
@@ -448,7 +501,11 @@ function TestimonialCard({
       </div>
       <p className="text-xs text-muted-foreground leading-relaxed mb-4">"{quote}"</p>
       <div className="flex items-center gap-2.5">
-        <div className="h-7 w-7 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-xs font-bold text-white">
+        <div
+          className="h-7 w-7 rounded-full flex items-center justify-center text-xs font-bold text-white"
+          // was: from-indigo-500 to-purple-500
+          style={{ background: "linear-gradient(135deg, var(--neon-primary), var(--neon-accent))" }}
+        >
           {name[0]}
         </div>
         <div>
@@ -460,7 +517,7 @@ function TestimonialCard({
   );
 }
 
-// ── Main Landing ──────────────────────────────────────────────────
+// ── Route ─────────────────────────────────────────────────────────
 export const Route = createFileRoute("/")({
   component: Landing,
   head: () => ({
@@ -471,7 +528,6 @@ export const Route = createFileRoute("/")({
         content:
           "Spin up a P2P video room in under 5 seconds. AI noise suppression, background blur, collaborative whiteboard, live polls, ambient soundscapes, and cloud recording - free to start.",
       },
-      // OG overrides for the landing page specifically
       { property: "og:title", content: "Lumina Meet - Cinematic Video Meetings for Modern Teams" },
       {
         property: "og:description",
@@ -479,16 +535,13 @@ export const Route = createFileRoute("/")({
           "Spin up a P2P video room in under 5 seconds. Whiteboard, polls, noise suppression, cloud recording. Free to start.",
       },
       { property: "og:url", content: import.meta.env.VITE_SITE_URL },
-      // Landing page IS indexable - no noindex needed
       { name: "robots", content: "index, follow" },
     ],
-    links: [
-      // Self-referencing canonical for the landing page
-      { rel: "canonical", href: import.meta.env.VITE_SITE_URL },
-    ],
+    links: [{ rel: "canonical", href: import.meta.env.VITE_SITE_URL }],
   }),
 });
 
+// ── Main Landing ──────────────────────────────────────────────────
 function Landing() {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
@@ -623,8 +676,8 @@ function Landing() {
           className="sticky top-0 z-50 px-4 sm:px-6 py-3"
           style={{
             backdropFilter: "blur(20px)",
-            background: "oklch(0.16 0.02 265 / 0.85)",
-            borderBottom: "1px solid oklch(1 0 0 / 6%)",
+            background: "color-mix(in oklch, var(--background) 85%, transparent)",
+            borderBottom: "1px solid var(--glass-border)",
           }}
           initial={{ y: -60, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
@@ -655,19 +708,23 @@ function Landing() {
             </div>
 
             <div className="flex items-center gap-2">
+              <ThemeToggle />
+
               <motion.button
                 onClick={() => setCreatorOpen(true)}
                 className="hidden sm:inline-flex relative items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium"
                 style={{
-                  background: "rgba(99,102,241,0.08)",
-                  border: "1px solid rgba(99,102,241,0.25)",
-                  color: "rgba(165,180,252,0.85)",
+                  // was: rgba(99,102,241,0.08) / rgba(99,102,241,0.25) / rgba(165,180,252,0.85)
+                  background: "color-mix(in oklch, var(--neon-primary) 8%, transparent)",
+                  border: "1px solid color-mix(in oklch, var(--neon-primary) 25%, transparent)",
+                  color: "var(--neon-primary)",
                 }}
                 whileHover={{
-                  background: "rgba(99,102,241,0.16)",
-                  borderColor: "rgba(34,211,238,0.5)",
-                  color: "#22d3ee",
-                  boxShadow: "0 0 16px rgba(99,102,241,0.2)",
+                  // was: rgba(99,102,241,0.16) / rgba(34,211,238,0.5) / #22d3ee
+                  background: "color-mix(in oklch, var(--neon-primary) 16%, transparent)",
+                  borderColor: "color-mix(in oklch, var(--neon-secondary) 50%, transparent)",
+                  color: "var(--neon-secondary)",
+                  boxShadow: "0 0 16px color-mix(in oklch, var(--neon-primary) 20%, transparent)",
                 }}
                 whileTap={{ scale: 0.96 }}
                 initial={{ opacity: 0, x: 10 }}
@@ -677,13 +734,15 @@ function Landing() {
                 <motion.span className="relative flex h-1.5 w-1.5 shrink-0">
                   <motion.span
                     className="absolute inline-flex h-full w-full rounded-full"
-                    style={{ background: "#22d3ee", opacity: 0.6 }}
+                    // was: background: "#22d3ee"
+                    style={{ background: "var(--neon-secondary)", opacity: 0.6 }}
                     animate={{ scale: [1, 2.2, 1], opacity: [0.6, 0, 0.6] }}
                     transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
                   />
+                  {/* was: background: "#22d3ee" */}
                   <span
                     className="relative inline-flex rounded-full h-1.5 w-1.5"
-                    style={{ background: "#22d3ee" }}
+                    style={{ background: "var(--neon-secondary)" }}
                   />
                 </motion.span>
                 <Sparkles className="h-3 w-3 shrink-0" />
@@ -709,42 +768,47 @@ function Landing() {
           <GridLines />
           <ParticleField />
 
-          {/* Orb glow effects */}
+          {/* Orb glow effects — was: hardcoded #6366f1 / #22d3ee / #a78bfa */}
           <div
             className="pointer-events-none absolute top-1/4 left-1/4 h-96 w-96 rounded-full opacity-20 blur-[120px]"
-            style={{ background: "radial-gradient(circle, #6366f1, transparent)" }}
+            style={{ background: "radial-gradient(circle, var(--neon-primary), transparent)" }}
           />
           <div
             className="pointer-events-none absolute bottom-1/4 right-1/4 h-80 w-80 rounded-full opacity-15 blur-[100px]"
-            style={{ background: "radial-gradient(circle, #22d3ee, transparent)" }}
+            style={{ background: "radial-gradient(circle, var(--neon-secondary), transparent)" }}
           />
           <div
             className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-64 w-64 rounded-full opacity-10 blur-[80px]"
-            style={{ background: "radial-gradient(circle, #a78bfa, transparent)" }}
+            style={{ background: "radial-gradient(circle, var(--neon-accent), transparent)" }}
           />
 
           <motion.div
             style={{ y: heroY, opacity: heroOpacity }}
             className="w-full max-w-5xl mx-auto text-center"
           >
-            {/* Badge */}
+            {/* Badge — was: rgba(99,102,241,…) */}
             <motion.div
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6 }}
               className="mx-auto mb-6 inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs text-muted-foreground"
               style={{
-                background: "rgba(99,102,241,0.08)",
-                border: "1px solid rgba(99,102,241,0.2)",
+                background: "color-mix(in oklch, var(--neon-primary) 8%, transparent)",
+                border: "1px solid color-mix(in oklch, var(--neon-primary) 20%, transparent)",
               }}
             >
               <motion.span
-                className="h-1.5 w-1.5 rounded-full bg-[#22d3ee]"
+                className="h-1.5 w-1.5 rounded-full"
+                // was: bg-[#22d3ee]
+                style={{ background: "var(--neon-secondary)" }}
                 animate={{ opacity: [1, 0.3, 1] }}
                 transition={{ duration: 1.5, repeat: Infinity }}
               />
               Real-time · WebRTC P2P · 20+ collaborative features
-              <span className="ml-1 font-semibold text-indigo-400">Try free →</span>
+              {/* was: text-indigo-400 */}
+              <span className="ml-1 font-semibold" style={{ color: "var(--neon-primary)" }}>
+                Try free →
+              </span>
             </motion.div>
 
             {/* H1 */}
@@ -788,16 +852,24 @@ function Landing() {
                 href="#features"
                 className="group inline-flex items-center gap-2 px-6 py-3.5 rounded-xl text-sm font-medium text-muted-foreground transition-all hover:text-foreground"
                 style={{
-                  background: "rgba(255,255,255,0.04)",
-                  border: "1px solid rgba(255,255,255,0.08)",
+                  // was: rgba(255,255,255,0.04) / rgba(255,255,255,0.08)
+                  background: "var(--glass-bg)",
+                  border: "1px solid var(--glass-border)",
                 }}
                 whileHover={{
-                  background: "rgba(255,255,255,0.07)",
-                  borderColor: "rgba(255,255,255,0.15)",
+                  // was: rgba(255,255,255,0.07) / rgba(255,255,255,0.15)
+                  background: "var(--glass-hover)",
+                  borderColor: "var(--glass-border-strong)",
                 }}
                 whileTap={{ scale: 0.97 }}
               >
-                <Play className="h-4 w-4 group-hover:text-indigo-400 transition-colors" />
+                {/* was: group-hover:text-indigo-400 */}
+                <Play
+                  className="h-4 w-4 transition-colors"
+                  style={{ color: "inherit" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = "var(--neon-primary)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = "inherit")}
+                />
                 See how it works
               </motion.a>
             </motion.div>
@@ -829,11 +901,11 @@ function Landing() {
             transition={{ duration: 0.8, delay: 0.5 }}
             className="relative mt-16 w-full max-w-3xl mx-auto"
           >
-            {/* Glow behind preview */}
+            {/* Glow behind preview — was: rgba(99,102,241,0.3) / rgba(34,211,238,0.2) */}
             <div
               className="pointer-events-none absolute -inset-4 rounded-3xl opacity-40 blur-2xl"
               style={{
-                background: "linear-gradient(135deg, rgba(99,102,241,0.3), rgba(34,211,238,0.2))",
+                background: `linear-gradient(135deg, color-mix(in oklch, var(--neon-primary) 30%, transparent), color-mix(in oklch, var(--neon-secondary) 20%, transparent))`,
               }}
             />
             <div
@@ -869,9 +941,10 @@ function Landing() {
 
         {/* ── FEATURES (tabbed) ─────────────────────────────────── */}
         <section id="features" className="relative py-20 px-4 sm:px-6 overflow-hidden">
+          {/* was: #6366f1 */}
           <div
             className="pointer-events-none absolute top-0 right-0 h-96 w-96 rounded-full opacity-10 blur-[100px]"
-            style={{ background: "radial-gradient(circle, #6366f1, transparent)" }}
+            style={{ background: "radial-gradient(circle, var(--neon-primary), transparent)" }}
           />
 
           <div className="mx-auto max-w-6xl">
@@ -882,10 +955,24 @@ function Landing() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
             >
-              <div className="inline-flex items-center gap-2 text-xs text-indigo-400 font-medium uppercase tracking-widest mb-3">
-                <span className="h-px w-8 bg-indigo-400/50" />
+              {/* was: text-indigo-400 / bg-indigo-400/50 */}
+              <div
+                className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-widest mb-3"
+                style={{ color: "var(--neon-primary)" }}
+              >
+                <span
+                  className="h-px w-8"
+                  style={{
+                    background: "color-mix(in oklch, var(--neon-primary) 50%, transparent)",
+                  }}
+                />
                 Everything you need
-                <span className="h-px w-8 bg-indigo-400/50" />
+                <span
+                  className="h-px w-8"
+                  style={{
+                    background: "color-mix(in oklch, var(--neon-primary) 50%, transparent)",
+                  }}
+                />
               </div>
               <h2 className="text-3xl sm:text-5xl font-bold tracking-tight">
                 Not just video calls. <span className="text-gradient">A collaboration suite.</span>
@@ -900,8 +987,9 @@ function Landing() {
               <div
                 className="inline-flex rounded-xl p-1 gap-1"
                 style={{
-                  background: "rgba(255,255,255,0.04)",
-                  border: "1px solid rgba(255,255,255,0.07)",
+                  // was: rgba(255,255,255,0.04) / rgba(255,255,255,0.07)
+                  background: "var(--glass-bg)",
+                  border: "1px solid var(--glass-border)",
                 }}
               >
                 {featureTabs.map(({ label, icon: Icon }, i) => (
@@ -910,11 +998,15 @@ function Landing() {
                     onClick={() => setActiveTab(i)}
                     className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium transition-all"
                     style={{
-                      background: activeTab === i ? "rgba(99,102,241,0.2)" : "transparent",
-                      color: activeTab === i ? "#a5b4fc" : "oklch(0.7 0.03 260)",
+                      // was: rgba(99,102,241,0.2) active / oklch(0.7 0.03 260) inactive
+                      background:
+                        activeTab === i
+                          ? "color-mix(in oklch, var(--neon-primary) 20%, transparent)"
+                          : "transparent",
+                      color: activeTab === i ? "var(--neon-primary)" : "var(--muted-foreground)",
                       border:
                         activeTab === i
-                          ? "1px solid rgba(99,102,241,0.3)"
+                          ? "1px solid color-mix(in oklch, var(--neon-primary) 30%, transparent)"
                           : "1px solid transparent",
                     }}
                     whileTap={{ scale: 0.97 }}
@@ -953,14 +1045,26 @@ function Landing() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
             >
+              {/* was: #22d3ee */}
               <div
                 className="pointer-events-none absolute -top-20 -right-20 h-60 w-60 rounded-full opacity-20 blur-[80px]"
-                style={{ background: "radial-gradient(circle, #22d3ee, transparent)" }}
+                style={{
+                  background: "radial-gradient(circle, var(--neon-secondary), transparent)",
+                }}
               />
 
               <div className="relative z-10">
-                <div className="inline-flex items-center gap-2 text-xs text-cyan-400 font-medium uppercase tracking-widest mb-3">
-                  <span className="h-px w-6 bg-cyan-400/50" />
+                {/* was: text-cyan-400 / bg-cyan-400/50 */}
+                <div
+                  className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-widest mb-3"
+                  style={{ color: "var(--neon-secondary)" }}
+                >
+                  <span
+                    className="h-px w-6"
+                    style={{
+                      background: "color-mix(in oklch, var(--neon-secondary) 50%, transparent)",
+                    }}
+                  />
                   Three layout modes
                 </div>
                 <h2 className="text-2xl sm:text-4xl font-bold tracking-tight mb-2">
@@ -1008,13 +1112,20 @@ function Landing() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
               {/* Left - steps */}
               <div>
+                {/* was: text-purple-400 / bg-purple-400/50 */}
                 <motion.div
-                  className="inline-flex items-center gap-2 text-xs text-purple-400 font-medium uppercase tracking-widest mb-4"
+                  className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-widest mb-4"
+                  style={{ color: "var(--neon-accent)" }}
                   initial={{ opacity: 0 }}
                   whileInView={{ opacity: 1 }}
                   viewport={{ once: true }}
                 >
-                  <span className="h-px w-6 bg-purple-400/50" />
+                  <span
+                    className="h-px w-6"
+                    style={{
+                      background: "color-mix(in oklch, var(--neon-accent) 50%, transparent)",
+                    }}
+                  />
                   How it works
                 </motion.div>
                 <motion.h2
@@ -1066,8 +1177,15 @@ function Landing() {
               >
                 <div className="glass rounded-2xl p-6">
                   <div className="flex items-center gap-3 mb-4">
-                    <div className="h-8 w-8 rounded-lg bg-indigo-500/20 flex items-center justify-center">
-                      <Zap className="h-4 w-4 text-indigo-400" />
+                    {/* was: bg-indigo-500/20 */}
+                    <div
+                      className="h-8 w-8 rounded-lg flex items-center justify-center"
+                      style={{
+                        background: "color-mix(in oklch, var(--neon-primary) 20%, transparent)",
+                      }}
+                    >
+                      {/* was: text-indigo-400 */}
+                      <Zap className="h-4 w-4" style={{ color: "var(--neon-primary)" }} />
                     </div>
                     <div>
                       <div className="text-sm font-semibold">WebRTC P2P Architecture</div>
@@ -1090,8 +1208,15 @@ function Landing() {
 
                 <div className="glass rounded-2xl p-6">
                   <div className="flex items-center gap-3 mb-4">
-                    <div className="h-8 w-8 rounded-lg bg-cyan-500/20 flex items-center justify-center">
-                      <Shield className="h-4 w-4 text-cyan-400" />
+                    {/* was: bg-cyan-500/20 */}
+                    <div
+                      className="h-8 w-8 rounded-lg flex items-center justify-center"
+                      style={{
+                        background: "color-mix(in oklch, var(--neon-secondary) 20%, transparent)",
+                      }}
+                    >
+                      {/* was: text-cyan-400 */}
+                      <Shield className="h-4 w-4" style={{ color: "var(--neon-secondary)" }} />
                     </div>
                     <div>
                       <div className="text-sm font-semibold">Security-First Design</div>
@@ -1112,9 +1237,11 @@ function Landing() {
                         key={tag}
                         className="text-[10px] px-2 py-0.5 rounded-full"
                         style={{
-                          background: "rgba(34,211,238,0.08)",
-                          border: "1px solid rgba(34,211,238,0.15)",
-                          color: "#67e8f9",
+                          // was: rgba(34,211,238,0.08) / rgba(34,211,238,0.15) / #67e8f9
+                          background: "color-mix(in oklch, var(--neon-secondary) 8%, transparent)",
+                          border:
+                            "1px solid color-mix(in oklch, var(--neon-secondary) 15%, transparent)",
+                          color: "var(--neon-secondary)",
                         }}
                       >
                         {tag}
@@ -1125,8 +1252,15 @@ function Landing() {
 
                 <div className="glass rounded-2xl p-6">
                   <div className="flex items-center gap-3 mb-3">
-                    <div className="h-8 w-8 rounded-lg bg-purple-500/20 flex items-center justify-center">
-                      <Radio className="h-4 w-4 text-purple-400" />
+                    {/* was: bg-purple-500/20 */}
+                    <div
+                      className="h-8 w-8 rounded-lg flex items-center justify-center"
+                      style={{
+                        background: "color-mix(in oklch, var(--neon-accent) 20%, transparent)",
+                      }}
+                    >
+                      {/* was: text-purple-400 */}
+                      <Radio className="h-4 w-4" style={{ color: "var(--neon-accent)" }} />
                     </div>
                     <div>
                       <div className="text-sm font-semibold">Cloud Recording Pipeline</div>
@@ -1141,7 +1275,8 @@ function Landing() {
                       "Available in dashboard recordings tab",
                     ].map((step, i) => (
                       <div key={i} className="flex items-center gap-2">
-                        <span className="text-purple-400 font-mono">
+                        {/* was: text-purple-400 */}
+                        <span className="font-mono" style={{ color: "var(--neon-accent)" }}>
                           {String(i + 1).padStart(2, "0")}
                         </span>
                         <span>{step}</span>
@@ -1200,20 +1335,25 @@ function Landing() {
               viewport={{ once: true }}
               style={{
                 background:
-                  "linear-gradient(135deg, oklch(0.2 0.06 280), oklch(0.18 0.04 260), oklch(0.2 0.05 210))",
-                border: "1px solid rgba(99,102,241,0.3)",
-                boxShadow: "0 0 80px rgba(99,102,241,0.15), 0 0 40px rgba(34,211,238,0.08)",
+                  "linear-gradient(135deg, color-mix(in oklch, var(--primary) 18%, var(--background)), color-mix(in oklch, var(--primary) 10%, var(--background)), color-mix(in oklch, var(--neon-secondary) 10%, var(--background)))",
+                border: "1px solid color-mix(in oklch, var(--primary) 30%, transparent)",
+                boxShadow:
+                  "0 0 80px color-mix(in oklch, var(--primary) 15%, transparent), 0 0 40px color-mix(in oklch, var(--neon-secondary) 8%, transparent)",
               }}
             >
-              {/* Animated mesh background */}
+              {/* Animated mesh background — was: #6366f1 / #22d3ee */}
               <div className="pointer-events-none absolute inset-0">
                 <div
                   className="absolute top-0 left-0 h-64 w-64 rounded-full opacity-20 blur-[80px]"
-                  style={{ background: "radial-gradient(circle, #6366f1, transparent)" }}
+                  style={{
+                    background: "radial-gradient(circle, var(--neon-primary), transparent)",
+                  }}
                 />
                 <div
                   className="absolute bottom-0 right-0 h-64 w-64 rounded-full opacity-15 blur-[80px]"
-                  style={{ background: "radial-gradient(circle, #22d3ee, transparent)" }}
+                  style={{
+                    background: "radial-gradient(circle, var(--neon-secondary), transparent)",
+                  }}
                 />
               </div>
 
@@ -1221,20 +1361,25 @@ function Landing() {
                 <motion.div
                   className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium mb-4"
                   style={{
-                    background: "rgba(99,102,241,0.15)",
-                    border: "1px solid rgba(99,102,241,0.3)",
-                    color: "#a5b4fc",
+                    // was: rgba(99,102,241,0.15) / rgba(99,102,241,0.3) / #a5b4fc
+                    background: "color-mix(in oklch, var(--neon-primary) 15%, transparent)",
+                    border: "1px solid color-mix(in oklch, var(--neon-primary) 30%, transparent)",
+                    color: "var(--neon-primary)",
                   }}
                   animate={{
                     boxShadow: [
-                      "0 0 0px rgba(99,102,241,0)",
-                      "0 0 20px rgba(99,102,241,0.3)",
-                      "0 0 0px rgba(99,102,241,0)",
+                      "0 0 0px color-mix(in oklch, var(--neon-primary) 0%, transparent)",
+                      "0 0 20px color-mix(in oklch, var(--neon-primary) 30%, transparent)",
+                      "0 0 0px color-mix(in oklch, var(--neon-primary) 0%, transparent)",
                     ],
                   }}
                   transition={{ duration: 3, repeat: Infinity }}
                 >
-                  <span className="h-1.5 w-1.5 rounded-full bg-indigo-400 animate-pulse" />
+                  {/* was: bg-indigo-400 */}
+                  <span
+                    className="h-1.5 w-1.5 rounded-full animate-pulse"
+                    style={{ background: "var(--neon-primary)" }}
+                  />
                   Free to start. No credit card needed.
                 </motion.div>
 

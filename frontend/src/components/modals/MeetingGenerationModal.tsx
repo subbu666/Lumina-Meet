@@ -16,30 +16,13 @@ const PHASES = [
 
 const ANIMATION_DURATION = 5000;
 
-/**
- * Three internal screens:
- *  "title"    - user types a meeting title and hits Enter / "Create"
- *  "loading"  - circular progress animation while API call runs
- *  "done"     - link ready, copy + join actions
- */
 type Screen = "title" | "loading" | "done";
 
 interface Props {
   open: boolean;
-  /** null while API call is in-flight; set by parent once the call resolves */
   link: string | null;
-  /**
-   * If the parent catches a DUPLICATE_TITLE 409, it should pass the
-   * conflicting title string here (use extractDuplicateTitle(err)).
-   * The modal will open DuplicateTitleModal and let the user pick a new title,
-   * then call onGenerate again with the new title.
-   *
-   * The parent must reset this to null after it has been consumed
-   * (i.e. once it starts the retry API call).
-   */
   duplicateTitle?: string | null;
   onClose: () => void;
-  /** Called with the title when the user confirms - parent triggers the API call */
   onGenerate: (title: string) => void;
 }
 
@@ -50,25 +33,20 @@ export function MeetingGenerationModal({
   onClose,
   onGenerate,
 }: Props) {
-  // ── Screen state ────────────────────────────────────────────────────────────
   const [screen, setScreen] = useState<Screen>("title");
   const [title, setTitle] = useState("");
   const [titleError, setTitleError] = useState("");
 
-  // ── Animation state (only used in "loading" screen) ─────────────────────────
   const [phase, setPhase] = useState(0);
   const [progress, setProgress] = useState(0);
   const [animDone, setAnimDone] = useState(false);
   const rafRef = useRef<number>(0);
 
-  // ── Copy state ───────────────────────────────────────────────────────────────
   const [copied, setCopied] = useState(false);
 
-  // ── Duplicate title modal state ──────────────────────────────────────────────
   const [dupModalOpen, setDupModalOpen] = useState(false);
   const [dupConflictingTitle, setDupConflictingTitle] = useState("");
 
-  // ── Reset all state when modal closes ───────────────────────────────────────
   useEffect(() => {
     if (!open) {
       cancelAnimationFrame(rafRef.current);
@@ -84,35 +62,24 @@ export function MeetingGenerationModal({
     }
   }, [open]);
 
-  // ── React to a duplicate title error surfaced by the parent ─────────────────
-  // When the parent catches a 409 and passes duplicateTitle, we:
-  //   1. Snap back to "title" screen (so the loading ring disappears)
-  //   2. Open the DuplicateTitleModal
   useEffect(() => {
     if (duplicateTitle) {
-      // Abort the in-flight animation
       cancelAnimationFrame(rafRef.current);
       setProgress(0);
       setPhase(0);
       setAnimDone(false);
-
       setDupConflictingTitle(duplicateTitle);
       setDupModalOpen(true);
-      // Stay on (or return to) the title screen so backdrop is still the
-      // generation modal, not a blank screen.
       setScreen("title");
     }
   }, [duplicateTitle]);
 
-  // ── Start the circular animation once we enter the "loading" screen ─────────
   useEffect(() => {
     if (screen !== "loading") {
       cancelAnimationFrame(rafRef.current);
       return;
     }
-
     const start = performance.now();
-
     const tick = (t: number) => {
       const elapsed = t - start;
       const p = Math.min(1, elapsed / ANIMATION_DURATION);
@@ -124,19 +91,15 @@ export function MeetingGenerationModal({
         setAnimDone(true);
       }
     };
-
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
   }, [screen]);
 
-  // ── Move to "done" when BOTH animation finished AND link is available ────────
   useEffect(() => {
     if (screen === "loading" && animDone && link) {
       setScreen("done");
     }
   }, [screen, animDone, link]);
-
-  // ── Handlers ─────────────────────────────────────────────────────────────────
 
   const handleCreate = () => {
     const trimmed = title.trim();
@@ -149,17 +112,10 @@ export function MeetingGenerationModal({
     onGenerate(trimmed);
   };
 
-  /**
-   * Called by DuplicateTitleModal when the user accepts a new title.
-   * We close the dup modal, reset the loading state, and re-fire onGenerate
-   * with the new title so the parent re-runs its API call.
-   */
   const handleDupRetry = (newTitle: string) => {
     setDupModalOpen(false);
     setDupConflictingTitle("");
     setTitle(newTitle);
-
-    // Restart animation from scratch then fire the API
     setProgress(0);
     setPhase(0);
     setAnimDone(false);
@@ -174,7 +130,6 @@ export function MeetingGenerationModal({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // ── SVG ring values ──────────────────────────────────────────────────────────
   const R = 80;
   const C = 2 * Math.PI * R;
   const offset = C - progress * C;
@@ -187,7 +142,11 @@ export function MeetingGenerationModal({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-[#05070e]/90 backdrop-blur-xl px-4"
+            className="fixed inset-0 z-50 flex items-center justify-center px-4"
+            style={{
+              background: "color-mix(in oklch, var(--background) 90%, transparent)",
+              backdropFilter: "blur(20px)",
+            }}
           >
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
@@ -204,7 +163,7 @@ export function MeetingGenerationModal({
                 }}
                 style={{
                   background:
-                    "radial-gradient(circle at center, oklch(0.65 0.22 280 / 0.4), transparent 70%)",
+                    "radial-gradient(circle at center, color-mix(in oklch, var(--neon-primary) 40%, transparent), transparent 70%)",
                 }}
               />
 
@@ -219,20 +178,17 @@ export function MeetingGenerationModal({
                     transition={{ duration: 0.2 }}
                     className="space-y-6"
                   >
-                    {/* Icon */}
                     <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-neon glow-primary">
                       <Sparkles className="h-6 w-6 text-white" />
                     </div>
 
-                    {/* Heading */}
                     <div>
                       <h3 className="text-2xl font-semibold text-gradient">Name your meeting</h3>
-                      <p className="mt-1.5 text-sm text-muted-foreground">
+                      <p className="mt-1.5 text-sm" style={{ color: "var(--muted-foreground)" }}>
                         Give it a title so you can find it in your history later.
                       </p>
                     </div>
 
-                    {/* Input */}
                     <div className="text-left">
                       <FloatingInput
                         label="Meeting title"
@@ -252,14 +208,14 @@ export function MeetingGenerationModal({
                         <motion.p
                           initial={{ opacity: 0, y: -4 }}
                           animate={{ opacity: 1, y: 0 }}
-                          className="mt-1.5 text-xs text-[var(--neon-danger)]"
+                          className="mt-1.5 text-xs"
+                          style={{ color: "var(--neon-danger)" }}
                         >
                           {titleError}
                         </motion.p>
                       )}
                     </div>
 
-                    {/* Actions */}
                     <div className="flex gap-2">
                       <NeonButton variant="outline" fullWidth onClick={onClose}>
                         Cancel
@@ -287,7 +243,7 @@ export function MeetingGenerationModal({
                           cy="100"
                           r={R}
                           fill="none"
-                          stroke="oklch(1 0 0 / 0.08)"
+                          stroke="color-mix(in oklch, var(--foreground) 8%, transparent)"
                           strokeWidth="6"
                         />
                         <motion.circle
@@ -303,9 +259,9 @@ export function MeetingGenerationModal({
                         />
                         <defs>
                           <linearGradient id="grad" x1="0" y1="0" x2="1" y2="1">
-                            <stop offset="0%" stopColor="oklch(0.65 0.22 280)" />
-                            <stop offset="50%" stopColor="oklch(0.82 0.16 210)" />
-                            <stop offset="100%" stopColor="oklch(0.75 0.18 305)" />
+                            <stop offset="0%" stopColor="var(--neon-primary)" />
+                            <stop offset="50%" stopColor="var(--neon-secondary)" />
+                            <stop offset="100%" stopColor="var(--neon-accent)" />
                           </linearGradient>
                         </defs>
                       </svg>
@@ -316,8 +272,12 @@ export function MeetingGenerationModal({
                       </div>
                     </div>
 
-                    {/* Meeting title preview */}
-                    <p className="mt-4 text-sm font-medium truncate px-4">{title}</p>
+                    <p
+                      className="mt-4 text-sm font-medium truncate px-4"
+                      style={{ color: "var(--foreground)" }}
+                    >
+                      {title}
+                    </p>
 
                     <div className="mt-3 h-6">
                       <AnimatePresence mode="wait">
@@ -326,14 +286,14 @@ export function MeetingGenerationModal({
                           initial={{ opacity: 0, y: 8 }}
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, y: -8 }}
-                          className="text-sm text-muted-foreground"
+                          className="text-sm"
+                          style={{ color: "var(--muted-foreground)" }}
                         >
                           {animDone && !link ? "Connecting to server…" : PHASES[phase]}
                         </motion.p>
                       </AnimatePresence>
                     </div>
 
-                    {/* Waiting-for-API dots */}
                     {animDone && !link && (
                       <motion.div
                         initial={{ opacity: 0 }}
@@ -343,7 +303,8 @@ export function MeetingGenerationModal({
                         {[0, 1, 2].map((i) => (
                           <motion.span
                             key={i}
-                            className="h-1.5 w-1.5 rounded-full bg-[var(--neon-secondary)]"
+                            className="h-1.5 w-1.5 rounded-full"
+                            style={{ background: "var(--neon-secondary)" }}
                             animate={{ opacity: [0.3, 1, 0.3] }}
                             transition={{ duration: 1, repeat: Infinity, delay: i * 0.2 }}
                           />
@@ -353,7 +314,7 @@ export function MeetingGenerationModal({
                   </motion.div>
                 )}
 
-                {/* ── SCREEN 3: Done - link ready ────────────────────────────── */}
+                {/* ── SCREEN 3: Done ────────────────────────────────────────── */}
                 {screen === "done" && (
                   <motion.div
                     key="done-screen"
@@ -369,20 +330,42 @@ export function MeetingGenerationModal({
 
                     <div>
                       <h3 className="text-2xl font-semibold text-gradient">Meeting ready</h3>
-                      <p className="mt-1 text-sm font-medium truncate px-4">{title}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">
+                      <p
+                        className="mt-1 text-sm font-medium truncate px-4"
+                        style={{ color: "var(--foreground)" }}
+                      >
+                        {title}
+                      </p>
+                      <p className="mt-1 text-xs" style={{ color: "var(--muted-foreground)" }}>
                         Share this link to invite others.
                       </p>
                     </div>
 
-                    <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                      <Link2 className="h-4 w-4 text-[var(--neon-secondary)] shrink-0" />
-                      <code className="flex-1 truncate text-xs text-left text-foreground">
+                    <div
+                      className="flex items-center gap-2 rounded-xl p-3"
+                      style={{
+                        border: "1px solid var(--glass-border)",
+                        background: "var(--glass)",
+                      }}
+                    >
+                      <Link2
+                        className="h-4 w-4 shrink-0"
+                        style={{ color: "var(--neon-secondary)" }}
+                      />
+                      <code
+                        className="flex-1 truncate text-xs text-left"
+                        style={{ color: "var(--foreground)" }}
+                      >
                         {link}
                       </code>
                       <button
                         onClick={copy}
-                        className="rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-medium hover:bg-white/15 transition flex items-center gap-1"
+                        className="rounded-lg px-2.5 py-1.5 text-xs font-medium transition flex items-center gap-1"
+                        style={{
+                          background: "var(--glass)",
+                          border: "1px solid var(--glass-border)",
+                          color: "var(--foreground)",
+                        }}
                       >
                         {copied ? (
                           <>
@@ -412,8 +395,6 @@ export function MeetingGenerationModal({
         )}
       </AnimatePresence>
 
-      {/* ── Duplicate Title Modal - rendered outside the main modal so it sits  */}
-      {/* on its own z-index layer (z-[60]) above the generation modal (z-50).   */}
       <DuplicateTitleModal
         open={dupModalOpen}
         conflictingTitle={dupConflictingTitle}
@@ -421,7 +402,6 @@ export function MeetingGenerationModal({
         onClose={() => {
           setDupModalOpen(false);
           setDupConflictingTitle("");
-          // Return user to title screen so they can edit freely
           setScreen("title");
         }}
       />

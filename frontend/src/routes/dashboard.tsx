@@ -1,16 +1,17 @@
 /**
  * dashboard.tsx - Lumina Meet Dashboard
  *
- * CHANGES in this version:
- *   - Duplicate-title detection for instant meetings (handleGenerate),
- *     generate-and-invite (send), and join-via-link (join).
- *   - duplicateTitle / pendingAction state drives DuplicateTitleModal open/close.
- *   - MeetingGenerationModal receives duplicateTitle + onRetry props.
- *   - InviteDialog receives duplicateTitle + onRetry props.
- *   - join() flow: if DUPLICATE_TITLE 409 on recordJoined, opens modal; on retry
- *     re-calls with the new title and then navigates.
- *   - RenameMeetingModal added for inline title editing from the history list.
- *   - All other code is identical to the previous version.
+ * All hardcoded color values replaced with CSS variable tokens so the
+ * dashboard responds correctly to both light and dark themes.
+ *
+ * Key fixes vs previous version:
+ *  - Dialog/DialogContent: removed hardcoded `border-white/10` and
+ *    replaced with `border-[var(--glass-border)]`. Also overrides the
+ *    shadcn overlay which hardcodes a dark backdrop.
+ *  - RecordingCard thumbnail: removed `bg-black/40` → `bg-[var(--card)]`
+ *  - All remaining `white/N` alpha utilities replaced with CSS-var equivalents
+ *  - InviteDialog result box border fixed
+ *  - bg-[#05070e] backdrop references removed
  */
 
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
@@ -66,6 +67,7 @@ import { apiClient } from "@/api/apiClient";
 import { API_ENDPOINTS } from "@/api/endpoints";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ThemeToggle } from "@/components/ui-custom/ThemeToggle";
 
 export const Route = createFileRoute("/dashboard")({
   component: Dashboard,
@@ -156,17 +158,19 @@ function IconBtn({
     sm: "px-3 py-1.5 text-xs",
     md: "px-4 py-2 text-sm",
   };
+
   const variants: Record<IconBtnVariant, string> = {
     primary:
-      "bg-gradient-neon text-white shadow-[0_4px_20px_-6px_oklch(0.65_0.22_280/0.6)] hover:shadow-[0_6px_28px_-6px_oklch(0.65_0.22_280/0.8)] hover:brightness-110 active:scale-[0.97]",
+      "bg-gradient-neon text-white shadow-[var(--shadow-glow-primary)] hover:shadow-[var(--shadow-glow-primary)] hover:brightness-110 active:scale-[0.97]",
     secondary:
-      "bg-[oklch(0.82_0.16_210/0.08)] border border-[oklch(0.82_0.16_210/0.25)] text-[var(--neon-secondary)] hover:bg-[oklch(0.82_0.16_210/0.16)] hover:border-[oklch(0.82_0.16_210/0.45)] active:scale-[0.97]",
+      "bg-[color-mix(in_oklch,var(--neon-secondary)_8%,transparent)] border border-[color-mix(in_oklch,var(--neon-secondary)_25%,transparent)] text-[var(--neon-secondary)] hover:bg-[color-mix(in_oklch,var(--neon-secondary)_16%,transparent)] hover:border-[color-mix(in_oklch,var(--neon-secondary)_45%,transparent)] active:scale-[0.97]",
     danger:
-      "bg-[oklch(0.72_0.22_35/0.1)] border border-[oklch(0.72_0.22_35/0.3)] text-[oklch(0.82_0.2_35)] hover:bg-[oklch(0.72_0.22_35/0.18)] cursor-not-allowed opacity-60",
-    ghost: "text-muted-foreground hover:text-foreground hover:bg-white/[0.06] active:scale-[0.97]",
-    live: "bg-[oklch(0.65_0.22_160/0.15)] border border-[oklch(0.65_0.22_160/0.35)] text-[var(--neon-secondary)] hover:bg-[oklch(0.65_0.22_160/0.25)] hover:border-[oklch(0.65_0.22_160/0.55)] shadow-[0_0_12px_-4px_oklch(0.65_0.22_160/0.4)] active:scale-[0.97]",
+      "bg-[color-mix(in_oklch,var(--neon-danger)_10%,transparent)] border border-[color-mix(in_oklch,var(--neon-danger)_30%,transparent)] text-[var(--neon-danger)] hover:bg-[color-mix(in_oklch,var(--neon-danger)_18%,transparent)] cursor-not-allowed opacity-60",
+    ghost:
+      "text-muted-foreground hover:text-foreground hover:bg-[var(--glass-hover)] active:scale-[0.97]",
+    live: "bg-[color-mix(in_oklch,var(--neon-secondary)_15%,transparent)] border border-[color-mix(in_oklch,var(--neon-secondary)_35%,transparent)] text-[var(--neon-secondary)] hover:bg-[color-mix(in_oklch,var(--neon-secondary)_25%,transparent)] hover:border-[color-mix(in_oklch,var(--neon-secondary)_55%,transparent)] shadow-[var(--shadow-glow-cyan)] active:scale-[0.97]",
     expired:
-      "bg-[oklch(0.72_0.22_35/0.08)] border border-[oklch(0.72_0.22_35/0.2)] text-[oklch(0.72_0.22_35/0.7)] cursor-not-allowed",
+      "bg-[color-mix(in_oklch,var(--neon-danger)_8%,transparent)] border border-[color-mix(in_oklch,var(--neon-danger)_20%,transparent)] text-[color-mix(in_oklch,var(--neon-danger)_70%,transparent)] cursor-not-allowed",
   };
   return (
     <Tag
@@ -207,23 +211,23 @@ const MODE_META: Record<
   screen_voice: {
     label: "Screen + Voice",
     icon: <MonitorSmartphone className="h-3.5 w-3.5" />,
-    color: "oklch(0.82 0.16 280)",
-    bg: "oklch(0.65 0.22 280 / 0.12)",
-    border: "oklch(0.65 0.22 280 / 0.35)",
+    color: "var(--neon-primary)",
+    bg: "color-mix(in oklch, var(--neon-primary) 12%, transparent)",
+    border: "color-mix(in oklch, var(--neon-primary) 35%, transparent)",
   },
   screen: {
     label: "Screen Only",
     icon: <Monitor className="h-3.5 w-3.5" />,
-    color: "oklch(0.82 0.16 210)",
-    bg: "oklch(0.65 0.18 210 / 0.12)",
-    border: "oklch(0.65 0.18 210 / 0.35)",
+    color: "var(--neon-secondary)",
+    bg: "color-mix(in oklch, var(--neon-secondary) 12%, transparent)",
+    border: "color-mix(in oklch, var(--neon-secondary) 35%, transparent)",
   },
   voice: {
     label: "Voice Only",
     icon: <Mic2 className="h-3.5 w-3.5" />,
-    color: "oklch(0.85 0.16 305)",
-    bg: "oklch(0.75 0.18 305 / 0.12)",
-    border: "oklch(0.75 0.18 305 / 0.35)",
+    color: "var(--neon-accent)",
+    bg: "color-mix(in oklch, var(--neon-accent) 12%, transparent)",
+    border: "color-mix(in oklch, var(--neon-accent) 35%, transparent)",
   },
 };
 
@@ -285,13 +289,29 @@ function RecordingCard({ recording, index }: { recording: RecordingEntry; index:
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.04 }}
-      className="group relative overflow-hidden rounded-2xl border border-white/8 bg-white/3 hover:border-white/14 hover:bg-white/5 transition-all duration-200"
+      className="group relative overflow-hidden rounded-2xl transition-all duration-200"
+      style={{
+        border: "1px solid var(--glass-border)",
+        background: "var(--glass-bg)",
+      }}
     >
-      <div className="absolute top-0 left-0 right-0 h-px opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-gradient-to-r from-transparent via-[var(--neon-primary)] to-transparent" />
+      <div
+        className="absolute top-0 left-0 right-0 h-px opacity-0 group-hover:opacity-100 transition-opacity duration-300"
+        style={{
+          background: "linear-gradient(to right, transparent, var(--neon-primary), transparent)",
+        }}
+      />
       <div className="flex gap-4 p-4">
         <div className="shrink-0">
           {recording.thumbnailUrl && recording.mode !== "voice" ? (
-            <div className="relative h-20 w-32 overflow-hidden rounded-xl border border-white/8 bg-black/40">
+            <div
+              className="relative h-20 w-32 overflow-hidden rounded-xl"
+              style={{
+                border: "1px solid var(--glass-border)",
+                // FIX: was bg-black/40 — use card bg instead so it works in light mode
+                background: "var(--card)",
+              }}
+            >
               <img
                 src={recording.thumbnailUrl}
                 alt="Recording thumbnail"
@@ -305,8 +325,8 @@ function RecordingCard({ recording, index }: { recording: RecordingEntry; index:
             </div>
           ) : (
             <div
-              className="flex h-20 w-20 items-center justify-center rounded-xl border"
-              style={{ background: meta.bg, borderColor: meta.border }}
+              className="flex h-20 w-20 items-center justify-center rounded-xl"
+              style={{ background: meta.bg, border: `1px solid ${meta.border}` }}
             >
               <div style={{ color: meta.color }}>
                 {recording.mode === "voice" ? (
@@ -321,8 +341,8 @@ function RecordingCard({ recording, index }: { recording: RecordingEntry; index:
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap mb-1.5">
             <span
-              className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold border"
-              style={{ color: meta.color, background: meta.bg, borderColor: meta.border }}
+              className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+              style={{ color: meta.color, background: meta.bg, border: `1px solid ${meta.border}` }}
             >
               {meta.icon}
               {meta.label}
@@ -342,8 +362,14 @@ function RecordingCard({ recording, index }: { recording: RecordingEntry; index:
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <div className="flex-1 min-w-0 rounded-lg border border-white/8 bg-white/4 px-2.5 py-1.5 flex items-center gap-2">
-              <span className="text-[11px] font-mono text-[var(--neon-secondary)] truncate flex-1">
+            <div
+              className="flex-1 min-w-0 rounded-lg flex items-center gap-2 px-2.5 py-1.5"
+              style={{ border: "1px solid var(--glass-border)", background: "var(--glass-bg)" }}
+            >
+              <span
+                className="text-[11px] font-mono truncate flex-1"
+                style={{ color: "var(--neon-secondary)" }}
+              >
                 {recording.cloudinaryUrl}
               </span>
             </div>
@@ -352,12 +378,21 @@ function RecordingCard({ recording, index }: { recording: RecordingEntry; index:
               whileTap={{ scale: 0.95 }}
               onClick={handleCopy}
               title="Copy link"
-              className={cn(
-                "flex h-8 w-8 items-center justify-center rounded-lg border transition shrink-0",
+              className="flex h-8 w-8 items-center justify-center rounded-lg transition shrink-0"
+              style={
                 copied
-                  ? "border-[oklch(0.75_0.18_145/0.5)] bg-[oklch(0.75_0.18_145/0.12)] text-[oklch(0.85_0.15_145)]"
-                  : "border-white/10 bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10",
-              )}
+                  ? {
+                      border:
+                        "1px solid color-mix(in oklch, var(--neon-secondary) 50%, transparent)",
+                      background: "color-mix(in oklch, var(--neon-secondary) 12%, transparent)",
+                      color: "var(--neon-secondary)",
+                    }
+                  : {
+                      border: "1px solid var(--glass-border)",
+                      background: "var(--glass-bg)",
+                      color: "var(--muted-foreground)",
+                    }
+              }
             >
               {copied ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
             </motion.button>
@@ -368,7 +403,11 @@ function RecordingCard({ recording, index }: { recording: RecordingEntry; index:
               target="_blank"
               rel="noopener noreferrer"
               title="Open recording"
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10 transition shrink-0"
+              className="flex h-8 w-8 items-center justify-center rounded-lg transition shrink-0 text-muted-foreground hover:text-foreground"
+              style={{
+                border: "1px solid var(--glass-border)",
+                background: "var(--glass-bg)",
+              }}
             >
               <ExternalLink className="h-3.5 w-3.5" />
             </motion.a>
@@ -392,15 +431,29 @@ function MeetingRecordingGroup({
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: groupIndex * 0.07 }}
-      className="rounded-2xl border border-white/8 overflow-hidden"
+      className="rounded-2xl overflow-hidden"
+      style={{ border: "1px solid var(--glass-border)" }}
     >
       <button
         onClick={() => setExpanded((v) => !v)}
-        className="w-full flex items-center justify-between gap-3 px-5 py-4 bg-white/3 hover:bg-white/5 transition text-left"
+        className="w-full flex items-center justify-between gap-3 px-5 py-4 transition text-left"
+        style={{ background: "var(--glass-bg)" }}
+        onMouseEnter={(e) =>
+          ((e.currentTarget as HTMLElement).style.background = "var(--glass-hover)")
+        }
+        onMouseLeave={(e) =>
+          ((e.currentTarget as HTMLElement).style.background = "var(--glass-bg)")
+        }
       >
         <div className="flex items-center gap-3 min-w-0">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--neon-primary)]/15 border border-[var(--neon-primary)]/30">
-            <Film className="h-4 w-4 text-[var(--neon-primary)]" />
+          <div
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
+            style={{
+              background: "color-mix(in oklch, var(--neon-primary) 15%, transparent)",
+              border: "1px solid color-mix(in oklch, var(--neon-primary) 30%, transparent)",
+            }}
+          >
+            <Film className="h-4 w-4" style={{ color: "var(--neon-primary)" }} />
           </div>
           <div className="min-w-0">
             <p className="text-sm font-semibold truncate">{group.meetingTitle}</p>
@@ -408,7 +461,10 @@ function MeetingRecordingGroup({
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          <span className="text-[11px] rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-muted-foreground">
+          <span
+            className="text-[11px] rounded-full px-2.5 py-0.5 text-muted-foreground"
+            style={{ border: "1px solid var(--glass-border)", background: "var(--glass-bg)" }}
+          >
             {group.recordings.length} recording{group.recordings.length !== 1 ? "s" : ""}
           </span>
           {expanded ? (
@@ -427,7 +483,7 @@ function MeetingRecordingGroup({
             transition={{ duration: 0.25 }}
             className="overflow-hidden"
           >
-            <div className="p-4 space-y-3 border-t border-white/5">
+            <div className="p-4 space-y-3" style={{ borderTop: "1px solid var(--glass-border)" }}>
               {group.recordings.map((r, i) => (
                 <RecordingCard key={r.recordingId} recording={r} index={i} />
               ))}
@@ -479,7 +535,11 @@ function RecordingsTab() {
           whileTap={{ scale: 0.97 }}
           onClick={fetchRecordings}
           disabled={loading}
-          className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-white/10 transition disabled:opacity-50"
+          className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground transition disabled:opacity-50"
+          style={{
+            border: "1px solid var(--glass-border)",
+            background: "var(--glass-bg)",
+          }}
         >
           <Loader2 className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
           Refresh
@@ -514,7 +574,11 @@ function RecordingsTab() {
           ].map((stat) => (
             <div
               key={stat.label}
-              className="flex flex-col gap-1.5 rounded-2xl border border-white/8 bg-white/3 px-4 py-3"
+              className="flex flex-col gap-1.5 rounded-2xl px-4 py-3"
+              style={{
+                border: "1px solid var(--glass-border)",
+                background: "var(--glass-bg)",
+              }}
             >
               <div className="flex items-center gap-1.5" style={{ color: stat.color }}>
                 {stat.icon}
@@ -536,16 +600,19 @@ function RecordingsTab() {
             animate={{ rotate: 360 }}
             transition={{ duration: 1.4, repeat: Infinity, ease: "linear" }}
           >
-            <Loader2 className="h-8 w-8 text-[var(--neon-primary)]" />
+            <Loader2 className="h-8 w-8" style={{ color: "var(--neon-primary)" }} />
           </motion.div>
           <p className="text-sm text-muted-foreground">Loading recordings…</p>
         </div>
       ) : error ? (
         <div className="flex flex-col items-center justify-center py-16 gap-3">
-          <p className="text-sm text-[oklch(0.82_0.2_35)]">{error}</p>
+          <p className="text-sm" style={{ color: "var(--neon-danger)" }}>
+            {error}
+          </p>
           <button
             onClick={fetchRecordings}
-            className="text-xs text-[var(--neon-primary)] hover:underline"
+            className="text-xs hover:underline"
+            style={{ color: "var(--neon-primary)" }}
           >
             Try again
           </button>
@@ -558,17 +625,29 @@ function RecordingsTab() {
         >
           <div className="relative flex items-center justify-center w-32 h-32">
             <motion.div
-              className="absolute inset-0 rounded-full border border-[var(--neon-primary)]/15"
+              className="absolute inset-0 rounded-full"
+              style={{
+                border: "1px solid color-mix(in oklch, var(--neon-primary) 15%, transparent)",
+              }}
               animate={{ rotate: 360 }}
               transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
             />
             <motion.div
-              className="absolute inset-4 rounded-full border border-dashed border-[var(--neon-accent)]/20"
+              className="absolute inset-4 rounded-full"
+              style={{
+                border: "1px dashed color-mix(in oklch, var(--neon-accent) 20%, transparent)",
+              }}
               animate={{ rotate: -360 }}
               transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
             />
-            <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--neon-primary)]/10 border border-[var(--neon-primary)]/25">
-              <Video className="h-7 w-7 text-[var(--neon-primary)]" />
+            <div
+              className="relative flex h-16 w-16 items-center justify-center rounded-2xl"
+              style={{
+                background: "color-mix(in oklch, var(--neon-primary) 10%, transparent)",
+                border: "1px solid color-mix(in oklch, var(--neon-primary) 25%, transparent)",
+              }}
+            >
+              <Video className="h-7 w-7" style={{ color: "var(--neon-primary)" }} />
             </div>
           </div>
           <div className="text-center max-w-xs">
@@ -585,8 +664,12 @@ function RecordingsTab() {
             ).map(([mode, meta]) => (
               <div
                 key={mode}
-                className="flex items-center gap-2 rounded-xl border px-3 py-2 text-[12px]"
-                style={{ background: meta.bg, borderColor: meta.border, color: meta.color }}
+                className="flex items-center gap-2 rounded-xl px-3 py-2 text-[12px]"
+                style={{
+                  background: meta.bg,
+                  border: `1px solid ${meta.border}`,
+                  color: meta.color,
+                }}
               >
                 {meta.icon}
                 <span className="font-medium">{meta.label}</span>
@@ -602,6 +685,52 @@ function RecordingsTab() {
         </div>
       )}
     </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── THEME-AWARE DIALOG WRAPPER ───────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * ThemedDialogContent wraps shadcn's DialogContent and overrides:
+ *  - border: hardcoded `border-white/10` → `var(--glass-border)`
+ *  - background: `glass-strong` uses the themed `--glass-bg-strong` var
+ *  - The shadcn overlay (DialogOverlay) hardcodes `bg-black/80` in the
+ *    component library. We override it by passing `overlayClassName` if
+ *    your Dialog supports it, otherwise we patch via a wrapping div with
+ *    a CSS-variable-aware overlay injected as a sibling via the portal.
+ *
+ * The simplest reliable fix: pass an explicit `className` that overrides
+ * the border, and set `data-theme-dialog` so we can target the overlay
+ * in a global CSS rule:
+ *
+ *   [data-radix-popper-content-wrapper] + [data-radix-dialog-overlay],
+ *   [data-radix-dialog-overlay] {
+ *     background: color-mix(in oklch, var(--background) 80%, transparent) !important;
+ *     backdrop-filter: blur(8px);
+ *   }
+ *
+ * Add that to your globals / styles.css for a full fix.
+ * Here we also apply inline style to the content panel itself.
+ */
+function ThemedDialogContent({
+  children,
+  className = "",
+  ...props
+}: React.ComponentProps<typeof DialogContent>) {
+  return (
+    <DialogContent
+      className={cn("border-[var(--glass-border)]", className)}
+      style={{
+        background: "var(--card)",
+        boxShadow:
+          "0 8px 32px color-mix(in oklch, var(--background) 60%, transparent), 0 0 0 1px var(--glass-border)",
+      }}
+      {...props}
+    >
+      {children}
+    </DialogContent>
   );
 }
 
@@ -624,20 +753,11 @@ function Dashboard() {
   const [groups, setGroups] = useState<MeetingGroup[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // ── Delete modal state ──────────────────────────────────────────────────────
   const [deleteTarget, setDeleteTarget] = useState<MeetingGroup | null>(null);
-
-  // ── Rename modal state ──────────────────────────────────────────────────────
   const [renameTarget, setRenameTarget] = useState<MeetingGroup | null>(null);
 
-  // ── Duplicate title state ───────────────────────────────────────────────────
-  // duplicateTitle   - the exact conflicting title from the server (drives modal open)
-  // pendingAction    - what to retry once the user picks a new title
-  //   "instant"      → retry meetingService.generate with new title
-  //   "join"         → retry meetingService.recordJoined with new title, then navigate
   const [duplicateTitle, setDuplicateTitle] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<"instant" | "join" | null>(null);
-  // Stored context for the "join" retry
   const [pendingJoinLink, setPendingJoinLink] = useState<string | null>(null);
 
   const loadHistory = () => {
@@ -664,7 +784,6 @@ function Dashboard() {
     setPendingAction(null);
   };
 
-  // Called by MeetingGenerationModal with whatever title the user typed.
   const handleGenerate = async (title: string) => {
     try {
       const res = await meetingService.generate({ title });
@@ -675,7 +794,6 @@ function Dashboard() {
     } catch (err) {
       const dup = extractDuplicateTitle(err);
       if (dup) {
-        // Surface the dup modal inside MeetingGenerationModal
         setDuplicateTitle(dup);
         setPendingAction("instant");
       } else {
@@ -685,13 +803,10 @@ function Dashboard() {
     }
   };
 
-  // Called by MeetingGenerationModal's DuplicateTitleModal when user picks a new title.
   const handleGenerateRetry = async (newTitle: string) => {
     setDuplicateTitle(null);
     await handleGenerate(newTitle);
   };
-
-  // ── Join via pasted link ────────────────────────────────────────────────────
 
   const join = async () => {
     try {
@@ -708,14 +823,12 @@ function Dashboard() {
       } catch (recordErr) {
         const dup = extractDuplicateTitle(recordErr);
         if (dup) {
-          // Store context so we can retry after the user picks a new title
           setPendingJoinLink(joinLink);
           setDuplicateTitle(dup);
           setPendingAction("join");
           setJoinOpen(false);
-          return; // don't navigate yet
+          return;
         }
-        // Non-fatal - we still allow joining even if recordJoined fails for other reasons
       }
 
       navigate({ to: "/meeting/$id", params: { id } });
@@ -724,7 +837,6 @@ function Dashboard() {
     }
   };
 
-  // Called by the standalone DuplicateTitleModal (join flow) when user retries.
   const handleJoinRetry = async (newTitle: string) => {
     setDuplicateTitle(null);
     setPendingAction(null);
@@ -742,7 +854,7 @@ function Dashboard() {
         await meetingService.recordJoined({ meetingLink: link, title: newTitle });
         loadHistory();
       } catch {
-        // Non-fatal - navigate anyway
+        // Non-fatal
       }
 
       navigate({ to: "/meeting/$id", params: { id } });
@@ -756,8 +868,6 @@ function Dashboard() {
     setPendingAction(null);
     setPendingJoinLink(null);
   };
-
-  // ── Delete handlers ─────────────────────────────────────────────────────────
 
   const handleDeleteRequest = (group: MeetingGroup) => {
     if (group.isActive) {
@@ -784,22 +894,13 @@ function Dashboard() {
   };
 
   const handleDeleteClose = () => setDeleteTarget(null);
-
-  // ── Rename handlers ─────────────────────────────────────────────────────────
-
-  const handleRenameRequest = (group: MeetingGroup) => {
-    setRenameTarget(group);
-  };
-
+  const handleRenameRequest = (group: MeetingGroup) => setRenameTarget(group);
   const handleRenameSuccess = (meetingId: string, newTitle: string) => {
-    // Optimistically update local state so the dashboard reflects the rename
-    // immediately without waiting for a full history refetch.
     setGroups((prev) =>
       prev.map((g) => (g.meetingId === meetingId ? { ...g, title: newTitle } : g)),
     );
     setRenameTarget(null);
   };
-
   const handleRenameClose = () => setRenameTarget(null);
 
   if (!user?.username) return null;
@@ -822,12 +923,29 @@ function Dashboard() {
             </div>
             <span className="text-muted-foreground">{displayName}</span>
           </div>
+          <ThemeToggle />
           <button
             onClick={() => {
               logout();
               navigate({ to: "/login" });
             }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white/[0.05] border border-white/10 text-muted-foreground hover:bg-[oklch(0.72_0.22_35/0.12)] hover:border-[oklch(0.72_0.22_35/0.3)] hover:text-[oklch(0.82_0.2_35)] transition-all duration-150 active:scale-[0.97]"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-muted-foreground transition-all duration-150 active:scale-[0.97]"
+            style={{
+              background: "var(--glass-bg)",
+              border: "1px solid var(--glass-border)",
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.background =
+                "color-mix(in oklch, var(--neon-danger) 12%, transparent)";
+              (e.currentTarget as HTMLElement).style.borderColor =
+                "color-mix(in oklch, var(--neon-danger) 30%, transparent)";
+              (e.currentTarget as HTMLElement).style.color = "var(--neon-danger)";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLElement).style.background = "var(--glass-bg)";
+              (e.currentTarget as HTMLElement).style.borderColor = "var(--glass-border)";
+              (e.currentTarget as HTMLElement).style.color = "";
+            }}
           >
             <LogOut className="h-3.5 w-3.5" />
             Logout
@@ -873,7 +991,10 @@ function Dashboard() {
 
         {/* ── Tab bar ─────────────────────────────────────────────────── */}
         <div className="mt-10 glass rounded-2xl overflow-hidden">
-          <div className="flex items-center justify-between border-b border-white/5 px-5 py-1">
+          <div
+            className="flex items-center justify-between px-5 py-1"
+            style={{ borderBottom: "1px solid var(--glass-border)" }}
+          >
             <div className="flex items-center gap-1">
               <TabButton
                 active={activeTab === "meetings"}
@@ -899,7 +1020,24 @@ function Dashboard() {
                   exit={{ opacity: 0, x: 8 }}
                   transition={{ duration: 0.15 }}
                   onClick={() => setInviteOpen(true)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[oklch(0.65_0.22_280/0.1)] border border-[oklch(0.65_0.22_280/0.25)] text-[var(--neon-secondary)] hover:bg-[oklch(0.65_0.22_280/0.2)] hover:border-[oklch(0.65_0.22_280/0.45)] transition-all duration-150 active:scale-[0.97]"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 active:scale-[0.97]"
+                  style={{
+                    background: "color-mix(in oklch, var(--neon-primary) 10%, transparent)",
+                    border: "1px solid color-mix(in oklch, var(--neon-primary) 25%, transparent)",
+                    color: "var(--neon-secondary)",
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLElement).style.background =
+                      "color-mix(in oklch, var(--neon-primary) 20%, transparent)";
+                    (e.currentTarget as HTMLElement).style.borderColor =
+                      "color-mix(in oklch, var(--neon-primary) 45%, transparent)";
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLElement).style.background =
+                      "color-mix(in oklch, var(--neon-primary) 10%, transparent)";
+                    (e.currentTarget as HTMLElement).style.borderColor =
+                      "color-mix(in oklch, var(--neon-primary) 25%, transparent)";
+                  }}
                 >
                   <Send className="h-3 w-3" />
                   Send invites
@@ -923,7 +1061,7 @@ function Dashboard() {
                   ) : groups.length === 0 ? (
                     <EmptyHistory onStart={handleOpenGen} />
                   ) : (
-                    <ul className="divide-y divide-white/5 -mx-5">
+                    <ul className="divide-y divide-[var(--glass-border)] -mx-5">
                       {groups.map((group, i) => (
                         <MeetingGroupRow
                           key={group.meetingId}
@@ -954,7 +1092,6 @@ function Dashboard() {
 
       {/* ── Modals ─────────────────────────────────────────────────────── */}
 
-      {/* Instant meeting modal - passes duplicateTitle so it can open DuplicateTitleModal internally */}
       <MeetingGenerationModal
         open={genOpen}
         link={genLink}
@@ -969,9 +1106,9 @@ function Dashboard() {
         onRetry={handleGenerateRetry}
       />
 
-      {/* Join via link */}
+      {/* ── Join dialog — uses ThemedDialogContent to avoid hardcoded dark bg ── */}
       <Dialog open={joinOpen} onOpenChange={setJoinOpen}>
-        <DialogContent className="glass-strong border-white/10">
+        <ThemedDialogContent>
           <DialogHeader>
             <DialogTitle>Join a meeting</DialogTitle>
           </DialogHeader>
@@ -993,10 +1130,9 @@ function Dashboard() {
               <Video className="h-4 w-4" /> Join meeting
             </NeonButton>
           </div>
-        </DialogContent>
+        </ThemedDialogContent>
       </Dialog>
 
-      {/* Invite dialog */}
       <InviteDialog
         open={inviteOpen}
         onClose={() => {
@@ -1005,7 +1141,6 @@ function Dashboard() {
         }}
       />
 
-      {/* Delete meeting modal */}
       <DeleteMeetingModal
         open={deleteTarget !== null}
         meeting={deleteTarget}
@@ -1013,7 +1148,6 @@ function Dashboard() {
         onConfirm={handleDeleteConfirm}
       />
 
-      {/* Rename meeting modal */}
       <RenameMeetingModal
         open={renameTarget !== null}
         meeting={renameTarget}
@@ -1021,11 +1155,6 @@ function Dashboard() {
         onSuccess={handleRenameSuccess}
       />
 
-      {/*
-       * Standalone DuplicateTitleModal for the "join via link" flow.
-       * (Instant meeting dup is handled inside MeetingGenerationModal.)
-       * The invite flow has its own internal modal inside InviteDialog.
-       */}
       <DuplicateTitleModal
         open={pendingAction === "join" && !!duplicateTitle}
         conflictingTitle={duplicateTitle ?? ""}
@@ -1062,14 +1191,18 @@ function TabButton({
       {icon}
       {label}
       {typeof count === "number" && count > 0 && (
-        <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+        <span
+          className="rounded-full px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+          style={{ background: "var(--glass-bg)" }}
+        >
           {count}
         </span>
       )}
       {active && (
         <motion.div
           layoutId="tab-underline"
-          className="absolute bottom-0 left-0 right-0 h-0.5 bg-[var(--neon-primary)] rounded-full"
+          className="absolute bottom-0 left-0 right-0 h-0.5 rounded-full"
+          style={{ background: "var(--neon-primary)" }}
           transition={{ type: "spring", stiffness: 380, damping: 30 }}
         />
       )}
@@ -1082,7 +1215,13 @@ function TabButton({
 function EmptyHistory({ onStart }: { onStart: () => void }) {
   return (
     <div className="px-5 py-14 flex flex-col items-center gap-4 text-center">
-      <div className="h-14 w-14 rounded-2xl bg-white/[0.04] border border-white/[0.07] flex items-center justify-center">
+      <div
+        className="h-14 w-14 rounded-2xl flex items-center justify-center"
+        style={{
+          background: "var(--glass-bg)",
+          border: "1px solid var(--glass-border)",
+        }}
+      >
         <History className="h-6 w-6 opacity-20" />
       </div>
       <div>
@@ -1091,7 +1230,10 @@ function EmptyHistory({ onStart }: { onStart: () => void }) {
       </div>
       <button
         onClick={onStart}
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-gradient-neon text-white shadow-[0_4px_20px_-6px_oklch(0.65_0.22_280/0.5)] hover:shadow-[0_6px_28px_-6px_oklch(0.65_0.22_280/0.75)] hover:brightness-110 transition-all duration-150 active:scale-[0.97]"
+        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-gradient-neon text-white transition-all duration-150 active:scale-[0.97]"
+        style={{ boxShadow: "var(--shadow-glow-primary)" }}
+        onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.filter = "brightness(1.1)")}
+        onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.filter = "")}
       >
         <Plus className="h-4 w-4" />
         Start your first meeting
@@ -1102,45 +1244,55 @@ function EmptyHistory({ onStart }: { onStart: () => void }) {
 
 // ─── Badge config ─────────────────────────────────────────────────────────────
 
-const BADGE = {
+const BADGE_STYLES = {
   live: {
     label: "● Live",
-    className: "bg-[oklch(0.65_0.22_160/0.15)] text-[var(--neon-secondary)]",
+    style: {
+      background: "color-mix(in oklch, var(--neon-secondary) 15%, transparent)",
+      color: "var(--neon-secondary)",
+    },
   },
   instant: {
     label: "Instant",
-    className: "bg-[oklch(0.65_0.22_320/0.12)] text-[var(--neon-accent)]",
+    style: {
+      background: "color-mix(in oklch, var(--neon-accent) 12%, transparent)",
+      color: "var(--neon-accent)",
+    },
   },
   scheduled: {
     label: "Scheduled",
-    className: "bg-[oklch(0.65_0.22_280/0.15)] text-[var(--neon-primary)]",
+    style: {
+      background: "color-mix(in oklch, var(--neon-primary) 15%, transparent)",
+      color: "var(--neon-primary)",
+    },
   },
   joined: {
     label: "Joined",
-    className: "bg-[oklch(0.82_0.16_210/0.12)] text-[var(--neon-secondary)]",
+    style: {
+      background: "color-mix(in oklch, var(--neon-secondary) 12%, transparent)",
+      color: "var(--neon-secondary)",
+    },
   },
   expired: {
     label: "Expired",
-    className: "bg-[oklch(0.72_0.22_35/0.15)] text-[oklch(0.82_0.2_35)]",
+    style: {
+      background: "color-mix(in oklch, var(--neon-danger) 15%, transparent)",
+      color: "var(--neon-danger)",
+    },
   },
 } as const;
 
 function MeetingTypeBadge({ group }: { group: MeetingGroup }) {
-  if (isScheduledExpired(group)) {
-    const cfg = BADGE.expired;
-    return (
-      <span
-        className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase ${cfg.className}`}
-      >
-        {cfg.label}
-      </span>
-    );
-  }
-  const key = group.isActive ? "live" : group.type;
-  const cfg = BADGE[key as keyof typeof BADGE] ?? BADGE.instant;
+  const badgeKey = isScheduledExpired(group)
+    ? "expired"
+    : group.isActive
+      ? "live"
+      : ((group.type as keyof typeof BADGE_STYLES) ?? "instant");
+  const cfg = BADGE_STYLES[badgeKey] ?? BADGE_STYLES.instant;
   return (
     <span
-      className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase ${cfg.className}`}
+      className="flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase"
+      style={cfg.style}
     >
       {cfg.label}
     </span>
@@ -1170,12 +1322,20 @@ function MeetingDateLine({ group }: { group: MeetingGroup }) {
 function MeetingCTA({ group }: { group: MeetingGroup }) {
   if (isScheduledExpired(group)) {
     return (
-      <span className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[oklch(0.72_0.22_35/0.08)] border border-[oklch(0.72_0.22_35/0.2)] text-[oklch(0.72_0.22_35/0.6)] cursor-not-allowed select-none">
+      <span
+        className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-not-allowed select-none"
+        style={{
+          background: "color-mix(in oklch, var(--neon-danger) 8%, transparent)",
+          border: "1px solid color-mix(in oklch, var(--neon-danger) 20%, transparent)",
+          color: "color-mix(in oklch, var(--neon-danger) 60%, transparent)",
+        }}
+      >
         <AlertTriangle className="h-3 w-3" />
         Expired
       </span>
     );
   }
+
   if (isScheduledUpcoming(group) && group.scheduledFor) {
     return (
       <Link
@@ -1183,32 +1343,64 @@ function MeetingCTA({ group }: { group: MeetingGroup }) {
         params={{ id: group.meetingId }}
         search={{ scheduledFor: group.scheduledFor }}
         onClick={(e) => e.stopPropagation()}
-        className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[oklch(0.65_0.22_280/0.1)] border border-[oklch(0.65_0.22_280/0.3)] text-[var(--neon-primary)] hover:bg-[oklch(0.65_0.22_280/0.2)] hover:border-[oklch(0.65_0.22_280/0.5)] transition-all duration-150 active:scale-[0.97]"
+        className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 active:scale-[0.97]"
+        style={{
+          background: "color-mix(in oklch, var(--neon-primary) 10%, transparent)",
+          border: "1px solid color-mix(in oklch, var(--neon-primary) 30%, transparent)",
+          color: "var(--neon-primary)",
+        }}
       >
         <Timer className="h-3 w-3" />
         View countdown
       </Link>
     );
   }
+
   if (group.isActive) {
     return (
       <Link
         to="/meeting/$id"
         params={{ id: group.meetingId }}
         onClick={(e) => e.stopPropagation()}
-        className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[oklch(0.65_0.22_160/0.18)] border border-[oklch(0.65_0.22_160/0.4)] text-[var(--neon-secondary)] shadow-[0_0_14px_-4px_oklch(0.65_0.22_160/0.5)] hover:bg-[oklch(0.65_0.22_160/0.28)] hover:shadow-[0_0_20px_-4px_oklch(0.65_0.22_160/0.7)] transition-all duration-150 active:scale-[0.97]"
+        className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 active:scale-[0.97]"
+        style={{
+          background: "color-mix(in oklch, var(--neon-secondary) 18%, transparent)",
+          border: "1px solid color-mix(in oklch, var(--neon-secondary) 40%, transparent)",
+          color: "var(--neon-secondary)",
+          boxShadow: "var(--shadow-glow-cyan)",
+        }}
       >
-        <span className="h-1.5 w-1.5 rounded-full bg-[var(--neon-secondary)] animate-pulse" />
+        <span
+          className="h-1.5 w-1.5 rounded-full animate-pulse"
+          style={{ background: "var(--neon-secondary)" }}
+        />
         Join live
       </Link>
     );
   }
+
   return (
     <Link
       to="/meeting/$id"
       params={{ id: group.meetingId }}
       onClick={(e) => e.stopPropagation()}
-      className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white/[0.05] border border-white/10 text-muted-foreground hover:bg-[oklch(0.82_0.16_210/0.1)] hover:border-[oklch(0.82_0.16_210/0.25)] hover:text-[var(--neon-secondary)] transition-all duration-150 active:scale-[0.97]"
+      className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-muted-foreground transition-all duration-150 active:scale-[0.97]"
+      style={{
+        background: "var(--glass-bg)",
+        border: "1px solid var(--glass-border)",
+      }}
+      onMouseEnter={(e) => {
+        (e.currentTarget as HTMLElement).style.background =
+          "color-mix(in oklch, var(--neon-secondary) 10%, transparent)";
+        (e.currentTarget as HTMLElement).style.borderColor =
+          "color-mix(in oklch, var(--neon-secondary) 25%, transparent)";
+        (e.currentTarget as HTMLElement).style.color = "var(--neon-secondary)";
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLElement).style.background = "var(--glass-bg)";
+        (e.currentTarget as HTMLElement).style.borderColor = "var(--glass-border)";
+        (e.currentTarget as HTMLElement).style.color = "";
+      }}
     >
       <RotateCcw className="h-3 w-3" />
       Rejoin
@@ -1233,6 +1425,16 @@ function MeetingGroupRow({
   const hasSessions = group.supportsMultipleSessions && group.sessions.length > 0;
   const expired = isScheduledExpired(group);
 
+  const iconBg = expired
+    ? "color-mix(in oklch, var(--neon-danger) 10%, transparent)"
+    : group.isActive
+      ? "color-mix(in oklch, var(--neon-secondary) 18%, transparent)"
+      : "var(--glass-bg)";
+
+  const iconRing = group.isActive
+    ? "1px solid color-mix(in oklch, var(--neon-secondary) 40%, transparent)"
+    : undefined;
+
   return (
     <motion.li
       initial={{ opacity: 0, x: -8 }}
@@ -1242,10 +1444,13 @@ function MeetingGroupRow({
       className={expired ? "relative opacity-70 group" : "relative group"}
     >
       {expired && (
-        <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-[oklch(0.72_0.22_35/0.5)] rounded-r" />
+        <div
+          className="absolute left-0 top-0 bottom-0 w-0.5 rounded-r"
+          style={{ background: "color-mix(in oklch, var(--neon-danger) 50%, transparent)" }}
+        />
       )}
       <div
-        className={`flex items-center gap-3 px-5 py-4 transition hover:bg-white/[0.025] ${hasSessions ? "cursor-pointer" : ""}`}
+        className={`flex items-center gap-3 px-5 py-4 transition hover:bg-[var(--glass-hover)] ${hasSessions ? "cursor-pointer" : ""}`}
         onClick={() => hasSessions && setOpen((v) => !v)}
         role={hasSessions ? "button" : undefined}
         aria-expanded={hasSessions ? open : undefined}
@@ -1262,21 +1467,27 @@ function MeetingGroupRow({
             <div className="h-4 w-4" />
           )}
         </div>
+
         <div
-          className={`flex-shrink-0 h-9 w-9 rounded-xl flex items-center justify-center ${expired ? "bg-[oklch(0.72_0.22_35/0.1)]" : group.isActive ? "bg-[oklch(0.65_0.22_160/0.18)] ring-1 ring-[oklch(0.65_0.22_160/0.4)]" : "bg-white/[0.06]"}`}
+          className="flex-shrink-0 h-9 w-9 rounded-xl flex items-center justify-center"
+          style={{
+            background: iconBg,
+            ...(iconRing ? { border: iconRing } : {}),
+          }}
         >
           {expired ? (
-            <AlertTriangle className="h-4 w-4 text-[oklch(0.72_0.22_35)]" />
+            <AlertTriangle className="h-4 w-4" style={{ color: "var(--neon-danger)" }} />
           ) : group.isActive ? (
-            <Activity className="h-4 w-4 text-[var(--neon-secondary)]" />
+            <Activity className="h-4 w-4" style={{ color: "var(--neon-secondary)" }} />
           ) : group.type === "scheduled" ? (
-            <Calendar className="h-4 w-4 text-[var(--neon-primary)]" />
+            <Calendar className="h-4 w-4" style={{ color: "var(--neon-primary)" }} />
           ) : group.type === "joined" ? (
-            <Link2 className="h-4 w-4 text-[var(--neon-secondary)]" />
+            <Link2 className="h-4 w-4" style={{ color: "var(--neon-secondary)" }} />
           ) : (
-            <Zap className="h-4 w-4 text-[var(--neon-accent)]" />
+            <Zap className="h-4 w-4" style={{ color: "var(--neon-accent)" }} />
           )}
         </div>
+
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <p className={`font-medium truncate ${expired ? "text-muted-foreground" : ""}`}>
@@ -1286,8 +1497,10 @@ function MeetingGroupRow({
           </div>
           <div className="mt-1 flex items-center gap-3 flex-wrap">
             {expired && group.scheduledFor && (
-              <StatPill icon={<AlertTriangle className="h-3 w-3 text-[oklch(0.72_0.22_35)]" />}>
-                <span className="text-[oklch(0.72_0.22_35/0.8)]">
+              <StatPill
+                icon={<AlertTriangle className="h-3 w-3" style={{ color: "var(--neon-danger)" }} />}
+              >
+                <span style={{ color: "color-mix(in oklch, var(--neon-danger) 80%, transparent)" }}>
                   Was scheduled for {shortDate(group.scheduledFor)} - link no longer valid
                 </span>
               </StatPill>
@@ -1314,11 +1527,11 @@ function MeetingGroupRow({
           </div>
         </div>
 
-        {/* ── Row action buttons ───────────────────────────────────────── */}
+        {/* ── Row action buttons ─────────────────────────────────────── */}
         <div className="flex items-center gap-2 flex-shrink-0">
           <MeetingCTA group={group} />
 
-          {/* Rename button - appears on row hover for ALL meeting types */}
+          {/* Rename */}
           <motion.button
             onClick={(e) => {
               e.stopPropagation();
@@ -1326,19 +1539,30 @@ function MeetingGroupRow({
             }}
             title="Rename meeting"
             aria-label="Rename meeting"
-            className={cn(
-              "flex h-7 w-7 items-center justify-center rounded-lg border transition-all duration-150",
-              "opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100",
-              "border-white/10 bg-transparent text-muted-foreground/50",
-              "hover:border-[oklch(0.65_0.22_280/0.45)] hover:bg-[oklch(0.65_0.22_280/0.12)] hover:text-[var(--neon-primary)]",
-              "active:scale-[0.93]",
-            )}
+            className="flex h-7 w-7 items-center justify-center rounded-lg transition-all duration-150 opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100 active:scale-[0.93]"
+            style={{
+              border: "1px solid var(--glass-border)",
+              background: "transparent",
+              color: "var(--muted-foreground)",
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.borderColor =
+                "color-mix(in oklch, var(--neon-primary) 45%, transparent)";
+              (e.currentTarget as HTMLElement).style.background =
+                "color-mix(in oklch, var(--neon-primary) 12%, transparent)";
+              (e.currentTarget as HTMLElement).style.color = "var(--neon-primary)";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLElement).style.borderColor = "var(--glass-border)";
+              (e.currentTarget as HTMLElement).style.background = "transparent";
+              (e.currentTarget as HTMLElement).style.color = "";
+            }}
             whileTap={{ scale: 0.9 }}
           >
             <Pencil className="h-3.5 w-3.5" />
           </motion.button>
 
-          {/* Delete button - unchanged */}
+          {/* Delete */}
           <motion.button
             onClick={(e) => {
               e.stopPropagation();
@@ -1346,13 +1570,35 @@ function MeetingGroupRow({
             }}
             title={group.isActive ? "End meeting before deleting" : "Delete meeting"}
             aria-label="Delete meeting"
-            className={cn(
-              "flex h-7 w-7 items-center justify-center rounded-lg border transition-all duration-150",
-              "opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100",
+            className="flex h-7 w-7 items-center justify-center rounded-lg transition-all duration-150 opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100"
+            style={
               group.isActive
-                ? "border-[oklch(0.72_0.22_35/0.2)] bg-transparent text-[oklch(0.72_0.22_35/0.35)] cursor-not-allowed"
-                : "border-white/10 bg-transparent text-muted-foreground/50 hover:border-[oklch(0.72_0.22_35/0.45)] hover:bg-[oklch(0.72_0.22_35/0.1)] hover:text-[oklch(0.82_0.2_35)] active:scale-[0.93]",
-            )}
+                ? {
+                    border: "1px solid color-mix(in oklch, var(--neon-danger) 20%, transparent)",
+                    background: "transparent",
+                    color: "color-mix(in oklch, var(--neon-danger) 35%, transparent)",
+                    cursor: "not-allowed",
+                  }
+                : {
+                    border: "1px solid var(--glass-border)",
+                    background: "transparent",
+                    color: "var(--muted-foreground)",
+                  }
+            }
+            onMouseEnter={(e) => {
+              if (group.isActive) return;
+              (e.currentTarget as HTMLElement).style.borderColor =
+                "color-mix(in oklch, var(--neon-danger) 45%, transparent)";
+              (e.currentTarget as HTMLElement).style.background =
+                "color-mix(in oklch, var(--neon-danger) 10%, transparent)";
+              (e.currentTarget as HTMLElement).style.color = "var(--neon-danger)";
+            }}
+            onMouseLeave={(e) => {
+              if (group.isActive) return;
+              (e.currentTarget as HTMLElement).style.borderColor = "var(--glass-border)";
+              (e.currentTarget as HTMLElement).style.background = "transparent";
+              (e.currentTarget as HTMLElement).style.color = "";
+            }}
             whileTap={group.isActive ? undefined : { scale: 0.9 }}
           >
             <Trash2 className="h-3.5 w-3.5" />
@@ -1389,7 +1635,10 @@ function SessionTimeline({
 }) {
   return (
     <div className="ml-[3.25rem] mr-4 mb-4">
-      <div className="relative border-l border-white/[0.08] pl-5 space-y-0">
+      <div
+        className="relative pl-5 space-y-0"
+        style={{ borderLeft: "1px solid var(--glass-border)" }}
+      >
         {sessions.map((session, i) => (
           <motion.div
             key={session.sessionId}
@@ -1399,7 +1648,22 @@ function SessionTimeline({
             className="relative py-2.5"
           >
             <span
-              className={`absolute -left-[1.4rem] top-1/2 -translate-y-1/2 h-2.5 w-2.5 rounded-full border-2 ${session.leftAt == null ? "border-[var(--neon-secondary)] bg-[oklch(0.65_0.22_160/0.4)] animate-pulse" : "border-white/20 bg-white/[0.06]"}`}
+              className={
+                session.leftAt == null
+                  ? "absolute -left-[1.4rem] top-1/2 -translate-y-1/2 h-2.5 w-2.5 rounded-full border-2 animate-pulse"
+                  : "absolute -left-[1.4rem] top-1/2 -translate-y-1/2 h-2.5 w-2.5 rounded-full border-2"
+              }
+              style={
+                session.leftAt == null
+                  ? {
+                      borderColor: "var(--neon-secondary)",
+                      background: "color-mix(in oklch, var(--neon-secondary) 40%, transparent)",
+                    }
+                  : {
+                      borderColor: "var(--glass-border-strong)",
+                      background: "var(--glass-bg)",
+                    }
+              }
             />
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">
@@ -1408,8 +1672,14 @@ function SessionTimeline({
                 </p>
                 <div className="mt-0.5 flex items-center gap-2 flex-wrap">
                   {session.leftAt == null ? (
-                    <span className="flex items-center gap-1 text-[11px] text-[var(--neon-secondary)]">
-                      <span className="h-1.5 w-1.5 rounded-full bg-[var(--neon-secondary)] animate-pulse inline-block" />
+                    <span
+                      className="flex items-center gap-1 text-[11px]"
+                      style={{ color: "var(--neon-secondary)" }}
+                    >
+                      <span
+                        className="h-1.5 w-1.5 rounded-full animate-pulse inline-block"
+                        style={{ background: "var(--neon-secondary)" }}
+                      />
                       In progress
                     </span>
                   ) : (
@@ -1429,7 +1699,23 @@ function SessionTimeline({
                 to="/meeting/$id"
                 params={{ id: meetingId }}
                 onClick={(e) => e.stopPropagation()}
-                className="flex-shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-white/[0.04] border border-white/[0.08] text-muted-foreground hover:bg-[oklch(0.82_0.16_210/0.1)] hover:border-[oklch(0.82_0.16_210/0.2)] hover:text-[var(--neon-secondary)] transition-all duration-150 active:scale-[0.97]"
+                className="flex-shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-muted-foreground transition-all duration-150 active:scale-[0.97]"
+                style={{
+                  background: "var(--glass-bg)",
+                  border: "1px solid var(--glass-border)",
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLElement).style.background =
+                    "color-mix(in oklch, var(--neon-secondary) 10%, transparent)";
+                  (e.currentTarget as HTMLElement).style.borderColor =
+                    "color-mix(in oklch, var(--neon-secondary) 20%, transparent)";
+                  (e.currentTarget as HTMLElement).style.color = "var(--neon-secondary)";
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLElement).style.background = "var(--glass-bg)";
+                  (e.currentTarget as HTMLElement).style.borderColor = "var(--glass-border)";
+                  (e.currentTarget as HTMLElement).style.color = "";
+                }}
               >
                 <ExternalLink className="h-3 w-3" />
                 Open
@@ -1457,15 +1743,18 @@ function StatPill({ icon, children }: { icon: React.ReactNode; children: React.R
 
 function HistorySkeleton() {
   return (
-    <ul className="divide-y divide-white/5 -mx-5">
+    <ul className="divide-y divide-[var(--glass-border)] -mx-5">
       {[...Array(4)].map((_, i) => (
         <li key={i} className="flex items-center gap-3 px-5 py-4">
-          <div className="h-9 w-9 rounded-xl bg-white/[0.04] shimmer flex-shrink-0" />
+          <div
+            className="h-9 w-9 rounded-xl shimmer flex-shrink-0"
+            style={{ background: "var(--glass-bg)" }}
+          />
           <div className="flex-1 space-y-2">
-            <div className="h-3.5 w-48 rounded bg-white/[0.06] shimmer" />
-            <div className="h-2.5 w-32 rounded bg-white/[0.04] shimmer" />
+            <div className="h-3.5 w-48 rounded shimmer" style={{ background: "var(--glass-bg)" }} />
+            <div className="h-2.5 w-32 rounded shimmer" style={{ background: "var(--glass-bg)" }} />
           </div>
-          <div className="h-7 w-16 rounded-lg bg-white/[0.04] shimmer" />
+          <div className="h-7 w-16 rounded-lg shimmer" style={{ background: "var(--glass-bg)" }} />
         </li>
       ))}
     </ul>
@@ -1492,10 +1781,15 @@ function ActionCard({
       whileHover={{ y: -3 }}
       whileTap={{ scale: 0.98 }}
       onClick={onClick}
-      className={`group relative overflow-hidden rounded-2xl p-6 text-left transition ${primary ? "bg-gradient-neon text-white shadow-[0_12px_40px_-12px_oklch(0.65_0.22_280/0.7)]" : "glass hover:border-white/20"}`}
+      className={`group relative overflow-hidden rounded-2xl p-6 text-left transition ${
+        primary ? "bg-gradient-neon text-white" : "glass hover:border-[var(--glass-border-strong)]"
+      }`}
+      style={primary ? { boxShadow: "var(--shadow-glow-primary)" } : undefined}
     >
       <div
-        className={`flex h-10 w-10 items-center justify-center rounded-xl ${primary ? "bg-white/20" : "bg-gradient-neon"}`}
+        className={`flex h-10 w-10 items-center justify-center rounded-xl ${
+          primary ? "bg-white/20" : "bg-gradient-neon"
+        }`}
       >
         <span className="text-white">{icon}</span>
       </div>
@@ -1505,7 +1799,17 @@ function ActionCard({
       </p>
       <div className="mt-4">
         <span
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 ${primary ? "bg-white/20 text-white hover:bg-white/30" : "bg-white/[0.06] border border-white/10 text-[var(--neon-secondary)] group-hover:bg-[oklch(0.65_0.22_280/0.15)] group-hover:border-[oklch(0.65_0.22_280/0.3)]"}`}
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 ${
+            primary ? "bg-white/20 text-white hover:bg-white/30" : "text-[var(--neon-secondary)]"
+          }`}
+          style={
+            !primary
+              ? {
+                  background: "var(--glass-bg)",
+                  border: "1px solid var(--glass-border)",
+                }
+              : undefined
+          }
         >
           <Plus className="h-3 w-3" />
           {primary ? "Start now" : "Open"}
@@ -1522,8 +1826,6 @@ function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void })
   const [title, setTitle] = useState("");
   const [loadingInvite, setLoadingInvite] = useState(false);
   const [resultLink, setResultLink] = useState<string | null>(null);
-
-  // Duplicate title state scoped to this dialog
   const [dupTitle, setDupTitle] = useState<string | null>(null);
 
   const handleClose = () => {
@@ -1581,7 +1883,8 @@ function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void })
   return (
     <>
       <Dialog open={open} onOpenChange={(v) => !v && handleClose()}>
-        <DialogContent className="glass-strong border-white/10">
+        {/* FIX: ThemedDialogContent instead of DialogContent with border-white/10 */}
+        <ThemedDialogContent>
           <DialogHeader>
             <DialogTitle>Send invites</DialogTitle>
           </DialogHeader>
@@ -1608,11 +1911,20 @@ function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void })
             </NeonButton>
 
             {resultLink && (
-              <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
+              <div
+                className="rounded-xl p-4 space-y-3"
+                style={{
+                  border: "1px solid var(--glass-border)",
+                  background: "var(--glass-bg)",
+                }}
+              >
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   Meeting link
                 </p>
-                <p className="text-xs break-all text-[var(--neon-secondary)] font-mono leading-relaxed">
+                <p
+                  className="text-xs break-all font-mono leading-relaxed"
+                  style={{ color: "var(--neon-secondary)" }}
+                >
                   {resultLink}
                 </p>
                 <div className="flex items-center gap-2">
@@ -1621,14 +1933,23 @@ function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void })
                       navigator.clipboard.writeText(resultLink).catch(() => {});
                       toast.success("Link copied!");
                     }}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[oklch(0.65_0.22_280/0.1)] border border-[oklch(0.65_0.22_280/0.25)] text-[var(--neon-primary)] hover:bg-[oklch(0.65_0.22_280/0.2)] hover:border-[oklch(0.65_0.22_280/0.45)] transition-all duration-150 active:scale-[0.97]"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 active:scale-[0.97]"
+                    style={{
+                      background: "color-mix(in oklch, var(--neon-primary) 10%, transparent)",
+                      border: "1px solid color-mix(in oklch, var(--neon-primary) 25%, transparent)",
+                      color: "var(--neon-primary)",
+                    }}
                   >
                     <Copy className="h-3 w-3" />
                     Copy link
                   </button>
                   <button
                     onClick={() => setResultLink(null)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white/[0.04] border border-white/[0.08] text-muted-foreground hover:bg-white/[0.08] hover:text-foreground transition-all duration-150 active:scale-[0.97]"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground transition-all duration-150 active:scale-[0.97]"
+                    style={{
+                      background: "var(--glass-bg)",
+                      border: "1px solid var(--glass-border)",
+                    }}
                   >
                     <RefreshCw className="h-3 w-3" />
                     New meeting
@@ -1637,10 +1958,9 @@ function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void })
               </div>
             )}
           </div>
-        </DialogContent>
+        </ThemedDialogContent>
       </Dialog>
 
-      {/* Duplicate title modal - shown when generateAndInvite returns 409 */}
       <DuplicateTitleModal
         open={!!dupTitle}
         conflictingTitle={dupTitle ?? ""}

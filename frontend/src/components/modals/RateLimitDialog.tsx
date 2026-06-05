@@ -13,7 +13,10 @@ export function RateLimitDialog() {
     setRemaining(rateLimit.retryAfter);
     const id = setInterval(() => {
       setRemaining((r) => {
-        if (r <= 1) { clearInterval(id); return 0; }
+        if (r <= 1) {
+          clearInterval(id);
+          return 0;
+        }
         return r - 1;
       });
     }, 1000);
@@ -24,8 +27,14 @@ export function RateLimitDialog() {
     <AnimatePresence>
       {rateLimit.open && (
         <motion.div
-          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-[#05070e]/85 backdrop-blur-xl px-4"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[60] flex items-center justify-center px-4"
+          style={{
+            background: "color-mix(in oklch, var(--background) 85%, transparent)",
+            backdropFilter: "blur(20px)",
+          }}
         >
           <motion.div
             initial={{ scale: 0.92, y: 10, opacity: 0 }}
@@ -33,24 +42,56 @@ export function RateLimitDialog() {
             exit={{ scale: 0.95, opacity: 0 }}
             transition={{ type: "spring", damping: 20 }}
             className="relative w-full max-w-md rounded-3xl glass-strong p-8 text-center overflow-hidden animate-pulse-danger"
-            style={{ borderColor: "oklch(0.72 0.22 35 / 0.4)" }}
+            style={{
+              borderColor: "color-mix(in oklch, var(--neon-danger) 40%, transparent)",
+            }}
           >
-            <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,oklch(0.72_0.22_35/0.3),transparent_60%)]" />
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-[oklch(0.65_0.25_25)] to-[oklch(0.72_0.22_35)]">
-              <motion.div animate={{ scale: [1, 1.15, 1] }} transition={{ duration: 1.2, repeat: Infinity }}>
+            {/* Radial danger glow */}
+            <div
+              className="absolute inset-0 -z-10"
+              style={{
+                background:
+                  "radial-gradient(circle at top, color-mix(in oklch, var(--neon-danger) 30%, transparent), transparent 60%)",
+              }}
+            />
+
+            {/* Icon */}
+            <div
+              className="mx-auto flex h-16 w-16 items-center justify-center rounded-full"
+              style={{ background: "var(--destructive)" }}
+            >
+              <motion.div
+                animate={{ scale: [1, 1.15, 1] }}
+                transition={{ duration: 1.2, repeat: Infinity }}
+              >
                 <AlertTriangle className="h-8 w-8 text-white" />
               </motion.div>
             </div>
-            <h3 className="mt-5 text-xl font-semibold text-foreground">Slow down a moment</h3>
-            <p className="mt-2 text-sm text-muted-foreground">
+
+            <h3 className="mt-5 text-xl font-semibold" style={{ color: "var(--foreground)" }}>
+              Slow down a moment
+            </h3>
+            <p className="mt-2 text-sm" style={{ color: "var(--muted-foreground)" }}>
               You've sent too many requests in a short window. We're giving the servers a breather.
             </p>
+
             {remaining > 0 && (
-              <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-[oklch(0.72_0.22_35/0.4)] bg-[oklch(0.72_0.22_35/0.1)] px-4 py-1.5 text-sm">
-                <span className="h-1.5 w-1.5 rounded-full bg-[oklch(0.72_0.22_35)] animate-pulse" />
-                Retry in <span className="font-mono font-semibold text-foreground">{remaining}s</span>
+              <div
+                className="mt-5 inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-sm"
+                style={{
+                  border: "1px solid color-mix(in oklch, var(--neon-danger) 40%, transparent)",
+                  background: "color-mix(in oklch, var(--neon-danger) 10%, transparent)",
+                  color: "var(--foreground)",
+                }}
+              >
+                <span
+                  className="h-1.5 w-1.5 rounded-full animate-pulse"
+                  style={{ background: "var(--neon-danger)" }}
+                />
+                Retry in <span className="font-mono font-semibold">{remaining}s</span>
               </div>
             )}
+
             <div className="mt-6">
               <NeonButton
                 variant={remaining > 0 ? "outline" : "primary"}

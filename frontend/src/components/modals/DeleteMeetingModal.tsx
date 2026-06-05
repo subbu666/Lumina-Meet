@@ -1,15 +1,9 @@
 /**
  * DeleteMeetingModal.tsx - Lumina Meet
  *
- * A cinematic, multi-phase confirmation dialog for permanent meeting deletion.
- *
- * Phases:
- *   "idle"     - danger warning, cancel / confirm buttons
- *   "deleting" - animated orbital loader with dissolving particles
- *   "done"     - success implosion with checkmark
- *
- * Design language: matches the oklch dark-glass aesthetic of the dashboard
- * - same CSS variables, same glass/border tokens, framer-motion throughout.
+ * All previously-hardcoded oklch dark values have been replaced with the
+ * CSS custom-property tokens defined in styles.css so the modal respects
+ * both dark and light themes.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -18,17 +12,14 @@ import { AlertTriangle, Trash2, X, ShieldAlert, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { MeetingGroup } from "@/api/services/meetingService";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 interface DeleteMeetingModalProps {
   open: boolean;
   meeting: MeetingGroup | null;
   onClose: () => void;
-  /** Called when the user confirms. Should perform the API call and return a Promise. */
   onConfirm: (meetingId: string) => Promise<void>;
 }
 
-// ─── Particle canvas (ambient danger sparks) ─────────────────────────────────
+// ─── Particle canvas ──────────────────────────────────────────────────────────
 
 function DangerParticles({ active }: { active: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -44,7 +35,7 @@ function DangerParticles({ active }: { active: boolean }) {
     const W = canvas.width;
     const H = canvas.height;
 
-    // Danger colour in oklch(0.72 0.22 35) ≈ #f97316 orange-red
+    // Use the --neon-danger hue so it adapts to the theme
     const particles = Array.from({ length: 28 }, () => ({
       x: Math.random() * W,
       y: Math.random() * H,
@@ -69,8 +60,13 @@ function DangerParticles({ active }: { active: boolean }) {
         }
         ctx!.save();
         ctx!.globalAlpha = p.alpha * p.life;
-        ctx!.fillStyle = `oklch(0.82 0.22 35)`;
-        ctx!.shadowColor = `oklch(0.72 0.22 35)`;
+        // var(--neon-danger) resolves at runtime via getComputedStyle, but canvas
+        // needs a concrete value. We read it once from the document root.
+        const danger =
+          getComputedStyle(document.documentElement).getPropertyValue("--neon-danger").trim() ||
+          "oklch(0.72 0.22 35)";
+        ctx!.fillStyle = danger;
+        ctx!.shadowColor = danger;
         ctx!.shadowBlur = 8;
         ctx!.beginPath();
         ctx!.arc(p.x, p.y, p.r, 0, Math.PI * 2);
@@ -94,39 +90,36 @@ function DangerParticles({ active }: { active: boolean }) {
   );
 }
 
-// ─── Orbital loader (deleting phase) ─────────────────────────────────────────
+// ─── Orbital loader ───────────────────────────────────────────────────────────
 
 function OrbitalLoader() {
   return (
     <div className="relative flex items-center justify-center w-24 h-24">
-      {/* Outer ring */}
       <motion.div
         className="absolute inset-0 rounded-full border-2 border-transparent"
         style={{
-          borderTopColor: "oklch(0.72 0.22 35)",
-          borderRightColor: "oklch(0.72 0.22 35 / 0.3)",
+          borderTopColor: "var(--neon-danger)",
+          borderRightColor: "color-mix(in oklch, var(--neon-danger) 30%, transparent)",
         }}
         animate={{ rotate: 360 }}
         transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
       />
-      {/* Mid ring - counter */}
       <motion.div
         className="absolute inset-3 rounded-full border-2 border-transparent"
         style={{
-          borderBottomColor: "oklch(0.82 0.2 35)",
-          borderLeftColor: "oklch(0.82 0.2 35 / 0.3)",
+          borderBottomColor: "var(--neon-danger)",
+          borderLeftColor: "color-mix(in oklch, var(--neon-danger) 30%, transparent)",
         }}
         animate={{ rotate: -360 }}
         transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }}
       />
-      {/* Inner pulse */}
       <motion.div
         className="w-10 h-10 rounded-full flex items-center justify-center"
-        style={{ background: "oklch(0.72 0.22 35 / 0.15)" }}
+        style={{ background: "color-mix(in oklch, var(--neon-danger) 15%, transparent)" }}
         animate={{ scale: [1, 1.15, 1] }}
         transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
       >
-        <Trash2 className="h-4 w-4" style={{ color: "oklch(0.82 0.2 35)" }} />
+        <Trash2 className="h-4 w-4" style={{ color: "var(--neon-danger)" }} />
       </motion.div>
     </div>
   );
@@ -142,43 +135,34 @@ function SuccessBurst() {
       animate={{ scale: 1, opacity: 1 }}
       transition={{ type: "spring", stiffness: 400, damping: 20 }}
     >
-      {/* Radial burst rings */}
       {[0, 1, 2].map((i) => (
         <motion.div
           key={i}
           className="absolute rounded-full border"
-          style={{ borderColor: "oklch(0.82 0.2 35 / 0.5)" }}
+          style={{ borderColor: "color-mix(in oklch, var(--neon-danger) 50%, transparent)" }}
           initial={{ width: 40, height: 40, opacity: 0.8 }}
           animate={{ width: 80 + i * 28, height: 80 + i * 28, opacity: 0 }}
-          transition={{
-            duration: 0.7,
-            delay: i * 0.12,
-            ease: "easeOut",
-          }}
+          transition={{ duration: 0.7, delay: i * 0.12, ease: "easeOut" }}
         />
       ))}
-      {/* Checkmark circle */}
       <div
         className="relative z-10 w-14 h-14 rounded-full flex items-center justify-center"
         style={{
           background:
-            "radial-gradient(circle, oklch(0.72 0.22 35 / 0.25), oklch(0.72 0.22 35 / 0.08))",
-          border: "1.5px solid oklch(0.82 0.2 35 / 0.6)",
+            "radial-gradient(circle, color-mix(in oklch, var(--neon-danger) 25%, transparent), color-mix(in oklch, var(--neon-danger) 8%, transparent))",
+          border: "1.5px solid color-mix(in oklch, var(--neon-danger) 60%, transparent)",
           boxShadow:
-            "0 0 32px -6px oklch(0.72 0.22 35 / 0.7), inset 0 0 12px oklch(0.72 0.22 35 / 0.1)",
+            "0 0 32px -6px color-mix(in oklch, var(--neon-danger) 70%, transparent), inset 0 0 12px color-mix(in oklch, var(--neon-danger) 10%, transparent)",
         }}
       >
         <motion.svg
           viewBox="0 0 24 24"
           fill="none"
-          stroke="oklch(0.92 0.15 35)"
+          stroke="var(--foreground)"
           strokeWidth={2.5}
           strokeLinecap="round"
           strokeLinejoin="round"
           className="w-7 h-7"
-          initial={{ pathLength: 0 }}
-          animate={{ pathLength: 1 }}
-          transition={{ duration: 0.4, delay: 0.1, ease: "easeOut" }}
         >
           <motion.path
             d="M5 13l4 4L19 7"
@@ -192,7 +176,7 @@ function SuccessBurst() {
   );
 }
 
-// ─── Badge for meeting type ───────────────────────────────────────────────────
+// ─── Badge ────────────────────────────────────────────────────────────────────
 
 const TYPE_LABEL: Record<string, string> = {
   instant: "Instant",
@@ -207,7 +191,6 @@ type Phase = "idle" | "deleting" | "done";
 export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: DeleteMeetingModalProps) {
   const [phase, setPhase] = useState<Phase>("idle");
 
-  // Reset phase whenever the modal opens
   useEffect(() => {
     if (open) setPhase("idle");
   }, [open]);
@@ -218,10 +201,8 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
     try {
       await onConfirm(meeting.meetingId);
       setPhase("done");
-      // Auto-close after success animation
       setTimeout(() => onClose(), 1600);
     } catch {
-      // On error fall back to idle so user can retry or cancel
       setPhase("idle");
     }
   };
@@ -230,7 +211,6 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
   const isDeleting = phase === "deleting";
   const isDone = phase === "done";
 
-  // Prevent closing during active deletion
   const handleBackdropClick = () => {
     if (isDeleting) return;
     onClose();
@@ -249,7 +229,7 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
             transition={{ duration: 0.22 }}
             className="fixed inset-0 z-50 flex items-center justify-center p-4"
             style={{
-              background: "oklch(0.08 0.02 265 / 0.88)",
+              background: "color-mix(in oklch, var(--background) 88%, transparent)",
               backdropFilter: "blur(14px) saturate(160%)",
               WebkitBackdropFilter: "blur(14px) saturate(160%)",
             }}
@@ -265,14 +245,12 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
               onClick={(e) => e.stopPropagation()}
               className="relative w-full max-w-[440px] overflow-hidden rounded-3xl"
               style={{
-                background:
-                  "linear-gradient(160deg, oklch(0.2 0.025 265 / 0.97) 0%, oklch(0.17 0.02 265 / 0.99) 100%)",
-                border: "1px solid oklch(0.72 0.22 35 / 0.22)",
+                background: "var(--card)",
+                border: "1px solid color-mix(in oklch, var(--neon-danger) 22%, transparent)",
                 boxShadow:
-                  "0 0 0 1px oklch(0.72 0.22 35 / 0.08), 0 32px 80px -16px oklch(0.72 0.22 35 / 0.35), 0 8px 32px -8px oklch(0 0 0 / 0.7)",
+                  "0 0 0 1px color-mix(in oklch, var(--neon-danger) 8%, transparent), 0 32px 80px -16px color-mix(in oklch, var(--neon-danger) 35%, transparent), 0 8px 32px -8px color-mix(in oklch, var(--background) 70%, transparent)",
               }}
             >
-              {/* Ambient particle canvas */}
               <DangerParticles active={isIdle} />
 
               {/* Top danger glow bar */}
@@ -280,24 +258,24 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
                 className="absolute top-0 left-0 right-0 h-px"
                 style={{
                   background:
-                    "linear-gradient(90deg, transparent, oklch(0.82 0.22 35 / 0.8), oklch(0.72 0.22 35), oklch(0.82 0.22 35 / 0.8), transparent)",
+                    "linear-gradient(90deg, transparent, color-mix(in oklch, var(--neon-danger) 80%, transparent), var(--neon-danger), color-mix(in oklch, var(--neon-danger) 80%, transparent), transparent)",
                 }}
                 animate={{ opacity: [0.4, 1, 0.4] }}
                 transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
               />
 
-              {/* Corner accent: top-right */}
+              {/* Corner accent */}
               <div
                 className="absolute top-0 right-0 w-32 h-32 pointer-events-none"
                 style={{
                   background:
-                    "radial-gradient(circle at top right, oklch(0.72 0.22 35 / 0.12), transparent 70%)",
+                    "radial-gradient(circle at top right, color-mix(in oklch, var(--neon-danger) 12%, transparent), transparent 70%)",
                 }}
               />
 
               {/* ── Content ──────────────────────────────────────────────── */}
               <div className="relative z-10 p-7">
-                {/* Close button - only in idle */}
+                {/* Close button */}
                 <AnimatePresence>
                   {isIdle && (
                     <motion.button
@@ -307,14 +285,9 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
                       onClick={onClose}
                       className="absolute top-5 right-5 flex h-7 w-7 items-center justify-center rounded-lg transition"
                       style={{
-                        background: "oklch(1 0 0 / 0.05)",
-                        border: "1px solid oklch(1 0 0 / 0.08)",
-                        color: "oklch(0.7 0.03 260)",
-                      }}
-                      whileHover={{
-                        background: "oklch(0.72 0.22 35 / 0.12)",
-                        borderColor: "oklch(0.72 0.22 35 / 0.3)",
-                        color: "oklch(0.82 0.2 35)",
+                        background: "var(--glass)",
+                        border: "1px solid var(--glass-border)",
+                        color: "var(--muted-foreground)",
                       }}
                     >
                       <X className="h-3.5 w-3.5" />
@@ -322,8 +295,8 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
                   )}
                 </AnimatePresence>
 
-                {/* ── Phase: IDLE ─────────────────────────────────────────── */}
                 <AnimatePresence mode="wait">
+                  {/* ── IDLE ─────────────────────────────────────────────── */}
                   {isIdle && (
                     <motion.div
                       key="idle"
@@ -332,45 +305,45 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
                       exit={{ opacity: 0, y: -12, scale: 0.97 }}
                       transition={{ duration: 0.22 }}
                     >
-                      {/* Icon header */}
                       <div className="flex items-start gap-4 mb-6">
                         <motion.div
                           className="shrink-0 flex h-13 w-13 items-center justify-center rounded-2xl"
                           style={{
                             background:
-                              "radial-gradient(circle, oklch(0.72 0.22 35 / 0.2), oklch(0.72 0.22 35 / 0.06))",
-                            border: "1.5px solid oklch(0.72 0.22 35 / 0.4)",
+                              "radial-gradient(circle, color-mix(in oklch, var(--neon-danger) 20%, transparent), color-mix(in oklch, var(--neon-danger) 6%, transparent))",
+                            border:
+                              "1.5px solid color-mix(in oklch, var(--neon-danger) 40%, transparent)",
                             boxShadow:
-                              "0 0 24px -4px oklch(0.72 0.22 35 / 0.5), inset 0 1px 0 oklch(1 0 0 / 0.08)",
+                              "0 0 24px -4px color-mix(in oklch, var(--neon-danger) 50%, transparent), inset 0 1px 0 var(--glass)",
                           }}
                           animate={{
                             boxShadow: [
-                              "0 0 24px -4px oklch(0.72 0.22 35 / 0.4)",
-                              "0 0 40px -4px oklch(0.72 0.22 35 / 0.7)",
-                              "0 0 24px -4px oklch(0.72 0.22 35 / 0.4)",
+                              "0 0 24px -4px color-mix(in oklch, var(--neon-danger) 40%, transparent)",
+                              "0 0 40px -4px color-mix(in oklch, var(--neon-danger) 70%, transparent)",
+                              "0 0 24px -4px color-mix(in oklch, var(--neon-danger) 40%, transparent)",
                             ],
                           }}
                           transition={{ duration: 2, repeat: Infinity }}
                         >
                           <ShieldAlert
                             className="h-6 w-6"
-                            style={{ color: "oklch(0.87 0.18 35)" }}
+                            style={{ color: "var(--neon-danger)" }}
                           />
                         </motion.div>
 
                         <div className="pt-0.5">
-                          <h2 className="text-[17px] font-bold tracking-tight text-white">
+                          <h2
+                            className="text-[17px] font-bold tracking-tight"
+                            style={{ color: "var(--foreground)" }}
+                          >
                             Delete this meeting?
                           </h2>
                           <p
                             className="mt-1 text-[13px] leading-relaxed"
-                            style={{ color: "oklch(0.7 0.03 260)" }}
+                            style={{ color: "var(--muted-foreground)" }}
                           >
                             This action is{" "}
-                            <span
-                              className="font-semibold"
-                              style={{ color: "oklch(0.87 0.18 35)" }}
-                            >
+                            <span className="font-semibold" style={{ color: "var(--neon-danger)" }}>
                               permanent
                             </span>{" "}
                             and cannot be undone.
@@ -383,33 +356,40 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
                         className="mb-6 rounded-2xl p-4"
                         style={{
                           background:
-                            "linear-gradient(135deg, oklch(0.72 0.22 35 / 0.07), oklch(0.72 0.22 35 / 0.03))",
-                          border: "1px solid oklch(0.72 0.22 35 / 0.18)",
+                            "linear-gradient(135deg, color-mix(in oklch, var(--neon-danger) 7%, transparent), color-mix(in oklch, var(--neon-danger) 3%, transparent))",
+                          border:
+                            "1px solid color-mix(in oklch, var(--neon-danger) 18%, transparent)",
                         }}
                       >
                         <div className="flex items-center gap-3">
-                          {/* Meeting icon */}
                           <div
                             className="shrink-0 h-9 w-9 rounded-xl flex items-center justify-center"
                             style={{
-                              background: "oklch(0.72 0.22 35 / 0.12)",
-                              border: "1px solid oklch(0.72 0.22 35 / 0.25)",
+                              background:
+                                "color-mix(in oklch, var(--neon-danger) 12%, transparent)",
+                              border:
+                                "1px solid color-mix(in oklch, var(--neon-danger) 25%, transparent)",
                             }}
                           >
-                            <Zap className="h-4 w-4" style={{ color: "oklch(0.87 0.18 35)" }} />
+                            <Zap className="h-4 w-4" style={{ color: "var(--neon-danger)" }} />
                           </div>
 
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
-                              <p className="font-semibold text-sm truncate text-white">
+                              <p
+                                className="font-semibold text-sm truncate"
+                                style={{ color: "var(--foreground)" }}
+                              >
                                 {meeting.title}
                               </p>
                               <span
                                 className="shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider"
                                 style={{
-                                  background: "oklch(0.72 0.22 35 / 0.15)",
-                                  color: "oklch(0.87 0.18 35)",
-                                  border: "1px solid oklch(0.72 0.22 35 / 0.25)",
+                                  background:
+                                    "color-mix(in oklch, var(--neon-danger) 15%, transparent)",
+                                  color: "var(--neon-danger)",
+                                  border:
+                                    "1px solid color-mix(in oklch, var(--neon-danger) 25%, transparent)",
                                 }}
                               >
                                 {TYPE_LABEL[meeting.type] ?? meeting.type}
@@ -417,20 +397,20 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
                             </div>
                             <p
                               className="mt-0.5 font-mono text-[11px]"
-                              style={{ color: "oklch(0.6 0.03 260)" }}
+                              style={{ color: "var(--muted-foreground)" }}
                             >
                               {meeting.meetingId}
                             </p>
                           </div>
                         </div>
 
-                        {/* Divider */}
                         <div
                           className="my-3 h-px"
-                          style={{ background: "oklch(0.72 0.22 35 / 0.1)" }}
+                          style={{
+                            background: "color-mix(in oklch, var(--neon-danger) 10%, transparent)",
+                          }}
                         />
 
-                        {/* What gets deleted list */}
                         <ul className="space-y-1.5">
                           {[
                             "All session history & usage stats",
@@ -445,11 +425,14 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
                             <li
                               key={item}
                               className="flex items-center gap-2 text-[12px]"
-                              style={{ color: "oklch(0.65 0.04 260)" }}
+                              style={{ color: "var(--muted-foreground)" }}
                             >
                               <span
                                 className="shrink-0 h-1.5 w-1.5 rounded-full"
-                                style={{ background: "oklch(0.72 0.22 35 / 0.6)" }}
+                                style={{
+                                  background:
+                                    "color-mix(in oklch, var(--neon-danger) 60%, transparent)",
+                                }}
                               />
                               {item}
                             </li>
@@ -461,77 +444,63 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
                       <div
                         className="mb-6 flex items-start gap-2.5 rounded-xl px-3.5 py-3"
                         style={{
-                          background: "oklch(0.72 0.22 35 / 0.06)",
-                          border: "1px solid oklch(0.72 0.22 35 / 0.14)",
+                          background: "color-mix(in oklch, var(--neon-danger) 6%, transparent)",
+                          border:
+                            "1px solid color-mix(in oklch, var(--neon-danger) 14%, transparent)",
                         }}
                       >
                         <AlertTriangle
                           className="h-3.5 w-3.5 shrink-0 mt-0.5"
-                          style={{ color: "oklch(0.82 0.2 35)" }}
+                          style={{ color: "var(--neon-danger)" }}
                         />
                         <p
                           className="text-[12px] leading-relaxed"
-                          style={{ color: "oklch(0.72 0.12 35)" }}
+                          style={{ color: "var(--muted-foreground)" }}
                         >
                           Recordings stored on Cloudinary are{" "}
-                          <span className="font-semibold text-white/80">not deleted</span> - only
-                          the meeting record is removed from Lumina Meet.
+                          <span className="font-semibold" style={{ color: "var(--foreground)" }}>
+                            not deleted
+                          </span>{" "}
+                          — only the meeting record is removed from Lumina Meet.
                         </p>
                       </div>
 
                       {/* Buttons */}
                       <div className="flex items-center gap-3">
-                        {/* Cancel */}
                         <motion.button
                           onClick={onClose}
                           className="flex-1 rounded-xl py-2.5 text-sm font-semibold transition-all duration-150"
                           style={{
-                            background: "oklch(1 0 0 / 0.05)",
-                            border: "1px solid oklch(1 0 0 / 0.1)",
-                            color: "oklch(0.7 0.03 260)",
+                            background: "var(--glass)",
+                            border: "1px solid var(--glass-border)",
+                            color: "var(--muted-foreground)",
                           }}
-                          whileHover={{
-                            background: "oklch(1 0 0 / 0.09)",
-                            borderColor: "oklch(1 0 0 / 0.18)",
-                            color: "oklch(0.92 0.01 260)",
-                          }}
+                          whileHover={{ opacity: 0.8 }}
                           whileTap={{ scale: 0.97 }}
                         >
                           Keep it
                         </motion.button>
 
-                        {/* Confirm delete */}
                         <motion.button
                           onClick={handleConfirm}
-                          className="flex-[1.6] relative overflow-hidden rounded-xl py-2.5 text-sm font-bold tracking-wide"
+                          className="flex-[1.6] relative overflow-hidden rounded-xl py-2.5 text-sm font-bold tracking-wide text-white"
                           style={{
-                            background:
-                              "linear-gradient(135deg, oklch(0.6 0.25 30), oklch(0.52 0.22 20))",
+                            background: "var(--destructive)",
                             boxShadow:
-                              "0 4px 20px -6px oklch(0.72 0.22 35 / 0.7), inset 0 1px 0 oklch(1 0 0 / 0.15)",
-                            color: "#fff",
+                              "0 4px 20px -6px color-mix(in oklch, var(--neon-danger) 70%, transparent), inset 0 1px 0 var(--glass)",
                           }}
-                          whileHover={{
-                            boxShadow:
-                              "0 6px 32px -6px oklch(0.72 0.22 35 / 0.9), inset 0 1px 0 oklch(1 0 0 / 0.2)",
-                            filter: "brightness(1.08)",
-                          }}
+                          whileHover={{ filter: "brightness(1.08)" }}
                           whileTap={{ scale: 0.97 }}
                         >
-                          {/* Shimmer on hover */}
                           <motion.span
                             className="absolute inset-0 pointer-events-none"
                             style={{
                               background:
-                                "linear-gradient(105deg, transparent 35%, oklch(1 0 0 / 0.1) 50%, transparent 65%)",
+                                "linear-gradient(105deg, transparent 35%, color-mix(in oklch, white 10%, transparent) 50%, transparent 65%)",
                               backgroundSize: "200% 100%",
                             }}
                             animate={{ backgroundPosition: ["200% 0", "-200% 0"] }}
-                            transition={{
-                              duration: 2.5,
-                              repeat: Infinity,
-                              ease: "linear",
-                            }}
+                            transition={{ duration: 2.5, repeat: Infinity, ease: "linear" }}
                           />
                           <span className="relative z-10 flex items-center justify-center gap-2">
                             <Trash2 className="h-3.5 w-3.5" />
@@ -542,7 +511,7 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
                     </motion.div>
                   )}
 
-                  {/* ── Phase: DELETING ──────────────────────────────────── */}
+                  {/* ── DELETING ──────────────────────────────────────────── */}
                   {isDeleting && (
                     <motion.div
                       key="deleting"
@@ -554,18 +523,25 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
                     >
                       <OrbitalLoader />
                       <div>
-                        <p className="text-base font-semibold text-white">Deleting meeting…</p>
-                        <p className="text-[13px] mt-1" style={{ color: "oklch(0.65 0.03 260)" }}>
+                        <p
+                          className="text-base font-semibold"
+                          style={{ color: "var(--foreground)" }}
+                        >
+                          Deleting meeting…
+                        </p>
+                        <p
+                          className="text-[13px] mt-1"
+                          style={{ color: "var(--muted-foreground)" }}
+                        >
                           Erasing all records permanently
                         </p>
                       </div>
-                      {/* Animated progress dots */}
                       <div className="flex items-center gap-1.5">
                         {[0, 1, 2, 3].map((i) => (
                           <motion.span
                             key={i}
                             className="h-1.5 w-1.5 rounded-full"
-                            style={{ background: "oklch(0.72 0.22 35)" }}
+                            style={{ background: "var(--neon-danger)" }}
                             animate={{ opacity: [0.2, 1, 0.2], scale: [0.7, 1.2, 0.7] }}
                             transition={{
                               duration: 1,
@@ -579,7 +555,7 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
                     </motion.div>
                   )}
 
-                  {/* ── Phase: DONE ──────────────────────────────────────── */}
+                  {/* ── DONE ─────────────────────────────────────────────── */}
                   {isDone && (
                     <motion.div
                       key="done"
@@ -592,7 +568,8 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
                       <SuccessBurst />
                       <div>
                         <motion.p
-                          className="text-base font-bold text-white"
+                          className="text-base font-bold"
+                          style={{ color: "var(--foreground)" }}
                           initial={{ opacity: 0, y: 6 }}
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ delay: 0.2 }}
@@ -601,7 +578,7 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
                         </motion.p>
                         <motion.p
                           className="text-[13px] mt-1"
-                          style={{ color: "oklch(0.65 0.03 260)" }}
+                          style={{ color: "var(--muted-foreground)" }}
                           initial={{ opacity: 0 }}
                           animate={{ opacity: 1 }}
                           transition={{ delay: 0.35 }}
@@ -619,7 +596,7 @@ export function DeleteMeetingModal({ open, meeting, onClose, onConfirm }: Delete
                 className="absolute bottom-0 left-0 right-0 h-px"
                 style={{
                   background:
-                    "linear-gradient(90deg, transparent, oklch(0.72 0.22 35 / 0.4), transparent)",
+                    "linear-gradient(90deg, transparent, color-mix(in oklch, var(--neon-danger) 40%, transparent), transparent)",
                 }}
               />
             </motion.div>

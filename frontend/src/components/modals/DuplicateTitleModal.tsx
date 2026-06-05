@@ -6,12 +6,7 @@ import { NeonButton } from "@/components/ui-custom/NeonButton";
 
 interface Props {
   open: boolean;
-  /** The title that caused the conflict */
   conflictingTitle: string;
-  /**
-   * Called when the user accepts a new title and wants to retry.
-   * The parent must re-fire its original API call with this new title.
-   */
   onRetry: (newTitle: string) => void;
   onClose: () => void;
 }
@@ -26,12 +21,13 @@ function buildSuggestions(base: string): string[] {
   return [`${trimmed} – ${month} ${year}`, `${trimmed} v2`, `${trimmed} (copy)`, `${trimmed} #2`];
 }
 
-// ─── Animated particle ring ───────────────────────────────────────────────────
+// ─── Animated pulse ring ──────────────────────────────────────────────────────
 
 function PulseRing({ delay = 0 }: { delay?: number }) {
   return (
     <motion.div
-      className="absolute inset-0 rounded-[22px] border border-[oklch(0.72_0.22_35/0.45)] pointer-events-none"
+      className="absolute inset-0 rounded-[22px] pointer-events-none"
+      style={{ border: "1px solid color-mix(in oklch, var(--neon-danger) 45%, transparent)" }}
       initial={{ scale: 1, opacity: 0.6 }}
       animate={{ scale: 1.18, opacity: 0 }}
       transition={{ duration: 1.8, repeat: Infinity, ease: "easeOut", delay }}
@@ -44,14 +40,12 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
   const [titleError, setTitleError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Hydrate input with a smart suggestion on open
   useEffect(() => {
     if (open) {
       setNewTitle(
         `${conflictingTitle.trim()} – ${new Date().toLocaleString("default", { month: "short" })} ${new Date().getFullYear()}`,
       );
       setTitleError("");
-      // Focus the input after the entrance animation
       const t = setTimeout(() => inputRef.current?.focus(), 350);
       return () => clearTimeout(t);
     }
@@ -75,7 +69,6 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
   return (
     <AnimatePresence>
       {open && (
-        // ── Backdrop ────────────────────────────────────────────────────────
         <motion.div
           key="dup-backdrop"
           initial={{ opacity: 0 }}
@@ -83,7 +76,10 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
           exit={{ opacity: 0 }}
           transition={{ duration: 0.25 }}
           className="fixed inset-0 z-[60] flex items-center justify-center px-4"
-          style={{ background: "oklch(0.05 0.01 265 / 0.88)", backdropFilter: "blur(18px)" }}
+          style={{
+            background: "color-mix(in oklch, var(--background) 88%, transparent)",
+            backdropFilter: "blur(18px)",
+          }}
           onClick={(e) => e.target === e.currentTarget && onClose()}
         >
           {/* Ambient orbs */}
@@ -91,7 +87,8 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
             <motion.div
               className="absolute -top-24 -left-24 w-72 h-72 rounded-full"
               style={{
-                background: "radial-gradient(circle, oklch(0.72 0.22 35 / 0.22), transparent 70%)",
+                background:
+                  "radial-gradient(circle, color-mix(in oklch, var(--neon-danger) 22%, transparent), transparent 70%)",
               }}
               animate={{ scale: [1, 1.15, 1], x: [0, 20, 0] }}
               transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
@@ -99,7 +96,8 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
             <motion.div
               className="absolute -bottom-16 -right-16 w-56 h-56 rounded-full"
               style={{
-                background: "radial-gradient(circle, oklch(0.65 0.22 280 / 0.18), transparent 70%)",
+                background:
+                  "radial-gradient(circle, color-mix(in oklch, var(--neon-primary) 18%, transparent), transparent 70%)",
               }}
               animate={{ scale: [1, 1.2, 1], x: [0, -15, 0] }}
               transition={{ duration: 12, repeat: Infinity, ease: "easeInOut", delay: 2 }}
@@ -118,10 +116,7 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
             {/* Outer neon glow border */}
             <motion.div
               className="absolute -inset-[1.5px] rounded-[30px]"
-              style={{
-                background:
-                  "linear-gradient(135deg, oklch(0.72 0.22 35 / 0.7), oklch(0.65 0.22 280 / 0.4), oklch(0.72 0.22 35 / 0.5))",
-              }}
+              style={{ background: "var(--gradient-cyber)" }}
               animate={{ opacity: [0.6, 1, 0.6] }}
               transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
             />
@@ -129,7 +124,7 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
             <div
               className="relative rounded-[29px] overflow-hidden"
               style={{
-                background: "oklch(0.18 0.025 265 / 0.96)",
+                background: "var(--card)",
                 backdropFilter: "blur(28px)",
               }}
             >
@@ -137,8 +132,7 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
               <motion.div
                 className="h-[3px] w-full"
                 style={{
-                  background:
-                    "linear-gradient(90deg, oklch(0.65 0.22 280), oklch(0.82 0.16 210), oklch(0.72 0.22 35), oklch(0.75 0.18 305), oklch(0.65 0.22 280))",
+                  background: "var(--gradient-cyber)",
                   backgroundSize: "300% 100%",
                 }}
                 animate={{ backgroundPosition: ["0% 0%", "100% 0%", "0% 0%"] }}
@@ -149,7 +143,12 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
                 {/* Close button */}
                 <button
                   onClick={onClose}
-                  className="absolute top-5 right-5 flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10 hover:text-foreground transition"
+                  className="absolute top-5 right-5 flex h-8 w-8 items-center justify-center rounded-xl transition"
+                  style={{
+                    border: "1px solid var(--glass-border)",
+                    background: "var(--glass)",
+                    color: "var(--muted-foreground)",
+                  }}
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -160,32 +159,34 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
                     <motion.div
                       className="relative flex h-[72px] w-[72px] items-center justify-center rounded-[22px]"
                       style={{
-                        background: "oklch(0.72 0.22 35 / 0.13)",
-                        border: "1px solid oklch(0.72 0.22 35 / 0.4)",
-                        boxShadow: "0 0 36px -6px oklch(0.72 0.22 35 / 0.5)",
+                        background:
+                          "color-mix(in oklch, var(--neon-danger) 13%, transparent)",
+                        border:
+                          "1px solid color-mix(in oklch, var(--neon-danger) 40%, transparent)",
+                        boxShadow:
+                          "0 0 36px -6px color-mix(in oklch, var(--neon-danger) 50%, transparent)",
                       }}
                       animate={{
                         boxShadow: [
-                          "0 0 20px -8px oklch(0.72 0.22 35 / 0.4)",
-                          "0 0 50px -4px oklch(0.72 0.22 35 / 0.7)",
-                          "0 0 20px -8px oklch(0.72 0.22 35 / 0.4)",
+                          "0 0 20px -8px color-mix(in oklch, var(--neon-danger) 40%, transparent)",
+                          "0 0 50px -4px color-mix(in oklch, var(--neon-danger) 70%, transparent)",
+                          "0 0 20px -8px color-mix(in oklch, var(--neon-danger) 40%, transparent)",
                         ],
                       }}
                       transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
                     >
                       <PulseRing delay={0} />
                       <PulseRing delay={0.9} />
-                      <AlertCircle className="h-8 w-8" style={{ color: "oklch(0.85 0.18 35)" }} />
+                      <AlertCircle className="h-8 w-8" style={{ color: "var(--neon-danger)" }} />
                     </motion.div>
                   </div>
 
-                  {/* Eyebrow */}
                   <motion.p
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.15 }}
                     className="text-[11px] uppercase tracking-[0.14em] font-semibold mb-2"
-                    style={{ color: "oklch(0.82 0.2 35)" }}
+                    style={{ color: "var(--neon-danger)" }}
                   >
                     Duplicate Title Detected
                   </motion.p>
@@ -195,7 +196,7 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.2 }}
                     className="text-[1.35rem] font-bold leading-snug mb-2"
-                    style={{ color: "oklch(0.97 0.01 250)" }}
+                    style={{ color: "var(--foreground)" }}
                   >
                     This title already exists
                   </motion.h2>
@@ -205,12 +206,12 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.25 }}
                     className="text-[13.5px] leading-relaxed"
-                    style={{ color: "oklch(0.70 0.03 260)" }}
+                    style={{ color: "var(--muted-foreground)" }}
                   >
                     You already have a meeting named{" "}
                     <span
                       className="font-semibold font-mono"
-                      style={{ color: "oklch(0.82 0.16 210)" }}
+                      style={{ color: "var(--neon-secondary)" }}
                     >
                       "{conflictingTitle}"
                     </span>
@@ -226,18 +227,17 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
                   transition={{ delay: 0.3 }}
                   className="flex items-start gap-3 rounded-2xl px-4 py-3 mb-5"
                   style={{
-                    background: "oklch(0.72 0.22 35 / 0.07)",
-                    border: "1px solid oklch(0.72 0.22 35 / 0.18)",
+                    background:
+                      "color-mix(in oklch, var(--neon-danger) 7%, transparent)",
+                    border:
+                      "1px solid color-mix(in oklch, var(--neon-danger) 18%, transparent)",
                   }}
                 >
                   <AlertCircle
                     className="h-4 w-4 shrink-0 mt-0.5"
-                    style={{ color: "oklch(0.82 0.2 35)" }}
+                    style={{ color: "var(--neon-danger)" }}
                   />
-                  <p
-                    className="text-[12.5px] leading-relaxed"
-                    style={{ color: "oklch(0.72 0.22 35 / 0.85)" }}
-                  >
+                  <p className="text-[12.5px] leading-relaxed" style={{ color: "var(--muted-foreground)" }}>
                     Unique titles help you find meetings in your history. Try adding a date, project
                     name, or version number.
                   </p>
@@ -252,7 +252,7 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
                 >
                   <p
                     className="text-[11px] uppercase tracking-[0.08em] mb-2.5"
-                    style={{ color: "oklch(0.7 0.03 260)" }}
+                    style={{ color: "var(--muted-foreground)" }}
                   >
                     Suggested titles
                   </p>
@@ -268,9 +268,11 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
                         }}
                         className="rounded-full px-3 py-1.5 text-[12px] font-medium transition-all border"
                         style={{
-                          background: "oklch(0.65 0.22 280 / 0.1)",
-                          borderColor: "oklch(0.65 0.22 280 / 0.3)",
-                          color: "oklch(0.82 0.16 210)",
+                          background:
+                            "color-mix(in oklch, var(--neon-primary) 10%, transparent)",
+                          borderColor:
+                            "color-mix(in oklch, var(--neon-primary) 30%, transparent)",
+                          color: "var(--neon-secondary)",
                         }}
                       >
                         {s}
@@ -304,7 +306,7 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -4 }}
                         className="mt-1.5 text-xs"
-                        style={{ color: "oklch(0.82 0.2 35)" }}
+                        style={{ color: "var(--neon-danger)" }}
                       >
                         {titleError}
                       </motion.p>
@@ -323,15 +325,15 @@ export function DuplicateTitleModal({ open, conflictingTitle, onRetry, onClose }
                     Cancel
                   </NeonButton>
                   <motion.button
-                    whileHover={{ scale: 1.02, brightness: 1.1 }}
+                    whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.97 }}
                     onClick={handleRetry}
                     className="flex-[1.6] flex items-center justify-center gap-2 rounded-2xl text-sm font-semibold text-white transition-all"
                     style={{
-                      background:
-                        "linear-gradient(135deg, oklch(0.65 0.22 280), oklch(0.82 0.16 210))",
+                      background: "var(--gradient-primary)",
                       padding: "11px 16px",
-                      boxShadow: "0 6px 28px -6px oklch(0.65 0.22 280 / 0.6)",
+                      boxShadow:
+                        "0 6px 28px -6px color-mix(in oklch, var(--neon-primary) 60%, transparent)",
                     }}
                   >
                     Try this title <ArrowRight className="h-4 w-4" />
