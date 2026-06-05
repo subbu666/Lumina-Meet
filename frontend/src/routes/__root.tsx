@@ -186,7 +186,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
  * Inline bootstrap script — runs before React hydrates so there is
  * zero flash-of-wrong-theme (FOWT).
  *
- * Storage key: 'nebula-theme'  (Zustand persist store shape)
+ * Storage key: 'lumina-theme'  (Zustand persist store shape)
  * Reads:  { state: { theme: 'dark' | 'light' } }
  * Falls back to: system preference, then 'dark'.
  *
@@ -195,7 +195,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
  */
 const themeBootstrap = `(function(){
   try {
-    var stored = localStorage.getItem('nebula-theme');
+    var stored = localStorage.getItem('lumina-theme');
     var theme = 'dark';
     if (stored) {
       var parsed = JSON.parse(stored);

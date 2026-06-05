@@ -98,17 +98,17 @@
       background-position: 200% 0;
     }
   }
-  @keyframes nebula-reveal {
+  @keyframes lumina-reveal {
     from {
-      clip-path: circle(0% at var(--nebula-x, 50%) var(--nebula-y, 50%));
+      clip-path: circle(0% at var(--lumina-x, 50%) var(--lumina-y, 50%));
       filter: blur(8px) saturate(160%);
     }
     to {
-      clip-path: circle(160% at var(--nebula-x, 50%) var(--nebula-y, 50%));
+      clip-path: circle(160% at var(--lumina-x, 50%) var(--lumina-y, 50%));
       filter: blur(0) saturate(100%);
     }
   }
-  @keyframes nebula-ripple {
+  @keyframes lumina-ripple {
     0% {
       transform: translate(-50%, -50%) scale(0);
       opacity: 0.9;
@@ -433,14 +433,14 @@
 }
 ::view-transition-new(root) {
   z-index: 2;
-  animation: nebula-reveal 0.9s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+  animation: lumina-reveal 0.9s cubic-bezier(0.65, 0, 0.35, 1) forwards;
 }
 
 /* Ripple burst rendered above the page during transition */
-.nebula-ripple {
+.lumina-ripple {
   position: fixed;
-  left: var(--nebula-x, 50%);
-  top: var(--nebula-y, 50%);
+  left: var(--lumina-x, 50%);
+  top: var(--lumina-y, 50%);
   width: 10px;
   height: 10px;
   border-radius: 9999px;
@@ -449,7 +449,7 @@
   transform: translate(-50%, -50%);
   background: var(--gradient-cyber);
   box-shadow: 0 0 60px 20px var(--primary);
-  animation: nebula-ripple 0.9s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: lumina-ripple 0.9s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
 /* ================================================================
@@ -472,7 +472,7 @@ input::-webkit-credentials-auto-fill-button {
   ::view-transition-new(root) {
     animation-duration: 0.01s;
   }
-  .nebula-ripple {
+  .lumina-ripple {
     display: none;
   }
   html,

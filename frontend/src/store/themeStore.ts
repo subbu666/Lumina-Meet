@@ -16,6 +16,6 @@ export const useThemeStore = create<ThemeState>()(
       setTheme: (theme) => set({ theme }),
       toggle: () => set({ theme: get().theme === "dark" ? "light" : "dark" }),
     }),
-    { name: "nebula-theme" },
+    { name: "lumina-theme" },
   ),
 );

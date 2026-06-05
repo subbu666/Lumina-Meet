@@ -357,8 +357,8 @@ export function ThemeToggle({
       const x = rect ? rect.left + rect.width / 2 : e.clientX;
       const y = rect ? rect.top + rect.height / 2 : e.clientY;
 
-      document.documentElement.style.setProperty("--nebula-x", `${x}px`);
-      document.documentElement.style.setProperty("--nebula-y", `${y}px`);
+      document.documentElement.style.setProperty("--lumina-x", `${x}px`);
+      document.documentElement.style.setProperty("--lumina-y", `${y}px`);
 
       setRipple((n) => n + 1);
       burstParticles(x, y, isDark);
