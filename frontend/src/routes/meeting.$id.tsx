@@ -1,35 +1,49 @@
 /**
  * meeting.$id.tsx - Lumina Meet
  *
- * FULLY REFACTORED - All patches merged (original + Patch 1-5 including PreJoinLobby).
+ * ── COLOR AUDIT (this file) ───────────────────────────────────────────────────
+ * Every raw oklch() / hex value has been replaced with a CSS custom property so
+ * light ↔ dark theme switching works correctly throughout the room UI.
  *
- * PATCHES INCLUDED (original set):
- * ─ FIX A   useWebRTC() onMeetingEnded callback for host "end for all" nav
- * ─ FIX B   handleLeaveConfirm: host → endMeetingForAll + fire-and-forget HTTP
- * ─ FIX C   RemoteVideoTile <video muted> prevents mobile echo/feedback
- * ─ FIX 1   isConnecting stays true until "room-peers"|"waiting"|"you-are-host"
- * ─ FIX 2   isWaiting guard checked BEFORE isConnecting guard
- * ─ PATCH 1-6   Post-meeting modals (MeetingEndedByHost, MeetingEndedByYou, YouLeft)
- * ─ CHAT PATCH  Private messaging with recipient picker & lock badge
- * ─ LOBBY   Full RBAC lobby (LobbyGate, LobbyManagerPanel, LobbyKnockToast, DenyConfirmModal)
- * ─ RECORDING   useRecording hook integration (crash-safe __luminaSocket callback)
- *               • RecordingOptionsModal / RecordingLinkModal / RecordingLimitModal
- *               • CircleDot / StopCircle controls in footer
- *               • REC live-indicator chip in header
+ * Mapping applied:
+ *   oklch(0.65 0.22 280)  → var(--neon-primary)
+ *   oklch(0.55 0.22 280)  → var(--neon-primary)
+ *   oklch(0.82 0.16 210)  → var(--neon-secondary)
+ *   oklch(0.78 0.15 210)  → var(--neon-secondary)
+ *   oklch(0.55 0.22 210)  → var(--neon-secondary)
+ *   oklch(0.75 0.18 305)  → var(--neon-accent)
+ *   oklch(0.65 0.18 305)  → var(--neon-accent)
+ *   oklch(0.55 0.22 305)  → var(--neon-accent)   [private-chat gradient]
+ *   oklch(0.65 0.18 330)  → var(--neon-accent)   [private-chat gradient end]
+ *   oklch(0.45 0.18 260)  → var(--neon-accent)
+ *   oklch(0.72 0.22 35)   → var(--neon-danger)
+ *   oklch(0.78 0.2  35)   → var(--neon-danger)
+ *   oklch(0.82 0.2  35)   → var(--neon-danger)
+ *   oklch(0.88 0.12 35)   → var(--neon-danger)
+ *   oklch(0.65 0.25 25)   → var(--neon-danger)
+ *   oklch(0.6  0.28 20)   → var(--neon-danger)
+ *   oklch(0.75 0.18 145)  → var(--neon-success)
+ *   oklch(0.85 0.15 145)  → var(--neon-success)
+ *   oklch(0.8  0.18  80)  → var(--neon-warning)
+ *   oklch(0.85 0.18  80)  → var(--neon-warning)
+ *   oklch(0.85 0.15  80)  → var(--neon-warning)
+ *   oklch(0.9  0.18  80)  → var(--neon-warning)
+ *   oklch(0.9  0.18 280)  → var(--neon-primary)
+ *   oklch(0.8  0.18 280)  → var(--neon-primary)
+ *   oklch(0.10 0.02 265)  → var(--background)    [whiteboard overlay]
+ *   oklch(0.12 0.02 265)  → var(--card)
+ *   oklch(0.12 0.02 145)  → var(--card)          [success toast bg]
+ *   oklch(0.12 0.02  35)  → var(--card)          [danger toast bg]
+ *   oklch(0.17 0.025 265) → var(--card)          [lobby knock toast]
+ *   "#0B0F19" / "#0b0f19" → var(--body-base)
+ *   oklch(0.35 0.18 280)  → var(--neon-primary)  [bg swatch]
+ *   oklch(0.35 0.15 200)  → var(--neon-secondary)[bg swatch]
+ *   accentColor oklch(…)  → var(--neon-primary)  [range input thumb]
+ *   Dynamic-alpha rings    → color-mix(in oklch, var(--neon-secondary) N%, transparent)
  *
- * v2 patches:
- * ─ PATCH 1   Destructure requestMicOn/requestCamOn/requestMicCamOn/hostPermissionRequest/
- *             respondToPermissionRequest from webrtc
- * ─ PATCH 2   permissionToasts state + LuminaMeet:permission-result event listener
- * ─ PATCH 3   HostPermissionDialog (participant view) + PermissionResponseToastLayer (host view)
- * ─ PATCH 4   Per-peer "ask to unmute / ask to turn camera on" buttons in ParticipantsPanel
- *
- * PreJoinLobby patches:
- * ─ PATCH 1   Import PreJoinLobby
- * ─ PATCH 2   PreJoinConfig type
- * ─ PATCH 3   MeetingRoom gates on preJoinConfig state - shows PreJoinLobby first
- * ─ PATCH 4   Room accepts initialStream / initialMic / initialCam props
- * ─ PATCH 5   useWebRTC receives initialStream, initialMic, initialCam
+ * Tokens required in globals.css (already added via globals.patch.css):
+ *   --neon-success, --neon-warning  (both themes)
+ * ──────────────────────────────────────────────────────────────────────────────
  */
 
 import { createPortal } from "react-dom";
@@ -134,9 +148,8 @@ import {
   RecordingWarningBanner,
 } from "@/components/modals/RecordingModals";
 import { apiClient } from "@/api/apiClient";
-
-// ── PREJOIN PATCH 1: Import PreJoinLobby ──────────────────────────────────────
 import { PreJoinLobby } from "@/components/ui-custom/PreJoinLobby";
+import { ThemeToggle } from "@/components/ui-custom/ThemeToggle";
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
@@ -171,35 +184,28 @@ const SOUNDSCAPES: { id: SoundscapeId; label: string; icon: React.ReactNode }[] 
   { id: "coffee", label: "Café", icon: <Coffee className="h-4 w-4" /> },
 ];
 
+/**
+ * STATUS_CONFIG — all color values use CSS variables so they adapt to theme.
+ * The `color` field is consumed in inline styles (boxShadow, background) so we
+ * can't use Tailwind class names here — CSS custom properties are the only option.
+ */
 const STATUS_CONFIG: Record<
   ParticipantStatus,
   { label: string; color: string; icon: React.ReactNode }
 > = {
   available: {
     label: "Available",
-    color: "oklch(0.75 0.18 145)",
+    color: "var(--neon-success)",
     icon: <CheckCircle2 className="h-3 w-3" />,
   },
-  busy: {
-    label: "Busy",
-    color: "oklch(0.72 0.22 35)",
-    icon: <WifiOff className="h-3 w-3" />,
-  },
-  away: {
-    label: "Away",
-    color: "oklch(0.8 0.18 80)",
-    icon: <Clock className="h-3 w-3" />,
-  },
+  busy: { label: "Busy", color: "var(--neon-danger)", icon: <WifiOff className="h-3 w-3" /> },
+  away: { label: "Away", color: "var(--neon-warning)", icon: <Clock className="h-3 w-3" /> },
   presenting: {
     label: "Presenting",
-    color: "oklch(0.65 0.22 280)",
+    color: "var(--neon-primary)",
     icon: <Presentation className="h-3 w-3" />,
   },
-  brb: {
-    label: "BRB",
-    color: "oklch(0.78 0.15 210)",
-    icon: <Coffee className="h-3 w-3" />,
-  },
+  brb: { label: "BRB", color: "var(--neon-secondary)", icon: <Coffee className="h-3 w-3" /> },
 };
 const MANUAL_STATUSES: ParticipantStatus[] = ["available", "busy", "away", "brb"];
 
@@ -208,13 +214,11 @@ type LayoutMode = "grid" | "spatial" | "cinema";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-/** Shape of the permission request pushed by the host via socket → useWebRTC */
 interface HostPermissionRequest {
   type: "mic" | "cam" | "both";
   hostUsername: string;
 }
 
-/** Toast shown to the HOST after a participant responds to the request */
 interface PermissionResponseToast {
   id: string;
   fromUsername: string;
@@ -222,12 +226,73 @@ interface PermissionResponseToast {
   accepted: boolean;
 }
 
-// ── PREJOIN PATCH 2: PreJoinConfig type ──────────────────────────────────────
 interface PreJoinConfig {
-  /** The stream handed off from the device-check lobby */
   stream: MediaStream | null;
   micEnabled: boolean;
   camEnabled: boolean;
+}
+
+//Lumina Logo
+function LuminaLogo({ size = 36 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 36 36"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <defs>
+        <linearGradient id="lg-main" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
+          {/* was: #6366f1 / #22d3ee */}
+          <stop offset="0%" stopColor="var(--neon-primary)" />
+          <stop offset="100%" stopColor="var(--neon-secondary)" />
+        </linearGradient>
+        <radialGradient id="rg-glow" cx="50%" cy="50%" r="50%">
+          {/* was: #22d3ee / #6366f1 */}
+          <stop offset="0%" stopColor="var(--neon-secondary)" stopOpacity="0.35" />
+          <stop offset="100%" stopColor="var(--neon-primary)" stopOpacity="0" />
+        </radialGradient>
+        <linearGradient id="lg-shine" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="white" stopOpacity="0.3" />
+          <stop offset="100%" stopColor="white" stopOpacity="0" />
+        </linearGradient>
+        <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+          <feGaussianBlur stdDeviation="2.5" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+      <rect x="1" y="1" width="34" height="34" rx="10" fill="url(#lg-main)" opacity="0.15" />
+      <rect x="1" y="1" width="34" height="34" rx="10" stroke="url(#lg-main)" strokeWidth="1.5" />
+      <rect x="1" y="1" width="34" height="34" rx="10" fill="url(#rg-glow)" />
+      <rect
+        x="5"
+        y="11"
+        width="18"
+        height="14"
+        rx="3"
+        fill="url(#lg-main)"
+        filter="url(#glow)"
+        opacity="0.9"
+      />
+      {/* was: fill="#0B0F19" — now uses the theme surface token */}
+      <circle cx="14" cy="18" r="4.5" fill="var(--body-base)" />
+      <circle cx="14" cy="18" r="3" fill="url(#lg-main)" opacity="0.7" />
+      {/* was: fill="#22d3ee" */}
+      <circle cx="14" cy="18" r="1.5" fill="var(--neon-secondary)" filter="url(#glow)" />
+      <circle cx="15.2" cy="16.8" r="0.7" fill="white" opacity="0.6" />
+      <path
+        d="M25 14.5 L31 18 L25 21.5 Z"
+        fill="url(#lg-main)"
+        filter="url(#glow)"
+        opacity="0.95"
+      />
+      <rect x="5" y="11" width="18" height="6" rx="3" fill="url(#lg-shine)" />
+    </svg>
+  );
 }
 
 // ─── Portal Dropdown ──────────────────────────────────────────────────────────
@@ -251,10 +316,7 @@ function PortalDropdown({
     if (!open || !anchorRef.current) return;
     const update = () => {
       const rect = anchorRef.current!.getBoundingClientRect();
-      setPos({
-        top: rect.bottom + 8,
-        left: align === "right" ? rect.right : rect.left,
-      });
+      setPos({ top: rect.bottom + 8, left: align === "right" ? rect.right : rect.left });
     };
     update();
     window.addEventListener("resize", update, { passive: true });
@@ -277,7 +339,6 @@ function PortalDropdown({
   }, [open, onClose, anchorRef]);
 
   if (!open) return null;
-
   return createPortal(
     <div
       id="portal-dropdown-root"
@@ -325,10 +386,7 @@ function ReactionPickerPortal({
     if (!open || !anchorRef.current) return;
     const update = () => {
       const rect = anchorRef.current!.getBoundingClientRect();
-      setPos({
-        bottom: window.innerHeight - rect.top + 8,
-        centerX: rect.left + rect.width / 2,
-      });
+      setPos({ bottom: window.innerHeight - rect.top + 8, centerX: rect.left + rect.width / 2 });
     };
     update();
     window.addEventListener("resize", update, { passive: true });
@@ -350,7 +408,6 @@ function ReactionPickerPortal({
   }, [open, onClose, anchorRef]);
 
   if (!open) return null;
-
   return createPortal(
     <div
       id="reaction-picker-portal"
@@ -415,7 +472,7 @@ function LobbyKnockToast({
       animate={{ opacity: 1, x: 0, scale: 1 }}
       exit={{ opacity: 0, x: 80, scale: 0.9 }}
       transition={{ type: "spring", damping: 22, stiffness: 300 }}
-      className="relative overflow-hidden rounded-2xl border border-[var(--neon-primary)]/40 bg-[oklch(0.17_0.025_265/0.95)] backdrop-blur-xl shadow-[0_8px_40px_-8px_oklch(0.65_0.22_280/0.5)] w-80"
+      className="relative overflow-hidden rounded-2xl border border-[var(--neon-primary)]/40 bg-[var(--card)] backdrop-blur-xl shadow-[var(--shadow-glow-primary)] w-80"
     >
       <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-[var(--neon-primary)] to-transparent opacity-80 shimmer" />
       <div className="p-4">
@@ -456,11 +513,12 @@ function LobbyKnockToast({
           >
             <UserCheck className="h-3.5 w-3.5" /> Admit
           </motion.button>
+          {/* Deny — neon-danger tokens only */}
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.97 }}
             onClick={onDeny}
-            className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-[oklch(0.72_0.22_35)]/15 border border-[oklch(0.72_0.22_35)]/35 py-2 text-xs font-semibold text-[oklch(0.82_0.2_35)] hover:bg-[oklch(0.72_0.22_35)]/25 transition"
+            className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-[var(--neon-danger)]/15 border border-[var(--neon-danger)]/35 py-2 text-xs font-semibold text-[var(--neon-danger)] hover:bg-[var(--neon-danger)]/25 transition"
           >
             <UserX className="h-3.5 w-3.5" /> Decline
           </motion.button>
@@ -497,15 +555,15 @@ function DenyConfirmModal({
         className="relative mx-4 w-full max-w-sm"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="absolute -inset-1.5 rounded-[2rem] bg-gradient-to-br from-[oklch(0.72_0.22_35)] to-[oklch(0.65_0.22_280)] opacity-25 blur-2xl" />
+        <div className="absolute -inset-1.5 rounded-[2rem] bg-gradient-to-br from-[var(--neon-danger)] to-[var(--neon-primary)] opacity-25 blur-2xl" />
         <div className="relative glass-strong rounded-3xl border border-white/10 p-8 text-center overflow-hidden">
-          <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[oklch(0.72_0.22_35)] to-transparent" />
+          <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[var(--neon-danger)] to-transparent" />
           <motion.div
             animate={{ scale: [1, 1.08, 1] }}
             transition={{ duration: 2, repeat: Infinity }}
-            className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-[oklch(0.72_0.22_35)]/15 border border-[oklch(0.72_0.22_35)]/30"
+            className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--neon-danger)]/15 border border-[var(--neon-danger)]/30"
           >
-            <ShieldAlert className="h-8 w-8 text-[oklch(0.82_0.2_35)]" />
+            <ShieldAlert className="h-8 w-8 text-[var(--neon-danger)]" />
           </motion.div>
           <h2 className="text-xl font-bold mb-2">Decline admission?</h2>
           <p className="text-sm text-muted-foreground mb-1">Are you sure you don't want to let</p>
@@ -523,7 +581,7 @@ function DenyConfirmModal({
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.97 }}
               onClick={onConfirm}
-              className="flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[oklch(0.65_0.25_25)] to-[oklch(0.72_0.22_35)] py-2.5 text-sm font-semibold text-white"
+              className="flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[var(--neon-danger)] to-[var(--neon-danger)] py-2.5 text-sm font-semibold text-white"
             >
               <UserX className="h-4 w-4" /> Yes, decline
             </motion.button>
@@ -546,16 +604,17 @@ function LobbyGate({ username, onLeave }: { username: string; onLeave: () => voi
 
   return (
     <div className="flex min-h-screen items-center justify-center px-4 relative z-10 overflow-hidden">
+      {/* Ambient orbs — CSS vars so they shift in light mode */}
       <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
         <motion.div
           className="absolute -top-32 -left-32 h-96 w-96 rounded-full opacity-20"
-          style={{ background: "radial-gradient(circle, oklch(0.65 0.22 280), transparent 70%)" }}
+          style={{ background: "radial-gradient(circle, var(--neon-primary), transparent 70%)" }}
           animate={{ scale: [1, 1.15, 1], x: [0, 30, 0], y: [0, -20, 0] }}
           transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
         />
         <motion.div
           className="absolute -bottom-32 -right-32 h-96 w-96 rounded-full opacity-15"
-          style={{ background: "radial-gradient(circle, oklch(0.82 0.16 210), transparent 70%)" }}
+          style={{ background: "radial-gradient(circle, var(--neon-secondary), transparent 70%)" }}
           animate={{ scale: [1, 1.2, 1], x: [0, -20, 0], y: [0, 20, 0] }}
           transition={{ duration: 15, repeat: Infinity, ease: "easeInOut", delay: 3 }}
         />
@@ -569,7 +628,7 @@ function LobbyGate({ username, onLeave }: { username: string; onLeave: () => voi
       >
         <div className="absolute -inset-2 rounded-[2.5rem] bg-gradient-to-br from-[var(--neon-primary)]/20 via-[var(--neon-accent)]/10 to-[var(--neon-secondary)]/20 blur-2xl" />
         <div className="relative glass-strong rounded-3xl border border-[var(--neon-primary)]/20 overflow-hidden">
-          <div className="h-1 bg-gradient-to-r from-[var(--neon-primary)] via-[var(--neon-accent)] to-[var(--neon-secondary)]" />
+          <div className="h-1 gradient-cyber" />
           <div className="p-10 text-center">
             <div className="mx-auto mb-6 relative w-20 h-20">
               <motion.div
@@ -581,14 +640,13 @@ function LobbyGate({ username, onLeave }: { username: string; onLeave: () => voi
                 <DoorClosed className="h-9 w-9 text-[var(--neon-primary)]" />
               </div>
             </div>
-
             <h2 className="text-2xl font-bold text-gradient mb-1">Hi, {username}!</h2>
             <p className="text-base font-medium mb-1">You're in the lobby</p>
             <p className="text-sm text-muted-foreground mb-6 max-w-xs mx-auto">
               The host has been notified. Please wait while they review your request to join.
             </p>
 
-            <div className="mb-8 flex items-center justify-center gap-3 rounded-2xl border border-white/8 bg-white/4 px-5 py-3">
+            <div className="mb-8 flex items-center justify-center gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.04] px-5 py-3">
               <div className="flex gap-1 items-end">
                 {[0, 1, 2].map((i) => (
                   <motion.span
@@ -631,17 +689,17 @@ function LobbyGate({ username, onLeave }: { username: string; onLeave: () => voi
                   className={cn(
                     "flex items-center gap-3 rounded-xl px-3 py-2.5 border transition",
                     step.done
-                      ? "border-[oklch(0.75_0.18_145)/0.3] bg-[oklch(0.75_0.18_145)/0.07] text-[oklch(0.85_0.15_145)]"
+                      ? "border-[var(--neon-success)]/30 bg-[var(--neon-success)]/[0.07] text-[var(--neon-success)]"
                       : step.active
-                        ? "border-[var(--neon-primary)]/30 bg-[var(--neon-primary)]/7 text-[var(--neon-primary)]"
-                        : "border-white/5 bg-white/3 text-muted-foreground/50",
+                        ? "border-[var(--neon-primary)]/30 bg-[var(--neon-primary)]/[0.07] text-[var(--neon-primary)]"
+                        : "border-white/5 bg-white/[0.03] text-muted-foreground/50",
                   )}
                 >
                   <span
                     className={cn(
                       "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg",
                       step.done
-                        ? "bg-[oklch(0.75_0.18_145)/0.2]"
+                        ? "bg-[var(--neon-success)]/20"
                         : step.active
                           ? "bg-[var(--neon-primary)]/15"
                           : "bg-white/5",
@@ -660,15 +718,14 @@ function LobbyGate({ username, onLeave }: { username: string; onLeave: () => voi
                   </span>
                   <span className="text-sm font-medium">{step.label}</span>
                   {step.done && (
-                    <CheckCircle2 className="ml-auto h-4 w-4 text-[oklch(0.75_0.18_145)]" />
+                    <CheckCircle2 className="ml-auto h-4 w-4 text-[var(--neon-success)]" />
                   )}
                 </div>
               ))}
             </div>
 
             <NeonButton variant="outline" onClick={onLeave} className="w-full">
-              <PhoneOff className="h-4 w-4 mr-2" />
-              Leave lobby
+              <PhoneOff className="h-4 w-4 mr-2" /> Leave lobby
             </NeonButton>
           </div>
         </div>
@@ -744,7 +801,7 @@ function LobbyManagerPanel({
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8, scale: 0.96 }}
                 transition={{ delay: i * 0.05 }}
-                className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/4"
+                className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04]"
               >
                 <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[var(--neon-primary)]/30 to-transparent" />
                 <div className="p-3.5">
@@ -759,7 +816,7 @@ function LobbyManagerPanel({
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold truncate">{p.username}</p>
                       <div className="flex items-center gap-1.5 mt-0.5">
-                        <span className="h-1.5 w-1.5 rounded-full bg-[oklch(0.8_0.18_80)] animate-pulse" />
+                        <span className="h-1.5 w-1.5 rounded-full bg-[var(--neon-warning)] animate-pulse" />
                         <p className="text-[11px] text-muted-foreground">Waiting in lobby</p>
                       </div>
                     </div>
@@ -777,7 +834,7 @@ function LobbyManagerPanel({
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.97 }}
                       onClick={() => onDeny(p)}
-                      className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-[oklch(0.72_0.22_35)]/10 border border-[oklch(0.72_0.22_35)]/25 py-2 text-xs font-semibold text-[oklch(0.82_0.2_35)] hover:bg-[oklch(0.72_0.22_35)]/20 transition"
+                      className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-[var(--neon-danger)]/10 border border-[var(--neon-danger)]/25 py-2 text-xs font-semibold text-[var(--neon-danger)] hover:bg-[var(--neon-danger)]/20 transition"
                     >
                       <UserX className="h-3.5 w-3.5" /> Decline
                     </motion.button>
@@ -804,7 +861,6 @@ function LobbyManagerPanel({
 }
 
 // ─── HostPermissionDialog ─────────────────────────────────────────────────────
-// Shown to the PARTICIPANT when the host requests their mic/cam be turned on.
 
 function HostPermissionDialog({
   request,
@@ -825,7 +881,6 @@ function HostPermissionDialog({
     cam: <VideoIcon className="h-8 w-8 text-white" />,
     both: <Mic2 className="h-8 w-8 text-white" />,
   };
-
   return createPortal(
     <motion.div
       initial={{ opacity: 0 }}
@@ -843,22 +898,19 @@ function HostPermissionDialog({
         <div className="absolute -inset-1.5 rounded-[2rem] bg-gradient-to-br from-[var(--neon-primary)]/30 to-[var(--neon-secondary)]/20 blur-2xl" />
         <div className="relative glass-strong rounded-3xl border border-white/10 p-8 text-center overflow-hidden">
           <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[var(--neon-primary)] to-transparent" />
-
           <motion.div
             animate={{ scale: [1, 1.08, 1] }}
             transition={{ duration: 2, repeat: Infinity }}
-            className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-[var(--neon-primary)] to-[var(--neon-accent)] shadow-[0_0_40px_-8px_oklch(0.65_0.22_280/0.7)]"
+            className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-primary shadow-glow-primary"
           >
             {iconMap[request.type]}
           </motion.div>
-
           <div className="mb-3 flex items-center justify-center gap-2">
             <Bell className="h-3.5 w-3.5 text-[var(--neon-primary)] animate-pulse" />
             <span className="text-[11px] uppercase tracking-wider text-[var(--neon-primary)] font-semibold">
               Host request
             </span>
           </div>
-
           <h2 className="text-xl font-bold mb-2">Turn on your {labelMap[request.type]}?</h2>
           <p className="text-sm text-muted-foreground mb-1">
             <span className="font-semibold text-foreground">{request.hostUsername}</span> (host) is
@@ -867,7 +919,6 @@ function HostPermissionDialog({
           <p className="text-xs text-muted-foreground mb-7 leading-relaxed">
             You can decline and keep your current settings.
           </p>
-
           <div className="flex gap-3">
             <motion.button
               whileHover={{ scale: 1.02 }}
@@ -881,7 +932,7 @@ function HostPermissionDialog({
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.97 }}
               onClick={onAccept}
-              className="flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[var(--neon-primary)] to-[var(--neon-accent)] py-2.5 text-sm font-semibold text-white shadow-[0_4px_20px_-4px_oklch(0.65_0.22_280/0.5)] hover:opacity-95 transition"
+              className="flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-primary py-2.5 text-sm font-semibold text-white shadow-glow-primary hover:opacity-95 transition"
             >
               <ThumbsUp className="h-4 w-4" /> Accept
             </motion.button>
@@ -894,7 +945,6 @@ function HostPermissionDialog({
 }
 
 // ─── PermissionResponseToastLayer ────────────────────────────────────────────
-// Shown to the HOST after a participant responds (accepted/declined) to their request.
 
 function PermissionResponseToastLayer({
   toasts,
@@ -907,14 +957,14 @@ function PermissionResponseToastLayer({
     <div className="fixed bottom-28 left-4 z-[9990] flex flex-col gap-2 pointer-events-none">
       <AnimatePresence>
         {toasts.map((t) => (
-          <PermissionResponseToast key={t.id} toast={t} onDismiss={() => onDismiss(t.id)} />
+          <PermissionResponseToastItem key={t.id} toast={t} onDismiss={() => onDismiss(t.id)} />
         ))}
       </AnimatePresence>
     </div>
   );
 }
 
-function PermissionResponseToast({
+function PermissionResponseToastItem({
   toast,
   onDismiss,
 }: {
@@ -925,12 +975,12 @@ function PermissionResponseToast({
     const t = setTimeout(onDismiss, 5000);
     return () => clearTimeout(t);
   }, [onDismiss]);
-
   const labelMap: Record<PermissionResponseToast["type"], string> = {
     mic: "mic",
     cam: "camera",
     both: "mic & camera",
   };
+  const colorVar = toast.accepted ? "var(--neon-success)" : "var(--neon-danger)";
 
   return (
     <motion.div
@@ -938,42 +988,31 @@ function PermissionResponseToast({
       animate={{ opacity: 1, x: 0, scale: 1 }}
       exit={{ opacity: 0, x: -60, scale: 0.9 }}
       transition={{ type: "spring", damping: 22, stiffness: 300 }}
-      className={cn(
-        "pointer-events-auto relative overflow-hidden rounded-2xl border backdrop-blur-xl shadow-xl w-72",
-        toast.accepted
-          ? "border-[oklch(0.75_0.18_145)/0.4] bg-[oklch(0.12_0.02_145/0.92)]"
-          : "border-[oklch(0.72_0.22_35)/0.4] bg-[oklch(0.12_0.02_35/0.92)]",
-      )}
+      className="pointer-events-auto relative overflow-hidden rounded-2xl border backdrop-blur-xl shadow-xl w-72"
+      style={{
+        borderColor: `color-mix(in oklch, ${colorVar} 40%, transparent)`,
+        background: "var(--card)",
+      }}
     >
+      {/* Top accent line */}
       <div
-        className={cn(
-          "absolute top-0 left-0 right-0 h-0.5",
-          toast.accepted
-            ? "bg-gradient-to-r from-transparent via-[oklch(0.75_0.18_145)] to-transparent"
-            : "bg-gradient-to-r from-transparent via-[oklch(0.72_0.22_35)] to-transparent",
-        )}
+        className="absolute top-0 left-0 right-0 h-0.5"
+        style={{ background: `linear-gradient(to right, transparent, ${colorVar}, transparent)` }}
       />
       <div className="p-3.5 flex items-center gap-3">
         <div
-          className={cn(
-            "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl",
-            toast.accepted ? "bg-[oklch(0.75_0.18_145)/0.2]" : "bg-[oklch(0.72_0.22_35)/0.2]",
-          )}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
+          style={{ background: `color-mix(in oklch, ${colorVar} 20%, transparent)` }}
         >
           {toast.accepted ? (
-            <ThumbsUp className="h-4 w-4 text-[oklch(0.85_0.15_145)]" />
+            <ThumbsUp className="h-4 w-4" style={{ color: colorVar }} />
           ) : (
-            <ThumbsDown className="h-4 w-4 text-[oklch(0.82_0.2_35)]" />
+            <ThumbsDown className="h-4 w-4" style={{ color: colorVar }} />
           )}
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold truncate">{toast.fromUsername}</p>
-          <p
-            className={cn(
-              "text-[11px]",
-              toast.accepted ? "text-[oklch(0.85_0.15_145)]" : "text-[oklch(0.82_0.2_35)]",
-            )}
-          >
+          <p className="text-[11px]" style={{ color: colorVar }}>
             {toast.accepted
               ? `turned on their ${labelMap[toast.type]}`
               : `declined to turn on ${labelMap[toast.type]}`}
@@ -1004,7 +1043,6 @@ function MeetingRoom() {
     return () => clearInterval(t);
   }, []);
 
-  // ── PREJOIN PATCH 3: preJoinConfig state ─────────────────────────────────
   const [preJoinConfig, setPreJoinConfig] = useState<PreJoinConfig | null>(null);
 
   if (!user) {
@@ -1023,15 +1061,14 @@ function MeetingRoom() {
   if (scheduledFor && scheduledFor > now)
     return <CountdownScreen scheduledFor={scheduledFor} now={now} meetingId={id} />;
 
-  // ── PREJOIN PATCH 3: Show PreJoinLobby until user clicks "Join now" ──────
   if (!preJoinConfig) {
     return (
       <PreJoinLobby
         meetingId={id}
         username={user.username}
-        onJoin={(stream, micEnabled, camEnabled) => {
-          setPreJoinConfig({ stream, micEnabled, camEnabled });
-        }}
+        onJoin={(stream, micEnabled, camEnabled) =>
+          setPreJoinConfig({ stream, micEnabled, camEnabled })
+        }
         onCancel={() => navigate({ to: "/dashboard" })}
       />
     );
@@ -1064,7 +1101,6 @@ function CountdownScreen({
 }) {
   const navigate = useNavigate();
   const diff = Math.max(0, scheduledFor - now);
-
   useEffect(() => {
     if (diff === 0) navigate({ to: "/meeting/$id", params: { id: meetingId } });
   }, [diff, meetingId, navigate]);
@@ -1110,7 +1146,6 @@ function CountdownScreen({
 
 // ─── Room ─────────────────────────────────────────────────────────────────────
 
-// ── PREJOIN PATCH 4: Room accepts initialStream / initialMic / initialCam ────
 function Room({
   id,
   username,
@@ -1132,7 +1167,6 @@ function Room({
 }) {
   const navigate = useNavigate();
 
-  // ── UI state ─────────────────────────────────────────────────────────────
   const [activePanel, setActivePanel] = useState<PanelType>(null);
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("grid");
   const [showSettings, setShowSettings] = useState(false);
@@ -1140,20 +1174,12 @@ function Room({
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   const [showLeaveModal, setShowLeaveModal] = useState(false);
   const [transferTarget, setTransferTarget] = useState<RemotePeer | null>(null);
-
-  // ── Post-meeting modal state ──────────────────────────────────────────────
   const [meetingEndedInfo, setMeetingEndedInfo] = useState<{ hostUsername: string } | null>(null);
   const [showYouLeftModal, setShowYouLeftModal] = useState(false);
-
-  // ── Lobby state ───────────────────────────────────────────────────────────
   const [toastQueue, setToastQueue] = useState<PendingParticipant[]>([]);
   const [denyTarget, setDenyTarget] = useState<PendingParticipant | null>(null);
   const dismissedToastsRef = useRef<Set<string>>(new Set());
-
-  // ── Permission state ──────────────────────────────────────────────────────
   const [permissionToasts, setPermissionToasts] = useState<PermissionResponseToast[]>([]);
-
-  // ── Whiteboard state ──────────────────────────────────────────────────────
   const [wbTool, setWbTool] = useState<WhiteboardTool>("pen");
   const [wbColor, setWbColor] = useState(WB_COLORS[0]);
   const [wbWidth, setWbWidth] = useState(3);
@@ -1164,41 +1190,29 @@ function Room({
   const [wbPreview, setWbPreview] = useState<WhiteboardElement | null>(null);
   const [wbUndoStack, setWbUndoStack] = useState<WhiteboardElement[][]>([]);
   const [wbRedoStack, setWbRedoStack] = useState<WhiteboardElement[][]>([]);
-
-  // ── Poll state ────────────────────────────────────────────────────────────
   const [pollQ, setPollQ] = useState("");
   const [pollOpts, setPollOpts] = useState(["", ""]);
   const [showPollNew, setShowPollNew] = useState(false);
-
-  // ── Agenda state ──────────────────────────────────────────────────────────
   const [agendaIn, setAgendaIn] = useState([{ title: "", durationSec: 300 }]);
   const [showAgNew, setShowAgNew] = useState(false);
   const [agendaTick, setAgendaTick] = useState(Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setAgendaTick(Date.now()), 500);
-    return () => clearInterval(t);
-  }, []);
-
-  // ── Recording modal state ─────────────────────────────────────────────────
   const [showRecordingOptions, setShowRecordingOptions] = useState(false);
   const [showRecordingLink, setShowRecordingLink] = useState(false);
   const [showRecordingLimit, setShowRecordingLimit] = useState(false);
   const [showRecordingWarning, setShowRecordingWarning] = useState(false);
 
-  const handleApproachingLimit = useCallback(() => {
-    setShowRecordingWarning(true);
+  useEffect(() => {
+    const t = setInterval(() => setAgendaTick(Date.now()), 500);
+    return () => clearInterval(t);
   }, []);
 
+  const handleApproachingLimit = useCallback(() => setShowRecordingWarning(true), []);
   const handleLimitExceeded = useCallback(() => {
     setShowRecordingWarning(false);
     setShowRecordingLimit(true);
   }, []);
+  const handleDismissWarning = useCallback(() => setShowRecordingWarning(false), []);
 
-  const handleDismissWarning = useCallback(() => {
-    setShowRecordingWarning(false);
-  }, []);
-
-  // ── Refs ──────────────────────────────────────────────────────────────────
   const layoutBtnRef = useRef<HTMLButtonElement>(null);
   const statusBtnRef = useRef<HTMLButtonElement>(null);
   const reactionBtnContainerRef = useRef<HTMLDivElement>(null);
@@ -1210,7 +1224,6 @@ function Room({
     toggleSoundscape,
   } = useAmbientSound();
 
-  // ── PREJOIN PATCH 5: useWebRTC receives initialStream, initialMic, initialCam
   const webrtc = useWebRTC(
     id,
     username,
@@ -1309,7 +1322,6 @@ function Room({
     respondToPermissionRequest,
   } = webrtc;
 
-  // ── RECORDING EMIT - crash-safe callback ──────────────────────────────────
   const recordingEmit = useCallback((event: string, payload: unknown) => {
     (window as any).__luminaSocket?.emit(event, payload);
   }, []);
@@ -1329,7 +1341,6 @@ function Room({
     onLimitExceeded: handleLimitExceeded,
   });
 
-  // Auto-open link modal when upload starts or completes
   useEffect(() => {
     if (isUploading || lastRecording) setShowRecordingLink(true);
   }, [isUploading, lastRecording]);
@@ -1355,14 +1366,12 @@ function Room({
     setCinemaMode(isCinema);
   }, [isCinema, setCinemaMode]);
 
-  // Host-removed event
   useEffect(() => {
     const handler = () => leaveRoom();
     window.addEventListener("Lumina Meet:host-removed", handler);
     return () => window.removeEventListener("Lumina Meet:host-removed", handler);
   }, [leaveRoom]);
 
-  // Listen for permission responses from participants
   useEffect(() => {
     const handler = (e: Event) => {
       const { fromUsername, type, accepted } = (e as CustomEvent).detail;
@@ -1380,7 +1389,6 @@ function Room({
     return () => window.removeEventListener("LuminaMeet:permission-result", handler);
   }, []);
 
-  // ── Lobby toast management ────────────────────────────────────────────────
   useEffect(() => {
     if (!canManage) return;
     pendingParticipants.forEach((p) => {
@@ -1396,7 +1404,6 @@ function Room({
     dismissedToastsRef.current.add(socketId);
     setToastQueue((prev) => prev.filter((t) => t.socketId !== socketId));
   }, []);
-
   const handleAdmitFromToast = useCallback(
     (socketId: string) => {
       admitParticipant(socketId);
@@ -1404,7 +1411,6 @@ function Room({
     },
     [admitParticipant, dismissToast],
   );
-
   const handleDenyRequest = useCallback((p: PendingParticipant) => setDenyTarget(p), []);
   const handleDenyConfirm = useCallback(() => {
     if (!denyTarget) return;
@@ -1412,35 +1418,32 @@ function Room({
     dismissToast(denyTarget.socketId);
     setDenyTarget(null);
   }, [denyTarget, rejectParticipant, dismissToast]);
-
   useEffect(() => {
     if (activePanel === "lobby") clearLobbyKnockCount();
   }, [activePanel, clearLobbyKnockCount]);
 
-  // ── Whiteboard helpers ────────────────────────────────────────────────────
-  const wbPushUndo = useCallback((snapshot: WhiteboardElement[]) => {
-    setWbUndoStack((prev) => [...prev.slice(-49), [...snapshot]]);
+  // Whiteboard helpers
+  const wbPushUndo = useCallback((snap: WhiteboardElement[]) => {
+    setWbUndoStack((p) => [...p.slice(-49), [...snap]]);
     setWbRedoStack([]);
   }, []);
-
   const wbUndo = useCallback(() => {
     setWbUndoStack((prev) => {
       if (!prev.length) return prev;
       const stack = [...prev];
-      const snapshot = stack.pop()!;
+      const snap = stack.pop()!;
       setWbRedoStack((r) => [...r, [...whiteboardElements]]);
-      syncWhiteboardElements(snapshot);
+      syncWhiteboardElements(snap);
       return stack;
     });
   }, [whiteboardElements, syncWhiteboardElements]);
-
   const wbRedo = useCallback(() => {
     setWbRedoStack((prev) => {
       if (!prev.length) return prev;
       const stack = [...prev];
-      const snapshot = stack.pop()!;
+      const snap = stack.pop()!;
       setWbUndoStack((u) => [...u, [...whiteboardElements]]);
-      syncWhiteboardElements(snapshot);
+      syncWhiteboardElements(snap);
       return stack;
     });
   }, [whiteboardElements, syncWhiteboardElements]);
@@ -1602,7 +1605,6 @@ function Room({
     [eraseWhiteboardElement, wbPushUndo, whiteboardElements],
   );
 
-  // ── Poll handlers ─────────────────────────────────────────────────────────
   const handleCreatePoll = useCallback(() => {
     const opts = pollOpts.filter((o) => o.trim());
     if (!pollQ.trim() || opts.length < 2) return;
@@ -1613,7 +1615,6 @@ function Room({
     if (activePanel !== "polls") setActivePanel("polls");
   }, [pollQ, pollOpts, createPoll, activePanel]);
 
-  // ── Agenda handlers ───────────────────────────────────────────────────────
   const handleSetAgenda = useCallback(() => {
     const items = agendaIn.filter((i) => i.title.trim());
     if (!items.length) return;
@@ -1622,7 +1623,6 @@ function Room({
     if (activePanel !== "agenda") setActivePanel("agenda");
   }, [agendaIn, setAgenda, activePanel]);
 
-  // ── Leave / end ───────────────────────────────────────────────────────────
   const handleLeaveConfirm = useCallback(async () => {
     setShowLeaveModal(false);
     if (isHost) {
@@ -1640,7 +1640,6 @@ function Room({
     },
     [transferTarget, transferHost],
   );
-
   const togglePanel = (panel: PanelType) => {
     setActivePanel((prev) => {
       if (prev === panel) return null;
@@ -1649,7 +1648,6 @@ function Room({
       return panel;
     });
   };
-
   const handleSendReaction = useCallback(
     (emoji: string) => {
       sendReaction(emoji);
@@ -1657,11 +1655,10 @@ function Room({
     },
     [sendReaction],
   );
-
   const handleCloseReactionPicker = useCallback(() => setReactionPickerOpen(false), []);
 
-  // ── FIX 2: isWaiting guard BEFORE isConnecting ────────────────────────────
-  if (isWaiting) {
+  // FIX 2: isWaiting guard BEFORE isConnecting
+  if (isWaiting)
     return (
       <LobbyGate
         username={username}
@@ -1671,9 +1668,8 @@ function Room({
         }}
       />
     );
-  }
 
-  if (isConnecting) {
+  if (isConnecting)
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4">
         <motion.div
@@ -1685,14 +1681,12 @@ function Room({
         <p className="text-sm text-muted-foreground">Connecting to room…</p>
       </div>
     );
-  }
 
   if (error) {
     const isExpired =
       error.toLowerCase().includes("expired") ||
       error.toLowerCase().includes("passed") ||
       error.toLowerCase().includes("never started");
-
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-6 px-4">
         <motion.div
@@ -1700,18 +1694,18 @@ function Room({
           animate={{ opacity: 1, scale: 1 }}
           className="relative mx-auto w-full max-w-sm"
         >
-          <div className="absolute -inset-2 rounded-[2rem] bg-gradient-to-br from-[oklch(0.72_0.22_35/0.3)] to-[oklch(0.65_0.22_280/0.15)] blur-2xl" />
+          <div className="absolute -inset-2 rounded-[2rem] bg-gradient-to-br from-[var(--neon-danger)]/30 to-[var(--neon-primary)]/15 blur-2xl" />
           <div className="relative glass-strong rounded-3xl border border-white/10 p-10 text-center overflow-hidden">
-            <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[oklch(0.72_0.22_35/0.8)] to-transparent" />
+            <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[var(--neon-danger)]/80 to-transparent" />
             <motion.div
               animate={isExpired ? {} : { scale: [1, 1.08, 1] }}
               transition={{ duration: 2.5, repeat: Infinity }}
-              className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-[oklch(0.72_0.22_35/0.12)] border border-[oklch(0.72_0.22_35/0.35)]"
+              className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--neon-danger)]/12 border border-[var(--neon-danger)]/35"
             >
               {isExpired ? (
-                <Hourglass className="h-8 w-8 text-[oklch(0.82_0.2_35)]" />
+                <Hourglass className="h-8 w-8 text-[var(--neon-danger)]" />
               ) : (
-                <AlertTriangle className="h-8 w-8 text-[oklch(0.82_0.2_35)]" />
+                <AlertTriangle className="h-8 w-8 text-[var(--neon-danger)]" />
               )}
             </motion.div>
             <h2 className="text-xl font-bold mb-2">
@@ -1723,9 +1717,9 @@ function Room({
                 : error}
             </p>
             {isExpired && (
-              <div className="mb-6 rounded-2xl border border-[oklch(0.72_0.22_35/0.2)] bg-[oklch(0.72_0.22_35/0.06)] px-4 py-3 text-xs text-[oklch(0.82_0.2_35)/0.8] text-left">
+              <div className="mb-6 rounded-2xl border border-[var(--neon-danger)]/20 bg-[var(--neon-danger)]/[0.06] px-4 py-3 text-xs text-[var(--neon-danger)]/80 text-left">
                 To start a new meeting, use the{" "}
-                <span className="font-semibold text-[oklch(0.82_0.2_35)]">Instant meeting</span>{" "}
+                <span className="font-semibold text-[var(--neon-danger)]">Instant meeting</span>{" "}
                 button on your dashboard, or schedule a new one.
               </div>
             )}
@@ -1740,7 +1734,6 @@ function Room({
 
   const effectiveLobbyBadge =
     canManage && lobbyKnockCount > 0 && activePanel !== "lobby" ? lobbyKnockCount : 0;
-
   const headerPanelButtons = [
     ["chat", <MessageSquare className="h-4 w-4" />, unreadCount],
     ["whiteboard", <PenLine className="h-4 w-4" />, 0],
@@ -1751,18 +1744,22 @@ function Room({
   ] as const;
 
   return (
-    <div className="flex min-h-screen flex-col overflow-hidden" style={{ background: "#0B0F19" }}>
+    // Room background — var(--body-base) adapts to light/dark; was hardcoded "#0B0F19"
+    <div
+      className="flex min-h-screen flex-col overflow-hidden"
+      style={{ background: "var(--body-base)" }}
+    >
       {/* Ambient orbs */}
       <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
         <motion.div
           className="absolute -top-32 -left-32 h-96 w-96 rounded-full opacity-20"
-          style={{ background: "radial-gradient(circle, oklch(0.65 0.22 280), transparent 70%)" }}
+          style={{ background: "radial-gradient(circle, var(--neon-primary), transparent 70%)" }}
           animate={{ scale: [1, 1.15, 1], x: [0, 30, 0], y: [0, -20, 0] }}
           transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
         />
         <motion.div
           className="absolute -bottom-32 -right-32 h-96 w-96 rounded-full opacity-15"
-          style={{ background: "radial-gradient(circle, oklch(0.82 0.16 210), transparent 70%)" }}
+          style={{ background: "radial-gradient(circle, var(--neon-secondary), transparent 70%)" }}
           animate={{ scale: [1, 1.2, 1], x: [0, -20, 0], y: [0, 20, 0] }}
           transition={{ duration: 15, repeat: Infinity, ease: "easeInOut", delay: 3 }}
         />
@@ -1801,7 +1798,6 @@ function Room({
         )}
       </AnimatePresence>
 
-      {/* Deny confirm modal */}
       <AnimatePresence>
         {denyTarget && (
           <DenyConfirmModal
@@ -1820,32 +1816,37 @@ function Room({
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.9 }}
             onClick={() => setLayoutMode("grid")}
-            className="fixed top-4 right-4 z-50 flex items-center gap-2 rounded-2xl border border-white/20 bg-black/70 backdrop-blur-xl px-4 py-2.5 text-sm font-medium text-white hover:bg-black/90 hover:border-white/40 transition shadow-xl"
+            className="fixed top-4 right-4 z-50 flex items-center gap-2 rounded-2xl border border-[var(--glass-border-strong)] bg-[var(--glass-bg-strong)] backdrop-blur-xl px-4 py-2.5 text-sm font-medium text-foreground hover:bg-[var(--glass-hover)] transition shadow-xl"
           >
             <Minimize2 className="h-4 w-4" /> Exit cinema
           </motion.button>
         )}
       </AnimatePresence>
 
-      {/* ── Header ───────────────────────────────────────────────────────────── */}
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <AnimatePresence>
         {!isCinema && (
           <motion.header
             initial={{ y: -60, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: -60, opacity: 0 }}
-            className="relative z-10 flex items-center justify-between border-b border-white/5 bg-black/40 backdrop-blur-xl px-4 py-3 sm:px-6 gap-2"
+            className="relative z-10 flex items-center justify-between border-b border-[var(--glass-border)] bg-[var(--glass-bg-strong)] backdrop-blur-xl px-4 py-3 sm:px-6 gap-2"
           >
-            {/* Left - brand */}
+            {/* Brand */}
             <div className="flex items-center gap-3 min-w-0 shrink-0">
-              <div className="h-7 w-7 shrink-0 rounded-lg bg-gradient-neon animate-pulse-glow" />
+              <motion.div
+                whileHover={{ scale: 1.08, rotate: -4 }}
+                transition={{ type: "spring", stiffness: 300, damping: 18 }}
+              >
+                <LuminaLogo size={32} />
+              </motion.div>
               <div className="min-w-0 hidden sm:block">
                 <p className="truncate text-sm font-semibold">Lumina Meet</p>
                 <p className="truncate text-[11px] text-muted-foreground font-mono">{id}</p>
               </div>
             </div>
 
-            {/* Center - contextual chips */}
+            {/* Center chips */}
             <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide">
               <AnimatePresence>
                 {raisedHands.length > 0 && (
@@ -1853,7 +1854,7 @@ function Room({
                     initial={{ opacity: 0, scale: 0.9 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.9 }}
-                    className="hidden md:flex items-center gap-2 rounded-full border border-[oklch(0.8_0.18_80)/0.4] bg-[oklch(0.8_0.18_80)/0.08] px-3 py-1.5 text-xs text-[oklch(0.9_0.18_80)] shrink-0"
+                    className="hidden md:flex items-center gap-2 rounded-full border border-[var(--neon-warning)]/40 bg-[var(--neon-warning)]/[0.08] px-3 py-1.5 text-xs text-[var(--neon-warning)] shrink-0"
                   >
                     <motion.span
                       animate={{ rotate: [0, 15, -10, 15, 0] }}
@@ -1873,7 +1874,7 @@ function Room({
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.8 }}
                     onClick={() => setShowSettings(true)}
-                    className="hidden sm:flex items-center gap-1.5 rounded-full border border-[oklch(0.8_0.18_80)/0.4] bg-[oklch(0.8_0.18_80)/0.1] px-2.5 py-1 text-[11px] text-[oklch(0.9_0.18_80)] shrink-0"
+                    className="hidden sm:flex items-center gap-1.5 rounded-full border border-[var(--neon-warning)]/40 bg-[var(--neon-warning)]/10 px-2.5 py-1 text-[11px] text-[var(--neon-warning)] shrink-0"
                   >
                     <Music2 className="h-3 w-3" />
                     <span>{SOUNDSCAPES.find((s) => s.id === activeSoundscape)?.label}</span>
@@ -1884,9 +1885,9 @@ function Room({
                     initial={{ opacity: 0, scale: 0.8 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.8 }}
-                    className="hidden sm:flex items-center gap-1.5 rounded-full border border-[oklch(0.72_0.22_35)/0.6] bg-[oklch(0.72_0.22_35)/0.15] px-2.5 py-1 text-[11px] text-[oklch(0.82_0.2_35)] animate-pulse-danger shrink-0"
+                    className="hidden sm:flex items-center gap-1.5 rounded-full border border-[var(--neon-danger)]/60 bg-[var(--neon-danger)]/15 px-2.5 py-1 text-[11px] text-[var(--neon-danger)] animate-pulse-danger shrink-0"
                   >
-                    <span className="h-1.5 w-1.5 rounded-full bg-[oklch(0.72_0.22_35)] animate-pulse" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--neon-danger)] animate-pulse" />
                     <span className="font-semibold">
                       REC {recMM}:{recSS}
                     </span>
@@ -1900,7 +1901,8 @@ function Room({
                     onClick={() => togglePanel("polls")}
                     className="hidden sm:flex items-center gap-1.5 rounded-full border border-[var(--neon-secondary)]/40 bg-[var(--neon-secondary)]/10 px-2.5 py-1 text-[11px] text-[var(--neon-secondary)] animate-pulse-glow shrink-0"
                   >
-                    <BarChart2 className="h-3 w-3" /> <span>Live poll</span>
+                    <BarChart2 className="h-3 w-3" />
+                    <span>Live poll</span>
                   </motion.button>
                 )}
                 {canManage && pendingParticipants.length > 0 && (
@@ -1909,7 +1911,7 @@ function Room({
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.8 }}
                     onClick={() => togglePanel("lobby")}
-                    className="hidden sm:flex items-center gap-1.5 rounded-full border border-[oklch(0.8_0.18_80)/0.5] bg-[oklch(0.8_0.18_80)/0.12] px-2.5 py-1 text-[11px] text-[oklch(0.9_0.18_80)] animate-pulse-glow shrink-0"
+                    className="hidden sm:flex items-center gap-1.5 rounded-full border border-[var(--neon-warning)]/50 bg-[var(--neon-warning)]/12 px-2.5 py-1 text-[11px] text-[var(--neon-warning)] animate-pulse-glow shrink-0"
                   >
                     <motion.span
                       animate={{ scale: [1, 1.3, 1] }}
@@ -1923,17 +1925,17 @@ function Room({
               </AnimatePresence>
             </div>
 
-            {/* Right - status, badges, panel toggles, layout */}
+            {/* Right — status, badges, panel toggles */}
             <div className="flex items-center gap-1.5 shrink-0">
-              {/* Status picker */}
+              <ThemeToggle />
               <button
                 ref={statusBtnRef}
                 onClick={() => setShowStatusPicker((v) => !v)}
                 className={cn(
                   "hidden sm:flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition",
                   localStatus === "presenting"
-                    ? "border-[oklch(0.65_0.22_280)/0.6] bg-[oklch(0.65_0.22_280)/0.15] text-[oklch(0.8_0.18_280)] animate-pulse-glow"
-                    : "border-white/10 bg-white/5 hover:bg-white/10",
+                    ? "border-[var(--neon-primary)]/60 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)] animate-pulse-glow"
+                    : "border-[var(--glass-border-strong)] bg-[var(--glass-bg)] hover:bg-[var(--glass-hover)]",
                 )}
               >
                 <span
@@ -1963,9 +1965,9 @@ function Room({
                     Set status
                   </p>
                   {localStatus === "presenting" && (
-                    <div className="mx-1.5 mb-1.5 flex items-start gap-2 rounded-xl border border-[oklch(0.65_0.22_280)/0.35] bg-[oklch(0.65_0.22_280)/0.1] px-3 py-2">
-                      <Presentation className="h-3 w-3 mt-0.5 shrink-0 text-[oklch(0.75_0.18_280)]" />
-                      <p className="text-[11px] text-[oklch(0.8_0.15_280)] leading-snug">
+                    <div className="mx-1.5 mb-1.5 flex items-start gap-2 rounded-xl border border-[var(--neon-primary)]/35 bg-[var(--neon-primary)]/10 px-3 py-2">
+                      <Presentation className="h-3 w-3 mt-0.5 shrink-0 text-[var(--neon-primary)]" />
+                      <p className="text-[11px] text-[var(--neon-primary)]/80 leading-snug">
                         Applies when sharing stops.
                       </p>
                     </div>
@@ -2002,12 +2004,11 @@ function Room({
               <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-[var(--neon-secondary)]/30 bg-[var(--neon-secondary)]/10 px-2.5 py-1 text-[11px] text-[var(--neon-secondary)]">
                 <ShieldCheck className="h-3 w-3" /> Encrypted
               </span>
-              <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1 rounded-full border border-[var(--glass-border-strong)] bg-[var(--glass-bg)] px-2.5 py-1 text-[11px] text-muted-foreground">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
                 {peers.length + 1} live
               </span>
 
-              {/* Panel toggle buttons */}
               {headerPanelButtons.map(([panel, icon, badge]) => (
                 <button
                   key={panel as string}
@@ -2018,8 +2019,8 @@ function Room({
                     activePanel === panel
                       ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
                       : panel === "lobby" && pendingParticipants.length > 0
-                        ? "border-[oklch(0.8_0.18_80)/0.5] bg-[oklch(0.8_0.18_80)/0.1] text-[oklch(0.9_0.18_80)] animate-pulse-glow"
-                        : "border-white/10 bg-white/5 hover:bg-white/10",
+                        ? "border-[var(--neon-warning)]/50 bg-[var(--neon-warning)]/10 text-[var(--neon-warning)] animate-pulse-glow"
+                        : "border-[var(--glass-border-strong)] bg-[var(--glass-bg)] hover:bg-[var(--glass-hover)]",
                   )}
                 >
                   {icon}
@@ -2031,7 +2032,6 @@ function Room({
                 </button>
               ))}
 
-              {/* Layout / settings dropdown */}
               <div className="relative">
                 <button
                   ref={layoutBtnRef}
@@ -2040,7 +2040,7 @@ function Room({
                     "flex items-center gap-1.5 rounded-lg border px-2 py-2 sm:px-3 transition",
                     showSettings
                       ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
-                      : "border-white/10 bg-white/5 hover:bg-white/10",
+                      : "border-[var(--glass-border-strong)] bg-[var(--glass-bg)] hover:bg-[var(--glass-hover)]",
                   )}
                 >
                   <Layers className="h-4 w-4" />
@@ -2084,7 +2084,7 @@ function Room({
         )}
       </AnimatePresence>
 
-      {/* ── Main area ─────────────────────────────────────────────────────── */}
+      {/* ── Main area ──────────────────────────────────────────────────────── */}
       <div className="relative z-10 flex flex-1 overflow-hidden">
         <main className={cn("flex-1 overflow-hidden min-w-0", isCinema ? "p-0" : "p-3 sm:p-4")}>
           <AnimatePresence>
@@ -2175,7 +2175,7 @@ function Room({
           )}
         </main>
 
-        {/* ── Side panels ─────────────────────────────────────────────────── */}
+        {/* Side panels */}
         <AnimatePresence>
           {activePanel === "participants" && (
             <ParticipantsPanel
@@ -2270,7 +2270,7 @@ function Room({
             exit={{ opacity: 0, y: 8 }}
             className="absolute bottom-[88px] left-1/2 -translate-x-1/2 z-20 pointer-events-none"
           >
-            <div className="flex items-center gap-2 rounded-full bg-black/70 backdrop-blur border border-[var(--neon-secondary)]/30 px-4 py-1.5 text-xs text-[var(--neon-secondary)]">
+            <div className="flex items-center gap-2 rounded-full bg-[var(--card)]/90 backdrop-blur border border-[var(--neon-secondary)]/40 px-4 py-1.5 text-xs text-[var(--neon-secondary)]">
               <AudioBars color="var(--neon-secondary)" />
               <span className="font-medium">
                 {isSpeaking
@@ -2289,7 +2289,7 @@ function Room({
             initial={{ opacity: 0, x: 60 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: 60 }}
-            className="absolute top-20 right-4 z-30 flex items-center gap-2 rounded-2xl border border-[oklch(0.8_0.18_80)/0.4] bg-black/70 backdrop-blur px-4 py-2 text-sm text-[oklch(0.9_0.18_80)]"
+            className="absolute top-20 right-4 z-30 flex items-center gap-2 rounded-2xl border border-[var(--neon-warning)]/40 bg-[var(--card)]/90 backdrop-blur px-4 py-2 text-sm text-[var(--neon-warning)]"
           >
             <motion.span
               animate={{ rotate: [0, 20, -10, 20, 0] }}
@@ -2308,11 +2308,11 @@ function Room({
         )}
       </AnimatePresence>
 
-      {/* ── Footer controls ───────────────────────────────────────────────── */}
+      {/* ── Footer controls ─────────────────────────────────────────────────── */}
       <motion.footer
         animate={isCinema ? { y: 72, opacity: 0 } : { y: 0, opacity: 1 }}
         transition={{ duration: 0.3 }}
-        className="relative z-10 border-t border-white/5 bg-black/50 backdrop-blur-xl px-2 py-3 sm:px-4"
+        className="relative z-10 border-t border-[var(--glass-border)] bg-[var(--glass-bg-strong)] backdrop-blur-xl px-2 py-3 sm:px-4"
         onMouseEnter={
           isCinema
             ? (e) => {
@@ -2330,7 +2330,7 @@ function Room({
         }
       >
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-1 sm:gap-2 overflow-x-auto scrollbar-hide">
-          {/* Left controls */}
+          {/* Left */}
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             <ControlBtn
               active={!localHandRaised}
@@ -2339,7 +2339,7 @@ function Room({
               off={<Hand className="h-4 w-4 sm:h-5 sm:w-5" />}
               label={localHandRaised ? "Lower" : "Raise hand"}
               highlightOn={localHandRaised}
-              highlightColor="oklch(0.8 0.18 80)"
+              highlightColor="var(--neon-warning)"
             />
             <div ref={reactionBtnContainerRef} className="relative">
               <ControlBtn
@@ -2367,7 +2367,7 @@ function Room({
             />
           </div>
 
-          {/* Center controls */}
+          {/* Center */}
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             <ControlBtn
               active={mic}
@@ -2391,16 +2391,17 @@ function Room({
               label={sharing ? "Stop share" : "Share screen"}
               highlightOn={sharing}
             />
+            {/* Leave button — gradient-to-r from danger to danger (same token, different opacities produce depth) */}
             <button
               onClick={() => setShowLeaveModal(true)}
-              className="flex items-center gap-1.5 sm:gap-2 rounded-2xl bg-gradient-to-r from-[oklch(0.65_0.25_25)] to-[oklch(0.72_0.22_35)] px-3 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-semibold text-white shadow-[0_8px_30px_-8px_oklch(0.72_0.22_35/0.6)] hover:opacity-95 transition shrink-0"
+              className="flex items-center gap-1.5 sm:gap-2 rounded-2xl bg-gradient-to-r from-[var(--neon-danger)] to-[var(--neon-danger)] px-3 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-semibold text-white shadow-[0_8px_30px_-8px_color-mix(in_oklch,var(--neon-danger)_60%,transparent)] hover:opacity-95 transition shrink-0"
             >
               <PhoneOff className="h-4 w-4" />
               <span className="hidden sm:inline">Leave</span>
             </button>
           </div>
 
-          {/* Right controls */}
+          {/* Right */}
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             <ControlBtn
               active={layoutMode !== "cinema"}
@@ -2418,7 +2419,7 @@ function Room({
                 off={<Mic2 className="h-4 w-4 sm:h-5 sm:w-5" />}
                 label={noiseSuppressionEnabled ? "Noise ON" : "Noise OFF"}
                 highlightOn={noiseSuppressionEnabled}
-                highlightColor="oklch(0.75 0.18 145)"
+                highlightColor="var(--neon-success)"
               />
             )}
             <ControlBtn
@@ -2435,10 +2436,8 @@ function Room({
                   : "Soundscapes"
               }
               highlightOn={!!activeSoundscape}
-              highlightColor="oklch(0.8 0.18 80)"
+              highlightColor="var(--neon-warning)"
             />
-
-            {/* Recording button - host and co-host only */}
             {canManage &&
               (isRecording ? (
                 <motion.button
@@ -2446,13 +2445,16 @@ function Room({
                   whileTap={{ scale: 0.95 }}
                   onClick={stopRecording}
                   title="Stop recording"
-                  className="relative flex h-10 w-10 sm:h-12 sm:w-auto sm:px-4 items-center justify-center gap-2 rounded-2xl border border-[oklch(0.72_0.22_35)/0.6] bg-[oklch(0.72_0.22_35)/0.2] text-[oklch(0.82_0.2_35)] animate-pulse-danger shrink-0 transition"
+                  className="relative flex h-10 w-10 sm:h-12 sm:w-auto sm:px-4 items-center justify-center gap-2 rounded-2xl border border-[var(--neon-danger)]/60 bg-[var(--neon-danger)]/20 text-[var(--neon-danger)] animate-pulse-danger shrink-0 transition"
                 >
-                  <StopCircle className="h-4 w-4 sm:h-5 sm:w-5 fill-[oklch(0.82_0.2_35)]" />
+                  <StopCircle
+                    className="h-4 w-4 sm:h-5 sm:w-5"
+                    style={{ fill: "var(--neon-danger)" }}
+                  />
                   <span className="hidden sm:inline text-xs font-semibold tabular-nums">
                     {recMM}:{recSS}
                   </span>
-                  <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-[oklch(0.72_0.22_35)] sm:hidden animate-pulse" />
+                  <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-[var(--neon-danger)] sm:hidden animate-pulse" />
                 </motion.button>
               ) : (
                 <ControlBtn
@@ -2467,7 +2469,7 @@ function Room({
         </div>
       </motion.footer>
 
-      {/* ── Modals ────────────────────────────────────────────────────────── */}
+      {/* ── Modals ──────────────────────────────────────────────────────────── */}
       <AnimatePresence>
         {showLeaveModal && (
           <LeaveModal
@@ -2545,8 +2547,6 @@ function Room({
             recordingMode={recordingMode ?? "screen_voice"}
           />
         )}
-
-        {/* Host permission request dialog (participant view) */}
         {hostPermissionRequest && (
           <HostPermissionDialog
             request={hostPermissionRequest}
@@ -2556,15 +2556,12 @@ function Room({
         )}
       </AnimatePresence>
 
-      {/* Recording 1-minute warning banner */}
       {canManage && (
         <RecordingWarningBanner
           show={showRecordingWarning && canManage}
           onDismiss={handleDismissWarning}
         />
       )}
-
-      {/* Permission response toasts (host view) */}
       <PermissionResponseToastLayer
         toasts={permissionToasts}
         onDismiss={(id) => setPermissionToasts((prev) => prev.filter((t) => t.id !== id))}
@@ -2606,16 +2603,18 @@ function SettingsMenu({
   autoSpotlight: boolean;
   setAutoSpotlight: (v: boolean) => void;
 }) {
+  // Virtual background swatches — use CSS vars for themed ones, neutrals stay as-is
   const BACKGROUNDS = [
     { id: "none", label: "None", cls: "bg-white/5" },
-    { id: "blur", label: "Blur", cls: "bg-[oklch(0.82_0.16_210/0.2)]" },
-    { id: "gradient-purple", label: "Purple", cls: "bg-[oklch(0.35_0.18_280)]" },
-    { id: "gradient-teal", label: "Teal", cls: "bg-[oklch(0.35_0.15_200)]" },
-    { id: "gradient-dark", label: "Dark", cls: "bg-[oklch(0.12_0.02_265)]" },
+    { id: "blur", label: "Blur", cls: "bg-[var(--neon-secondary)]/20" },
+    { id: "gradient-purple", label: "Purple", cls: "bg-[var(--neon-primary)]/60" },
+    { id: "gradient-teal", label: "Teal", cls: "bg-[var(--neon-secondary)]/60" },
+    { id: "gradient-dark", label: "Dark", cls: "bg-[var(--card)]" },
   ] as const;
 
   return (
     <div className="glass-strong rounded-2xl border border-white/10 p-3 shadow-2xl space-y-4 w-72">
+      {/* Layout */}
       <div>
         <p className="px-1 pb-2 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
           Layout
@@ -2629,7 +2628,7 @@ function SettingsMenu({
                 "rounded-xl py-2 text-xs font-medium capitalize transition border",
                 layoutMode === m
                   ? "bg-[var(--neon-primary)]/20 border-[var(--neon-primary)]/50 text-[var(--neon-primary)]"
-                  : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
+                  : "border-[var(--glass-border-strong)] bg-[var(--glass-bg)] text-muted-foreground hover:bg-[var(--glass-hover)]",
               )}
             >
               {m}
@@ -2638,6 +2637,7 @@ function SettingsMenu({
         </div>
       </div>
 
+      {/* Virtual background */}
       <div>
         <p className="px-1 pb-2 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold flex items-center gap-1.5">
           Virtual background{" "}
@@ -2654,7 +2654,7 @@ function SettingsMenu({
                 "flex flex-col items-center gap-1 rounded-xl p-2 border transition text-xs",
                 backgroundMode === b.id
                   ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
-                  : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
+                  : "border-[var(--glass-border-strong)] bg-[var(--glass-bg)] text-muted-foreground hover:bg-[var(--glass-hover)]",
               )}
             >
               <div className={cn("h-8 w-12 rounded-lg border border-white/10", b.cls)} />
@@ -2664,6 +2664,7 @@ function SettingsMenu({
         </div>
       </div>
 
+      {/* Ambient sound */}
       <div>
         <p className="px-1 pb-2 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
           Ambient sound
@@ -2677,16 +2678,18 @@ function SettingsMenu({
                 "flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs border transition flex-1 justify-center",
                 activeSoundscape === s.id
                   ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]"
-                  : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
+                  : "border-[var(--glass-border-strong)] bg-[var(--glass-bg)] text-muted-foreground hover:bg-[var(--glass-hover)]",
               )}
             >
-              {s.icon} <span>{s.label}</span>
+              {s.icon}
+              <span>{s.label}</span>
             </button>
           ))}
         </div>
         {activeSoundscape && (
           <div className="flex items-center gap-2">
             <VolumeX className="h-3 w-3 text-muted-foreground shrink-0" />
+            {/* accentColor was hardcoded oklch(); now uses CSS var */}
             <input
               type="range"
               min={0}
@@ -2695,13 +2698,14 @@ function SettingsMenu({
               value={soundVolume}
               onChange={(e) => setSoundVolume(Number(e.target.value))}
               className="flex-1 h-1 appearance-none bg-white/10 rounded-full outline-none cursor-pointer"
-              style={{ accentColor: "oklch(0.65 0.22 280)" }}
+              style={{ accentColor: "var(--neon-primary)" }}
             />
             <Volume2 className="h-3 w-3 text-muted-foreground shrink-0" />
           </div>
         )}
       </div>
 
+      {/* Audio */}
       <div className="space-y-2">
         <p className="px-1 text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
           Audio
@@ -2712,8 +2716,8 @@ function SettingsMenu({
             className={cn(
               "flex items-center justify-between w-full rounded-xl px-3 py-2 text-xs border transition",
               noiseSuppressionEnabled
-                ? "border-[oklch(0.75_0.18_145)/0.5] bg-[oklch(0.75_0.18_145)/0.15] text-[oklch(0.85_0.15_145)]"
-                : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
+                ? "border-[var(--neon-success)]/50 bg-[var(--neon-success)]/15 text-[var(--neon-success)]"
+                : "border-[var(--glass-border-strong)] bg-[var(--glass-bg)] text-muted-foreground hover:bg-[var(--glass-hover)]",
             )}
           >
             <span className="flex items-center gap-2">
@@ -2723,7 +2727,7 @@ function SettingsMenu({
               className={cn(
                 "text-[10px] rounded px-1.5 py-0.5 font-semibold",
                 noiseSuppressionEnabled
-                  ? "bg-[oklch(0.75_0.18_145)/0.25] text-[oklch(0.85_0.15_145)]"
+                  ? "bg-[var(--neon-success)]/25 text-[var(--neon-success)]"
                   : "bg-white/5 text-muted-foreground",
               )}
             >
@@ -2736,8 +2740,8 @@ function SettingsMenu({
           className={cn(
             "flex items-center justify-between w-full rounded-xl px-3 py-2 text-xs border transition",
             autoSpotlight
-              ? "border-[var(--neon-secondary)/0.5] bg-[var(--neon-secondary)/0.15] text-[var(--neon-secondary)]"
-              : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
+              ? "border-[var(--neon-secondary)]/50 bg-[var(--neon-secondary)]/15 text-[var(--neon-secondary)]"
+              : "border-[var(--glass-border-strong)] bg-[var(--glass-bg)] text-muted-foreground hover:bg-[var(--glass-hover)]",
           )}
         >
           <span className="flex items-center gap-2">
@@ -2747,7 +2751,7 @@ function SettingsMenu({
             className={cn(
               "text-[10px] rounded px-1.5 py-0.5 font-semibold",
               autoSpotlight
-                ? "bg-[var(--neon-secondary)/0.25] text-[var(--neon-secondary)]"
+                ? "bg-[var(--neon-secondary)]/25 text-[var(--neon-secondary)]"
                 : "bg-white/5 text-muted-foreground",
             )}
           >
@@ -2818,7 +2822,6 @@ function WhiteboardOverlay({
     { id: "rect", icon: <Square className="h-4 w-4" />, label: "Rect (R)" },
     { id: "ellipse", icon: <Circle className="h-4 w-4" />, label: "Ellipse (O)" },
   ];
-
   const pts2path = (pts: number[][]): string =>
     pts.length < 2
       ? ""
@@ -2834,7 +2837,6 @@ function WhiteboardOverlay({
           },
         }
       : {};
-
     if (el.type === "stroke" && el.points)
       return (
         <path
@@ -2972,7 +2974,8 @@ function WhiteboardOverlay({
       exit={{ opacity: 0 }}
       className="absolute inset-0 z-30 flex select-none"
     >
-      <div className="absolute inset-0 bg-[oklch(0.10_0.02_265/0.97)] backdrop-blur-sm" />
+      {/* Whiteboard background — var(--background) adapts to theme */}
+      <div className="absolute inset-0 bg-[var(--background)]/97 backdrop-blur-sm" />
       <svg
         className="absolute inset-0 w-full h-full touch-none"
         viewBox={`0 0 ${WB_SCALE} ${WB_SCALE}`}
@@ -3031,7 +3034,7 @@ function WhiteboardOverlay({
         ))}
       </svg>
 
-      {/* Left toolbar */}
+      {/* Toolbar */}
       <div className="absolute left-3 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-0.5 glass-strong rounded-2xl border border-white/10 p-1.5 max-h-[90vh] overflow-y-auto scrollbar-hide">
         {tools.map((t) => (
           <button
@@ -3119,7 +3122,7 @@ function WhiteboardOverlay({
             <button
               onClick={onClear}
               title="Clear all"
-              className="flex h-9 w-9 items-center justify-center rounded-xl text-[oklch(0.78_0.2_35)] hover:bg-[oklch(0.72_0.22_35)]/20 transition"
+              className="flex h-9 w-9 items-center justify-center rounded-xl text-[var(--neon-danger)] hover:bg-[var(--neon-danger)]/20 transition"
             >
               <Trash2 className="h-4 w-4" />
             </button>
@@ -3128,7 +3131,7 @@ function WhiteboardOverlay({
       </div>
 
       <div className="absolute top-4 right-4 z-40 flex items-center gap-2">
-        <span className="text-[11px] text-muted-foreground bg-black/50 backdrop-blur rounded-full px-3 py-1">
+        <span className="text-[11px] text-muted-foreground bg-[var(--card)]/80 backdrop-blur border border-[var(--glass-border)] rounded-full px-3 py-1">
           {elements.length} element{elements.length !== 1 ? "s" : ""} · shared with all
         </span>
         <button
@@ -3146,7 +3149,7 @@ function WhiteboardOverlay({
             : activeTool === "sticky" || activeTool === "text"
               ? "Click anywhere to place"
               : activeTool === "select"
-                ? "Select mode - drag to move (coming soon)"
+                ? "Select mode — drag to move (coming soon)"
                 : "Click and drag to draw shape"}
       </div>
     </motion.div>
@@ -3239,7 +3242,7 @@ function PollsPanel({
                   {i >= 2 && (
                     <button
                       onClick={() => onOptionsChange(pollOptions.filter((_, j) => j !== i))}
-                      className="text-muted-foreground hover:text-[oklch(0.78_0.2_35)]"
+                      className="text-muted-foreground hover:text-[var(--neon-danger)]"
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -3294,7 +3297,7 @@ function PollsPanel({
                       "w-full text-left rounded-xl border p-3 transition",
                       isMyVote
                         ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/10"
-                        : "border-white/10 bg-white/5 hover:bg-white/8 disabled:cursor-default",
+                        : "border-white/10 bg-white/5 hover:bg-white/[0.08] disabled:cursor-default",
                     )}
                   >
                     <div className="flex items-center justify-between mb-1.5">
@@ -3452,7 +3455,7 @@ function AgendaPanel({
                   {agendaInput.length > 1 && (
                     <button
                       onClick={() => onAgendaInputChange(agendaInput.filter((_, j) => j !== i))}
-                      className="text-muted-foreground hover:text-[oklch(0.78_0.2_35)]"
+                      className="text-muted-foreground hover:text-[var(--neon-danger)]"
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -3498,7 +3501,7 @@ function AgendaPanel({
                     className={cn(
                       "font-mono text-2xl font-bold tabular-nums",
                       agendaTimeLeft !== null && agendaTimeLeft < 30000
-                        ? "text-[oklch(0.78_0.2_35)]"
+                        ? "text-[var(--neon-danger)]"
                         : "text-gradient",
                     )}
                   >
@@ -3510,7 +3513,7 @@ function AgendaPanel({
                       className={cn(
                         "flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium transition border",
                         isTimerRunning
-                          ? "border-[oklch(0.72_0.22_35)/0.4] bg-[oklch(0.72_0.22_35)/0.15] text-[oklch(0.82_0.2_35)]"
+                          ? "border-[var(--neon-danger)]/40 bg-[var(--neon-danger)]/15 text-[var(--neon-danger)]"
                           : "border-[var(--neon-primary)]/40 bg-[var(--neon-primary)]/15 text-[var(--neon-primary)]",
                       )}
                     >
@@ -3530,7 +3533,7 @@ function AgendaPanel({
                   <motion.div
                     className={cn(
                       "h-full rounded-full",
-                      progressPct > 85 ? "bg-[oklch(0.72_0.22_35)]" : "bg-[var(--neon-primary)]",
+                      progressPct > 85 ? "bg-[var(--neon-danger)]" : "bg-[var(--neon-primary)]",
                     )}
                     style={{ width: `${progressPct}%` }}
                     transition={{ duration: 0.3 }}
@@ -3565,15 +3568,15 @@ function AgendaPanel({
                     i === agenda.activeIdx
                       ? "border-[var(--neon-primary)]/30 bg-[var(--neon-primary)]/10"
                       : item.done
-                        ? "border-white/5 bg-white/3 opacity-50"
-                        : "border-white/5 bg-white/3 hover:bg-white/5",
+                        ? "border-white/5 bg-white/[0.03] opacity-50"
+                        : "border-white/5 bg-white/[0.03] hover:bg-white/5",
                   )}
                 >
                   <div
                     className={cn(
                       "flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold",
                       item.done
-                        ? "bg-[oklch(0.75_0.18_145)/0.3] text-[oklch(0.75_0.18_145)]"
+                        ? "bg-[var(--neon-success)]/30 text-[var(--neon-success)]"
                         : i === agenda.activeIdx
                           ? "bg-[var(--neon-primary)]/30 text-[var(--neon-primary)]"
                           : "bg-white/10 text-muted-foreground",
@@ -3649,10 +3652,8 @@ function SpatialCanvas({
   const canvasRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const dragOffset = useRef({ x: 0, y: 0 });
-
   const getPos = (id: string): TilePosition =>
     tilePositions.get(id) ?? { x: Math.random() * 60 + 5, y: Math.random() * 60 + 5 };
-
   const allParticipants = [
     { id: "local", name: username },
     ...peers.map((p) => ({ id: p.socketId, name: p.username })),
@@ -3662,7 +3663,7 @@ function SpatialCanvas({
     <div
       ref={canvasRef}
       className="relative w-full h-full overflow-hidden rounded-2xl border border-white/5"
-      style={{ background: "oklch(0.12 0.02 265 / 0.5)" }}
+      style={{ background: "var(--card)" }}
       onPointerMove={(e) => {
         if (!dragging) return;
         const rect = canvasRef.current!.getBoundingClientRect();
@@ -3704,9 +3705,7 @@ function SpatialCanvas({
             }}
             onPointerDown={(e) => {
               e.currentTarget.setPointerCapture(e.pointerId);
-              const canvas = canvasRef.current;
-              if (!canvas) return;
-              const rect = canvas.getBoundingClientRect();
+              const rect = canvasRef.current!.getBoundingClientRect();
               dragOffset.current = {
                 x: e.clientX - rect.left - (pos.x / 100) * rect.width,
                 y: e.clientY - rect.top - (pos.y / 100) * rect.height,
@@ -3718,7 +3717,7 @@ function SpatialCanvas({
               className={cn(
                 "w-full h-full rounded-2xl overflow-hidden border transition-all",
                 speaking
-                  ? "border-[var(--neon-secondary)] shadow-[0_0_20px_oklch(0.82_0.16_210/0.5)]"
+                  ? "border-[var(--neon-secondary)] shadow-[var(--shadow-glow-cyan)]"
                   : "border-white/10",
               )}
             >
@@ -3833,7 +3832,7 @@ function VideoGrid({
           {spotlightId && (
             <button
               onClick={() => setSpotlightId(null)}
-              className="absolute top-3 right-3 z-20 flex items-center gap-1.5 rounded-xl bg-black/60 backdrop-blur border border-white/10 px-2.5 py-1.5 text-[11px] text-muted-foreground hover:text-foreground transition"
+              className="absolute top-3 right-3 z-20 flex items-center gap-1.5 rounded-xl bg-[var(--card)]/90 backdrop-blur border border-[var(--glass-border-strong)] px-2.5 py-1.5 text-[11px] text-muted-foreground hover:text-foreground transition"
             >
               <PinOff className="h-3 w-3" /> Unpin
             </button>
@@ -3898,7 +3897,7 @@ function VideoGrid({
         />
         <button
           onClick={() => setSpotlightId(spotlightId === "local" ? null : "local")}
-          className="absolute top-2 left-1/2 -translate-x-1/2 z-20 opacity-0 group-hover:opacity-100 transition flex items-center gap-1 rounded-full bg-black/60 backdrop-blur border border-white/10 px-2 py-0.5 text-[10px] text-muted-foreground"
+          className="absolute top-2 left-1/2 -translate-x-1/2 z-20 opacity-0 group-hover:opacity-100 transition flex items-center gap-1 rounded-full bg-[var(--card)]/90 backdrop-blur border border-[var(--glass-border-strong)] px-2 py-0.5 text-[10px] text-muted-foreground"
         >
           {spotlightId === "local" ? (
             <>
@@ -3922,7 +3921,7 @@ function VideoGrid({
           />
           <button
             onClick={() => setSpotlightId(spotlightId === p.socketId ? null : p.socketId)}
-            className="absolute top-2 left-1/2 -translate-x-1/2 z-20 opacity-0 group-hover:opacity-100 transition flex items-center gap-1 rounded-full bg-black/60 backdrop-blur border border-white/10 px-2 py-0.5 text-[10px] text-muted-foreground"
+            className="absolute top-2 left-1/2 -translate-x-1/2 z-20 opacity-0 group-hover:opacity-100 transition flex items-center gap-1 rounded-full bg-[var(--card)]/90 backdrop-blur border border-[var(--glass-border-strong)] px-2 py-0.5 text-[10px] text-muted-foreground"
           >
             {spotlightId === p.socketId ? (
               <>
@@ -3978,7 +3977,7 @@ function LocalVideoTile({
       className={cn(
         "relative overflow-hidden rounded-2xl border bg-black/60 h-full transition-all duration-300",
         isSpeaking
-          ? "border-[var(--neon-secondary)] shadow-[0_0_24px_4px_oklch(0.82_0.16_210/0.4)]"
+          ? "border-[var(--neon-secondary)] shadow-[var(--shadow-glow-cyan)]"
           : "border-white/10",
       )}
     >
@@ -3994,7 +3993,7 @@ function LocalVideoTile({
       />
       {!hasLiveVideo && <TileGenerativeAvatar username={username} speaking={isSpeaking} />}
       {status && (
-        <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-black/60 backdrop-blur px-2 py-0.5">
+        <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-[var(--card)]/80 backdrop-blur border border-[var(--glass-border)] px-2 py-0.5">
           <span
             className="h-1.5 w-1.5 rounded-full"
             style={{
@@ -4011,7 +4010,7 @@ function LocalVideoTile({
             initial={{ scale: 0, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0, opacity: 0 }}
-            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 text-4xl drop-shadow-[0_0_20px_oklch(0.9_0.18_80)]"
+            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 text-4xl drop-shadow-[0_0_20px_var(--neon-warning)]"
           >
             <motion.span
               animate={{ rotate: [0, 20, -10, 20, 0] }}
@@ -4022,10 +4021,10 @@ function LocalVideoTile({
           </motion.div>
         )}
       </AnimatePresence>
-      <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-lg bg-black/60 backdrop-blur px-2 py-1 text-xs z-10">
+      <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-lg bg-[var(--card)]/80 backdrop-blur border border-[var(--glass-border)] px-2 py-1 text-xs z-10">
         {isSpeaking && <AudioBars color="var(--neon-secondary)" small />}
         <span className="truncate max-w-[140px]">{username} (you)</span>
-        {!mic && <MicOff className="h-3 w-3 text-[oklch(0.78_0.2_35)]" />}
+        {!mic && <MicOff className="h-3 w-3 text-[var(--neon-danger)]" />}
       </div>
       {isHost && (
         <span className="absolute top-2 left-2 z-10 rounded-md bg-[var(--neon-primary)]/20 px-1.5 py-0.5 text-[10px] text-[var(--neon-primary)] border border-[var(--neon-primary)]/30">
@@ -4042,9 +4041,9 @@ function LocalVideoTile({
           className="absolute inset-0 rounded-2xl pointer-events-none"
           animate={{
             boxShadow: [
-              "inset 0 0 0 2px oklch(0.82 0.16 210 / 0.4)",
-              "inset 0 0 0 4px oklch(0.82 0.16 210 / 0.7)",
-              "inset 0 0 0 2px oklch(0.82 0.16 210 / 0.4)",
+              "inset 0 0 0 2px color-mix(in oklch, var(--neon-secondary) 40%, transparent)",
+              "inset 0 0 0 4px color-mix(in oklch, var(--neon-secondary) 70%, transparent)",
+              "inset 0 0 0 2px color-mix(in oklch, var(--neon-secondary) 40%, transparent)",
             ],
           }}
           transition={{ duration: 1, repeat: Infinity }}
@@ -4084,11 +4083,10 @@ function RemoteVideoTile({
       className={cn(
         "group relative overflow-hidden rounded-2xl border bg-black/40 h-full transition-all duration-300",
         isSpeaking
-          ? "border-[var(--neon-secondary)] shadow-[0_0_24px_4px_oklch(0.82_0.16_210/0.4)]"
+          ? "border-[var(--neon-secondary)] shadow-[var(--shadow-glow-cyan)]"
           : "border-white/10",
       )}
     >
-      {/* FIX C: muted - audio rendered by dedicated <audio> element in useWebRTC */}
       {peer.stream && (
         <video
           ref={videoRef}
@@ -4102,12 +4100,12 @@ function RemoteVideoTile({
         />
       )}
       {!hasVideo && <TileGenerativeAvatar username={peer.username} speaking={isSpeaking} />}
-      <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-black/60 backdrop-blur px-2 py-0.5">
+      <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-[var(--card)]/80 backdrop-blur border border-[var(--glass-border)] px-2 py-0.5">
         <span
           className="h-1.5 w-1.5 rounded-full"
           style={{
-            background: STATUS_CONFIG[peer.status]?.color ?? "oklch(0.75 0.18 145)",
-            boxShadow: `0 0 6px ${STATUS_CONFIG[peer.status]?.color ?? "oklch(0.75 0.18 145)"}`,
+            background: STATUS_CONFIG[peer.status]?.color ?? "var(--neon-success)",
+            boxShadow: `0 0 6px ${STATUS_CONFIG[peer.status]?.color ?? "var(--neon-success)"}`,
           }}
         />
         <span className="text-[10px] text-muted-foreground">
@@ -4120,7 +4118,7 @@ function RemoteVideoTile({
             initial={{ scale: 0, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0, opacity: 0 }}
-            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 text-4xl drop-shadow-[0_0_20px_oklch(0.9_0.18_80)] cursor-pointer"
+            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 text-4xl drop-shadow-[0_0_20px_var(--neon-warning)] cursor-pointer"
             onClick={onLowerHand}
             title="Lower hand"
           >
@@ -4133,10 +4131,10 @@ function RemoteVideoTile({
           </motion.div>
         )}
       </AnimatePresence>
-      <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-lg bg-black/60 backdrop-blur px-2 py-1 text-xs z-10">
+      <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-lg bg-[var(--card)]/80 backdrop-blur border border-[var(--glass-border)] px-2 py-1 text-xs z-10">
         {isSpeaking && <AudioBars color="var(--neon-secondary)" small />}
         <span className="truncate max-w-[140px]">{peer.username}</span>
-        {!peer.mic && <MicOff className="h-3 w-3 text-[oklch(0.78_0.2_35)]" />}
+        {!peer.mic && <MicOff className="h-3 w-3 text-[var(--neon-danger)]" />}
       </div>
       {peer.isHost && (
         <span className="absolute top-2 left-2 z-10 rounded-md bg-[var(--neon-primary)]/20 px-1.5 py-0.5 text-[10px] text-[var(--neon-primary)] border border-[var(--neon-primary)]/30">
@@ -4150,7 +4148,7 @@ function RemoteVideoTile({
       )}
       <button
         onClick={onRemove}
-        className="absolute bottom-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition rounded-md bg-black/60 p-1 text-muted-foreground hover:text-[oklch(0.78_0.2_35)]"
+        className="absolute bottom-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition rounded-md bg-[var(--card)]/80 border border-[var(--glass-border)] p-1 text-muted-foreground hover:text-[var(--neon-danger)]"
         title="Remove"
       >
         <X className="h-3 w-3" />
@@ -4160,9 +4158,9 @@ function RemoteVideoTile({
           className="absolute inset-0 rounded-2xl pointer-events-none"
           animate={{
             boxShadow: [
-              "inset 0 0 0 2px oklch(0.82 0.16 210 / 0.4)",
-              "inset 0 0 0 4px oklch(0.82 0.16 210 / 0.7)",
-              "inset 0 0 0 2px oklch(0.82 0.16 210 / 0.4)",
+              "inset 0 0 0 2px color-mix(in oklch, var(--neon-secondary) 40%, transparent)",
+              "inset 0 0 0 4px color-mix(in oklch, var(--neon-secondary) 70%, transparent)",
+              "inset 0 0 0 2px color-mix(in oklch, var(--neon-secondary) 40%, transparent)",
             ],
           }}
           transition={{ duration: 1, repeat: Infinity }}
@@ -4207,7 +4205,7 @@ function ScreenShareView({
           muted
           className="absolute inset-0 h-full w-full object-contain"
         />
-        <div className="absolute top-3 left-3 flex items-center gap-2 rounded-full bg-black/60 backdrop-blur px-3 py-1 text-xs z-10">
+        <div className="absolute top-3 left-3 flex items-center gap-2 rounded-full bg-[var(--card)]/90 backdrop-blur border border-[var(--glass-border)] px-3 py-1 text-xs z-10">
           <span className="h-1.5 w-1.5 rounded-full bg-[var(--neon-secondary)] animate-pulse" />{" "}
           {username} is sharing
         </div>
@@ -4302,15 +4300,15 @@ function ParticipantsPanel({
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: "auto" }}
               exit={{ opacity: 0, height: 0 }}
-              className="rounded-2xl border border-[oklch(0.8_0.18_80)/0.3] bg-[oklch(0.8_0.18_80)/0.06] p-3"
+              className="rounded-2xl border border-[var(--neon-warning)]/30 bg-[var(--neon-warning)]/[0.06] p-3"
             >
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-[oklch(0.9_0.18_80)] mb-2 flex items-center gap-1.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--neon-warning)] mb-2 flex items-center gap-1.5">
                 ✋ Raised hands
               </p>
               <div className="space-y-1.5">
                 {raisedHands.map((h) => (
                   <div key={h.socketId} className="flex items-center justify-between">
-                    <span className="text-sm text-[oklch(0.9_0.18_80)]">{h.username}</span>
+                    <span className="text-sm text-[var(--neon-warning)]">{h.username}</span>
                     <button
                       onClick={() => onLowerHand(h.socketId)}
                       className="text-[10px] rounded-md px-2 py-0.5 border border-white/10 text-muted-foreground hover:text-foreground transition"
@@ -4334,7 +4332,6 @@ function ParticipantsPanel({
           </div>
         )}
         <ul className="space-y-2">
-          {/* Local user row */}
           <li className="flex items-center gap-3 rounded-xl border border-[var(--neon-primary)]/20 bg-[var(--neon-primary)]/5 p-2.5">
             <div className="relative">
               <Avatar name={username} hue={280} size={32} />
@@ -4353,17 +4350,15 @@ function ParticipantsPanel({
               {mic ? (
                 <Mic className="h-3.5 w-3.5" />
               ) : (
-                <MicOff className="h-3.5 w-3.5 text-[oklch(0.72_0.22_35)]" />
+                <MicOff className="h-3.5 w-3.5 text-[var(--neon-danger)]" />
               )}
               {cam ? (
                 <VideoIcon className="h-3.5 w-3.5" />
               ) : (
-                <VideoOff className="h-3.5 w-3.5 text-[oklch(0.72_0.22_35)]" />
+                <VideoOff className="h-3.5 w-3.5 text-[var(--neon-danger)]" />
               )}
             </div>
           </li>
-
-          {/* Remote peer rows */}
           {peers.map((p, i) => (
             <motion.li
               key={p.socketId}
@@ -4408,15 +4403,13 @@ function ParticipantsPanel({
                 {p.mic ? (
                   <Mic className="h-3.5 w-3.5" />
                 ) : (
-                  <MicOff className="h-3.5 w-3.5 text-[oklch(0.72_0.22_35)]" />
+                  <MicOff className="h-3.5 w-3.5 text-[var(--neon-danger)]" />
                 )}
                 {p.cam ? (
                   <VideoIcon className="h-3.5 w-3.5" />
                 ) : (
-                  <VideoOff className="h-3.5 w-3.5 text-[oklch(0.72_0.22_35)]" />
+                  <VideoOff className="h-3.5 w-3.5 text-[var(--neon-danger)]" />
                 )}
-
-                {/* PATCH 4: Ask to unmute / turn camera on */}
                 {canManage && !p.isHost && (
                   <>
                     {!p.mic && (
@@ -4439,8 +4432,6 @@ function ParticipantsPanel({
                     )}
                   </>
                 )}
-
-                {/* Host-only: transfer + remove */}
                 {isHost && !p.isHost && (
                   <>
                     <button
@@ -4452,18 +4443,17 @@ function ParticipantsPanel({
                     </button>
                     <button
                       onClick={() => onRemove(p.socketId)}
-                      className="ml-1 text-muted-foreground hover:text-[oklch(0.78_0.2_35)] transition"
+                      className="ml-1 text-muted-foreground hover:text-[var(--neon-danger)] transition"
                       title="Remove"
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
                   </>
                 )}
-                {/* Sub-host can remove non-hosts */}
                 {isSubHost && !p.isHost && !p.isSubHost && (
                   <button
                     onClick={() => onRemove(p.socketId)}
-                    className="ml-1 text-muted-foreground hover:text-[oklch(0.78_0.2_35)] transition"
+                    className="ml-1 text-muted-foreground hover:text-[var(--neon-danger)] transition"
                     title="Remove"
                   >
                     <X className="h-3.5 w-3.5" />
@@ -4507,14 +4497,12 @@ function ChatPanel({
   const [emojiPickerForMsg, setEmojiPickerForMsg] = useState<string | null>(null);
   const [selectedRecipients, setSelectedRecipients] = useState<Set<string> | null>(null);
   const [recipientPickerOpen, setRecipientPickerOpen] = useState(false);
-
   const bottomRef = useRef<HTMLDivElement>(null);
   const recipientBtnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
-
   useEffect(() => {
     if (!emojiPickerForMsg) return;
     const h = (e: MouseEvent) => {
@@ -4524,7 +4512,6 @@ function ChatPanel({
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, [emojiPickerForMsg]);
-
   useEffect(() => {
     if (!recipientPickerOpen) return;
     const h = (e: MouseEvent) => {
@@ -4538,14 +4525,15 @@ function ChatPanel({
 
   const handleSend = () => {
     if (!input.trim()) return;
-    const recipientsArray =
-      selectedRecipients && selectedRecipients.size > 0 ? Array.from(selectedRecipients) : null;
-    onSend(input.trim(), replyTo, recipientsArray);
+    onSend(
+      input.trim(),
+      replyTo,
+      selectedRecipients && selectedRecipients.size > 0 ? Array.from(selectedRecipients) : null,
+    );
     setInput("");
     setReplyTo(null);
     onTyping(false);
   };
-
   const toggleRecipient = (socketId: string) => {
     setSelectedRecipients((prev) => {
       const next = new Set(prev ?? []);
@@ -4660,7 +4648,7 @@ function ChatPanel({
                   )}
                 >
                   {msg.replyTo && (
-                    <div className="text-[11px] text-muted-foreground rounded-lg px-2.5 py-1.5 border-l-2 border-[var(--neon-primary)]/50 bg-white/3 mb-0.5 max-w-full">
+                    <div className="text-[11px] text-muted-foreground rounded-lg px-2.5 py-1.5 border-l-2 border-[var(--neon-primary)]/50 bg-white/[0.03] mb-0.5 max-w-full">
                       <span className="font-semibold text-[var(--neon-primary)] block">
                         ↩ {msg.replyTo.username}
                       </span>
@@ -4675,11 +4663,11 @@ function ChatPanel({
                       "relative px-3.5 py-2 text-sm leading-relaxed rounded-2xl",
                       msg.isSelf
                         ? (msg as any).isPrivate
-                          ? "bg-gradient-to-br from-[oklch(0.55_0.22_305)] to-[oklch(0.65_0.18_330)] text-white shadow-[0_4px_24px_-4px_oklch(0.65_0.22_305/0.4)]"
-                          : "bg-gradient-to-br from-[oklch(0.55_0.22_280)] to-[oklch(0.65_0.18_305)] text-white shadow-[0_4px_24px_-4px_oklch(0.65_0.22_280/0.4)]"
+                          ? "bg-gradient-to-br from-[var(--neon-accent)] to-[var(--neon-accent)] text-white shadow-[var(--shadow-glow-purple)]"
+                          : "bg-gradient-primary text-white shadow-glow-primary"
                         : (msg as any).isPrivate
                           ? "bg-[var(--neon-accent)]/10 border border-[var(--neon-accent)]/20 text-foreground"
-                          : "bg-white/8 border border-white/8 text-foreground",
+                          : "bg-white/[0.08] border border-white/[0.08] text-foreground",
                       msg.isFirst ? (msg.isSelf ? "rounded-tr-sm" : "rounded-tl-sm") : "",
                       msg.isLast
                         ? msg.isSelf
@@ -4708,7 +4696,7 @@ function ChatPanel({
                               "flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] transition hover:scale-105",
                               sids.has(localSocketId ?? "")
                                 ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/15"
-                                : "border-white/10 bg-white/5 hover:bg-white/10",
+                                : "border-[var(--glass-border-strong)] bg-[var(--glass-bg)] hover:bg-[var(--glass-hover)]",
                             )}
                           >
                             <span>{emoji}</span>
@@ -4822,14 +4810,13 @@ function ChatPanel({
         <div ref={bottomRef} />
       </div>
 
-      {/* Reply bar */}
       <AnimatePresence>
         {replyTo && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
-            className="border-t border-white/5 px-4 py-2 bg-white/3 flex items-start gap-2 shrink-0"
+            className="border-t border-white/5 px-4 py-2 bg-white/[0.03] flex items-start gap-2 shrink-0"
           >
             <CornerDownLeft className="h-3.5 w-3.5 mt-0.5 text-[var(--neon-primary)] shrink-0" />
             <div className="flex-1 min-w-0">
@@ -4851,7 +4838,6 @@ function ChatPanel({
         )}
       </AnimatePresence>
 
-      {/* Input area */}
       <div className="border-t border-white/5 p-3 shrink-0">
         <div className="flex items-center gap-2 mb-2">
           <span className="text-[11px] text-muted-foreground shrink-0">To:</span>
@@ -4863,7 +4849,7 @@ function ChatPanel({
                 "w-full flex items-center justify-between gap-2 rounded-xl border px-2.5 py-1.5 text-[11px] transition",
                 isPrivateMode
                   ? "border-[var(--neon-accent)]/50 bg-[var(--neon-accent)]/10 text-[var(--neon-accent)]"
-                  : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/8",
+                  : "border-[var(--glass-border-strong)] bg-[var(--glass-bg)] text-muted-foreground hover:bg-[var(--glass-hover)]",
               )}
             >
               <span className="flex items-center gap-1.5">
@@ -4951,7 +4937,6 @@ function ChatPanel({
             </AnimatePresence>
           </div>
         </div>
-
         <div
           className={cn(
             "flex items-center gap-2 rounded-2xl border pl-4 pr-2 py-2 transition focus-within:border-opacity-60",
@@ -4984,9 +4969,10 @@ function ChatPanel({
               "flex h-8 w-8 items-center justify-center rounded-xl transition",
               input.trim()
                 ? isPrivateMode
-                  ? "bg-gradient-to-br from-[oklch(0.55_0.22_305)] to-[oklch(0.65_0.18_330)] text-white"
-                  : "bg-gradient-to-br from-[oklch(0.55_0.22_280)] to-[oklch(0.65_0.18_305)] text-white"
+                  ? "bg-gradient-to-br from-[var(--neon-accent)] to-[var(--neon-accent)]"
+                  : "bg-gradient-primary"
                 : "bg-white/5 text-muted-foreground/40 cursor-not-allowed",
+              input.trim() && "text-white",
             )}
           >
             <Send className="h-3.5 w-3.5" />
@@ -5000,7 +4986,7 @@ function ChatPanel({
   );
 }
 
-// ─── Post-meeting modals ──────────────────────────────────────────────────────
+// ─── Post-meeting Modals ──────────────────────────────────────────────────────
 
 function MeetingEndedByHostModal({
   hostUsername,
@@ -5013,7 +4999,6 @@ function MeetingEndedByHostModal({
     const t = setTimeout(onDismiss, 8000);
     return () => clearTimeout(t);
   }, [onDismiss]);
-
   return createPortal(
     <motion.div
       initial={{ opacity: 0 }}
@@ -5021,14 +5006,6 @@ function MeetingEndedByHostModal({
       exit={{ opacity: 0 }}
       className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90 backdrop-blur-xl"
     >
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <motion.div
-          className="absolute -top-40 left-1/2 -translate-x-1/2 h-[500px] w-[500px] rounded-full opacity-25"
-          style={{ background: "radial-gradient(circle, oklch(0.82 0.16 210), transparent 70%)" }}
-          animate={{ scale: [1, 1.2, 1] }}
-          transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
-        />
-      </div>
       <motion.div
         initial={{ opacity: 0, scale: 0.8, y: 32 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -5038,7 +5015,7 @@ function MeetingEndedByHostModal({
       >
         <div className="absolute -inset-2 rounded-[2.5rem] bg-gradient-to-br from-[var(--neon-secondary)]/40 via-[var(--neon-primary)]/20 to-[var(--neon-accent)]/30 blur-2xl" />
         <div className="relative overflow-hidden glass-strong rounded-[2rem] border border-[var(--neon-secondary)]/25">
-          <div className="h-1 bg-gradient-to-r from-[var(--neon-primary)] via-[var(--neon-secondary)] to-[var(--neon-accent)]" />
+          <div className="h-1 gradient-cyber" />
           <div className="px-10 pt-10 pb-8 text-center">
             <motion.div
               initial={{ scale: 0, rotate: -20 }}
@@ -5046,7 +5023,7 @@ function MeetingEndedByHostModal({
               transition={{ type: "spring", damping: 14, stiffness: 260, delay: 0.1 }}
               className="mx-auto mb-7 relative flex h-24 w-24 items-center justify-center"
             >
-              <div className="relative flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-[oklch(0.55_0.22_210)] to-[oklch(0.45_0.18_260)] shadow-[0_0_50px_-8px_oklch(0.82_0.16_210/0.7)]">
+              <div className="relative flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-[var(--neon-secondary)] to-[var(--neon-primary)] shadow-[var(--shadow-glow-cyan)]">
                 <PhoneOff className="h-11 w-11 text-white" />
               </div>
             </motion.div>
@@ -5058,7 +5035,7 @@ function MeetingEndedByHostModal({
                 {hostUsername}
               </span>
             </div>
-            <div className="mb-8 rounded-2xl border border-white/8 bg-white/4 px-5 py-4 text-sm text-muted-foreground leading-relaxed">
+            <div className="mb-8 rounded-2xl border border-white/[0.08] bg-white/[0.04] px-5 py-4 text-sm text-muted-foreground leading-relaxed">
               The host has closed this session for all participants. You can always start or join a
               new meeting from your dashboard.
             </div>
@@ -5066,7 +5043,7 @@ function MeetingEndedByHostModal({
               whileHover={{ scale: 1.03 }}
               whileTap={{ scale: 0.97 }}
               onClick={onDismiss}
-              className="w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[oklch(0.55_0.22_280)] to-[oklch(0.65_0.18_305)] py-3.5 text-base font-semibold text-white hover:opacity-95 transition"
+              className="w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-primary py-3.5 text-base font-semibold text-white hover:opacity-95 transition"
             >
               Go to dashboard
             </motion.button>
@@ -5077,12 +5054,12 @@ function MeetingEndedByHostModal({
     document.body,
   );
 }
+
 function MeetingEndedByYouModal({ onDismiss }: { onDismiss: () => void }) {
   useEffect(() => {
     const t = setTimeout(onDismiss, 8000);
     return () => clearTimeout(t);
   }, [onDismiss]);
-
   return createPortal(
     <motion.div
       initial={{ opacity: 0 }}
@@ -5097,9 +5074,9 @@ function MeetingEndedByYouModal({ onDismiss }: { onDismiss: () => void }) {
         transition={{ type: "spring", damping: 20, stiffness: 280 }}
         className="relative mx-4 w-full max-w-lg"
       >
-        <div className="absolute -inset-2 rounded-[2.5rem] bg-gradient-to-br from-[oklch(0.72_0.22_35)]/35 via-[var(--neon-primary)]/15 to-[var(--neon-accent)]/25 blur-2xl" />
+        <div className="absolute -inset-2 rounded-[2.5rem] bg-gradient-to-br from-[var(--neon-danger)]/35 via-[var(--neon-primary)]/15 to-[var(--neon-accent)]/25 blur-2xl" />
         <div className="relative overflow-hidden glass-strong rounded-[2rem] border border-white/10">
-          <div className="h-1 bg-gradient-to-r from-[oklch(0.72_0.22_35)] via-[var(--neon-primary)] to-[var(--neon-accent)] shimmer" />
+          <div className="h-1 gradient-cyber shimmer" />
           <div className="px-10 pt-10 pb-8 text-center">
             <motion.div
               initial={{ scale: 0, y: -20 }}
@@ -5107,14 +5084,15 @@ function MeetingEndedByYouModal({ onDismiss }: { onDismiss: () => void }) {
               transition={{ type: "spring", damping: 13, stiffness: 280, delay: 0.1 }}
               className="mx-auto mb-7 relative flex h-24 w-24 items-center justify-center"
             >
-              <div className="relative flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-[var(--neon-primary)] to-[var(--neon-accent)] shadow-[0_0_60px_-8px_oklch(0.65_0.22_280/0.8)]">
+              <div className="relative flex h-full w-full items-center justify-center rounded-full bg-gradient-primary shadow-glow-primary">
                 <CheckCircle2 className="h-11 w-11 text-white" />
               </div>
+              {/* Crown badge — border now uses var(--body-base) instead of "#0b0f19" */}
               <motion.div
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}
                 transition={{ delay: 0.5, type: "spring", stiffness: 400 }}
-                className="absolute -top-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full bg-[oklch(0.72_0.22_35)] border-2 border-[#0b0f19]"
+                className="absolute -top-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full bg-[var(--neon-danger)] border-2 border-[var(--body-base)]"
               >
                 <Crown className="h-4 w-4 text-white" />
               </motion.div>
@@ -5125,14 +5103,14 @@ function MeetingEndedByYouModal({ onDismiss }: { onDismiss: () => void }) {
               <br />
               Everyone has been disconnected.
             </p>
-            <div className="mb-8 flex items-center justify-center gap-3 rounded-2xl border border-white/8 bg-white/4 px-5 py-4">
+            <div className="mb-8 flex items-center justify-center gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.04] px-5 py-4">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <CheckCircle2 className="h-4 w-4 text-[oklch(0.75_0.18_145)]" />{" "}
+                <CheckCircle2 className="h-4 w-4 text-[var(--neon-success)]" />
                 <span>Session closed</span>
               </div>
               <div className="h-4 w-px bg-white/10" />
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <ShieldCheck className="h-4 w-4 text-[var(--neon-secondary)]" />{" "}
+                <ShieldCheck className="h-4 w-4 text-[var(--neon-secondary)]" />
                 <span>Data secured</span>
               </div>
             </div>
@@ -5140,7 +5118,7 @@ function MeetingEndedByYouModal({ onDismiss }: { onDismiss: () => void }) {
               whileHover={{ scale: 1.03 }}
               whileTap={{ scale: 0.97 }}
               onClick={onDismiss}
-              className="w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[var(--neon-primary)] to-[var(--neon-accent)] py-3.5 text-base font-semibold text-white hover:opacity-95 transition"
+              className="w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-primary py-3.5 text-base font-semibold text-white hover:opacity-95 transition"
             >
               Go to dashboard
             </motion.button>
@@ -5157,7 +5135,6 @@ function YouLeftModal({ onDismiss, onRejoin }: { onDismiss: () => void; onRejoin
     const t = setTimeout(onDismiss, 12000);
     return () => clearTimeout(t);
   }, [onDismiss]);
-
   return createPortal(
     <motion.div
       initial={{ opacity: 0 }}
@@ -5174,7 +5151,7 @@ function YouLeftModal({ onDismiss, onRejoin }: { onDismiss: () => void; onRejoin
       >
         <div className="absolute -inset-2 rounded-[2.5rem] bg-gradient-to-br from-[var(--neon-accent)]/30 via-[var(--neon-primary)]/10 to-[var(--neon-secondary)]/20 blur-2xl" />
         <div className="relative overflow-hidden glass-strong rounded-[2rem] border border-white/10">
-          <div className="h-1 bg-gradient-to-r from-[var(--neon-accent)] via-[var(--neon-primary)] to-[var(--neon-secondary)]" />
+          <div className="h-1 gradient-cyber" />
           <div className="px-10 pt-10 pb-8 text-center">
             <motion.div
               initial={{ scale: 0, rotate: 20 }}
@@ -5254,7 +5231,7 @@ function LeaveModal({
           <motion.div
             animate={{ scale: [1, 1.15, 1] }}
             transition={{ duration: 2, repeat: Infinity }}
-            className="relative mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-[oklch(0.72_0.22_35)] to-[oklch(0.6_0.28_20)] shadow-[0_0_40px_-10px_oklch(0.72_0.22_35/0.8)]"
+            className="relative mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-[var(--neon-danger)] to-[var(--neon-danger)] shadow-[var(--shadow-glow-primary)]"
           >
             <PhoneOff className="h-10 w-10 text-white" />
           </motion.div>
@@ -5272,7 +5249,7 @@ function LeaveModal({
             </NeonButton>
             <button
               onClick={onConfirm}
-              className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-[oklch(0.65_0.25_25)] to-[oklch(0.72_0.22_35)] px-6 py-3 text-sm font-semibold text-white hover:opacity-95 transition"
+              className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-[var(--neon-danger)] to-[var(--neon-danger)] px-6 py-3 text-sm font-semibold text-white hover:opacity-95 transition"
             >
               <PhoneOff className="h-4 w-4" /> {isHost ? "End meeting" : "Leave"}
             </button>
@@ -5388,8 +5365,8 @@ function ReactionBurstLayer({
             style={{ bottom: "100px", left: `${20 + (i % 8) * 10}%` }}
           >
             <div className="flex flex-col items-center gap-1">
-              <span className="text-3xl drop-shadow-[0_0_12px_oklch(0.8_0.2_280)]">{r.emoji}</span>
-              <span className="rounded-full bg-black/60 px-2 py-0.5 text-[10px] text-muted-foreground backdrop-blur whitespace-nowrap">
+              <span className="text-3xl drop-shadow-[0_0_12px_var(--neon-primary)]">{r.emoji}</span>
+              <span className="rounded-full bg-[var(--card)]/80 backdrop-blur border border-[var(--glass-border)] px-2 py-0.5 text-[10px] text-muted-foreground whitespace-nowrap">
                 {r.username}
               </span>
             </div>
@@ -5427,20 +5404,22 @@ function ControlBtn({
       title={label}
       className={cn(
         "flex h-10 w-10 sm:h-12 sm:w-auto sm:px-4 items-center justify-center gap-2 rounded-2xl border transition shrink-0",
-        active && !highlightOn && "border-white/10 bg-white/5 text-foreground hover:bg-white/10",
+        active &&
+          !highlightOn &&
+          "border-[var(--glass-border-strong)] bg-[var(--glass-bg)] text-foreground hover:bg-[var(--glass-hover)]",
         highlightOn &&
           "border-[var(--neon-primary)] bg-[var(--neon-primary)]/15 text-[var(--neon-primary)] animate-pulse-glow",
         !active &&
           !highlightOn &&
-          "border-[oklch(0.72_0.22_35)]/40 bg-[oklch(0.72_0.22_35)]/15 text-[oklch(0.78_0.2_35)]",
+          "border-[var(--neon-danger)]/40 bg-[var(--neon-danger)]/15 text-[var(--neon-danger)]",
       )}
       style={
         highlightOn && highlightColor
           ? {
-              borderColor: `${highlightColor}80`,
-              backgroundColor: `${highlightColor}18`,
+              borderColor: `color-mix(in oklch, ${highlightColor} 50%, transparent)`,
+              backgroundColor: `color-mix(in oklch, ${highlightColor} 18%, transparent)`,
               color: highlightColor,
-              boxShadow: `0 0 20px ${highlightColor}40`,
+              boxShadow: `0 0 20px color-mix(in oklch, ${highlightColor} 40%, transparent)`,
             }
           : undefined
       }
@@ -5470,8 +5449,9 @@ function AudioBars({ color, small }: { color: string; small?: boolean }) {
 function StatusDot({ status }: { status: ParticipantStatus }) {
   const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.available;
   return (
+    // Border now uses var(--body-base) instead of hardcoded "#0B0F19"
     <span
-      className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[#0B0F19]"
+      className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[var(--body-base)]"
       style={{ background: cfg.color, boxShadow: `0 0 6px ${cfg.color}` }}
     />
   );
@@ -5500,7 +5480,6 @@ function Avatar({ hue, name, size = 40 }: { hue: number; name: string; size?: nu
 }
 
 // ─── Utils ────────────────────────────────────────────────────────────────────
-
 function hueForIndex(i: number): number {
   return [210, 305, 160, 35, 60, 130, 260, 20][i % 8];
 }

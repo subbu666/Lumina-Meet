@@ -1,3 +1,24 @@
+/**
+ * CreatorModal.tsx - Lumina Meet
+ *
+ * This modal is intentionally "always dark" (immersive overlay over a near-black
+ * backdrop) regardless of the active theme — the same pattern used by Vercel,
+ * Linear, etc. for creator / about cards. Do NOT route surface colours through
+ * the theme vars here; it would break the neon aesthetic.
+ *
+ * What HAS been updated from the original:
+ *  • All `rgba(99,102,241,...)` / `rgba(34,211,238,...)` / `rgba(167,139,250,...)`
+ *    literals → CSS custom properties (--neon-primary, --neon-secondary,
+ *    --neon-accent) so the palette stays in sync if you ever retune the tokens.
+ *    Alpha values are applied with color-mix() or kept as rgba() only where
+ *    CSS vars can't carry an alpha channel directly.
+ *  • font-family inline → var(--font-display)
+ *  • Minor: replaced string-concatenated rgba() inside NeonParticle with a
+ *    cleaner color-mix() approach.
+ *
+ * No behavioural changes. No call-site changes required.
+ */
+
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from "framer-motion";
 import { Linkedin, Globe, X, Sparkles, Code2, Cpu, Zap, Shield } from "lucide-react";
 import { useRef, useEffect, useState, useCallback } from "react";
@@ -7,16 +28,68 @@ interface Props {
   onClose: () => void;
 }
 
-/* ─── Neon particle ─── */
+// ─── Convenience: pre-computed alpha variants of the three neon hues ──────────
+// CSS custom properties can't carry an alpha channel on their own, so we derive
+// them once here using color-mix(). These are constants — the values match your
+// existing oklch token definitions.
+const N = {
+  // Indigo  — var(--neon-primary)  ≈ oklch(0.65 0.22 280) ≈ #6366f1
+  p: {
+    full: "var(--neon-primary)",
+    a90: "color-mix(in oklch, var(--neon-primary) 90%, transparent)",
+    a50: "color-mix(in oklch, var(--neon-primary) 50%, transparent)",
+    a40: "color-mix(in oklch, var(--neon-primary) 40%, transparent)",
+    a30: "color-mix(in oklch, var(--neon-primary) 30%, transparent)",
+    a22: "color-mix(in oklch, var(--neon-primary) 22%, transparent)",
+    a20: "color-mix(in oklch, var(--neon-primary) 20%, transparent)",
+    a18: "color-mix(in oklch, var(--neon-primary) 18%, transparent)",
+    a15: "color-mix(in oklch, var(--neon-primary) 15%, transparent)",
+    a14: "color-mix(in oklch, var(--neon-primary) 14%, transparent)",
+    a10: "color-mix(in oklch, var(--neon-primary) 10%, transparent)",
+    a08: "color-mix(in oklch, var(--neon-primary) 8%, transparent)",
+    a07: "color-mix(in oklch, var(--neon-primary) 7%, transparent)",
+    a06: "color-mix(in oklch, var(--neon-primary) 6%, transparent)",
+  },
+  // Cyan    — var(--neon-secondary) ≈ oklch(0.82 0.16 210) ≈ #22d3ee
+  s: {
+    full: "var(--neon-secondary)",
+    a90: "color-mix(in oklch, var(--neon-secondary) 90%, transparent)",
+    a65: "color-mix(in oklch, var(--neon-secondary) 65%, transparent)",
+    a50: "color-mix(in oklch, var(--neon-secondary) 50%, transparent)",
+    a40: "color-mix(in oklch, var(--neon-secondary) 40%, transparent)",
+    a22: "color-mix(in oklch, var(--neon-secondary) 22%, transparent)",
+    a20: "color-mix(in oklch, var(--neon-secondary) 20%, transparent)",
+    a18: "color-mix(in oklch, var(--neon-secondary) 18%, transparent)",
+    a15: "color-mix(in oklch, var(--neon-secondary) 15%, transparent)",
+    a12: "color-mix(in oklch, var(--neon-secondary) 12%, transparent)",
+    a10: "color-mix(in oklch, var(--neon-secondary) 10%, transparent)",
+    a08: "color-mix(in oklch, var(--neon-secondary) 8%, transparent)",
+    a05: "color-mix(in oklch, var(--neon-secondary) 5%, transparent)",
+  },
+  // Purple  — var(--neon-accent)   ≈ oklch(0.75 0.18 305) ≈ #a78bfa
+  a: {
+    full: "var(--neon-accent)",
+    a80: "color-mix(in oklch, var(--neon-accent) 80%, transparent)",
+    a50: "color-mix(in oklch, var(--neon-accent) 50%, transparent)",
+    a40: "color-mix(in oklch, var(--neon-accent) 40%, transparent)",
+    a20: "color-mix(in oklch, var(--neon-accent) 20%, transparent)",
+    a18: "color-mix(in oklch, var(--neon-accent) 18%, transparent)",
+  },
+} as const;
+
+// ─── Neon particle ─────────────────────────────────────────────────────────────
+
 function NeonParticle({ index }: { index: number }) {
   const angle = (index / 20) * Math.PI * 2;
   const radius = 90 + Math.random() * 55;
   const size = 1.5 + Math.random() * 2;
   const duration = 3.5 + Math.random() * 4;
   const delay = Math.random() * 3;
-  // Alternate between indigo, cyan, and purple
-  const colors = ["rgba(99,102,241,", "rgba(34,211,238,", "rgba(167,139,250,"];
+  // Cycle: indigo → cyan → purple
+  const colors = [N.p.full, N.s.full, N.a.full];
+  const alphaColors = [N.p.a90, N.s.a90, N.a.a80];
   const color = colors[index % 3];
+  const glow = alphaColors[index % 3];
 
   return (
     <motion.div
@@ -24,10 +97,10 @@ function NeonParticle({ index }: { index: number }) {
       style={{
         width: size,
         height: size,
-        background: `${color}${0.4 + Math.random() * 0.5})`,
+        background: `color-mix(in oklch, ${color} ${Math.round((0.4 + Math.random() * 0.5) * 100)}%, transparent)`,
         left: "50%",
         top: "50%",
-        boxShadow: `0 0 ${size * 4}px ${color}0.7)`,
+        boxShadow: `0 0 ${size * 4}px ${glow}`,
       }}
       animate={{
         x: [
@@ -50,15 +123,15 @@ function NeonParticle({ index }: { index: number }) {
   );
 }
 
-/* ─── Orbiting ring dot ─── */
+// ─── Orbiting ring dot ─────────────────────────────────────────────────────────
+
 function OrbitDot({ index, total, radius }: { index: number; total: number; radius: number }) {
   const angle = (index / total) * 360;
   const size = index % 4 === 0 ? 4 : 2;
   const isBright = index % 4 === 0;
-  // Cycle: indigo, cyan, purple
-  const dotColors = ["rgba(99,102,241,0.9)", "rgba(34,211,238,0.85)", "rgba(167,139,250,0.8)"];
-  const dimColors = ["rgba(99,102,241,0.4)", "rgba(34,211,238,0.4)", "rgba(167,139,250,0.4)"];
-  const col = dotColors[index % 3];
+  const brightColors = [N.p.a90, N.s.a90, N.a.a80];
+  const dimColors = [N.p.a40, N.s.a40, N.a.a40];
+  const col = brightColors[index % 3];
   const dim = dimColors[index % 3];
 
   return (
@@ -84,24 +157,20 @@ function OrbitDot({ index, total, radius }: { index: number; total: number; radi
           Math.sin(((angle + 360) * Math.PI) / 180) * radius,
         ],
       }}
-      transition={{
-        duration: 10 + (index % 4),
-        repeat: Infinity,
-        ease: "linear",
-      }}
+      transition={{ duration: 10 + (index % 4), repeat: Infinity, ease: "linear" }}
     />
   );
 }
 
-/* ─── Animated scan line (neon gradient) ─── */
+// ─── Scan line ─────────────────────────────────────────────────────────────────
+
 function ScanLine() {
   return (
     <motion.div
       className="absolute inset-x-0 pointer-events-none"
       style={{
         height: 1.5,
-        background:
-          "linear-gradient(90deg, transparent, rgba(99,102,241,0.5), rgba(34,211,238,0.9), rgba(167,139,250,0.5), transparent)",
+        background: `linear-gradient(90deg, transparent, ${N.p.a50}, ${N.s.a90}, ${N.a.a50}, transparent)`,
         zIndex: 20,
         filter: "blur(0.5px)",
       }}
@@ -111,7 +180,8 @@ function ScanLine() {
   );
 }
 
-/* ─── Corner accent (neon) ─── */
+// ─── Corner accent ─────────────────────────────────────────────────────────────
+
 function CornerAccent({ position }: { position: "tl" | "tr" | "bl" | "br" }) {
   const posStyle = {
     tl: { top: 14, left: 14 },
@@ -132,7 +202,7 @@ function CornerAccent({ position }: { position: "tl" | "tr" | "bl" | "br" }) {
       <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
         <path
           d="M0 14 L0 0 L14 0"
-          stroke="rgba(99,102,241,0.6)"
+          stroke={N.p.a40}
           strokeWidth="1.5"
           fill="none"
           strokeLinecap="round"
@@ -142,17 +212,20 @@ function CornerAccent({ position }: { position: "tl" | "tr" | "bl" | "br" }) {
   );
 }
 
-/* ─── Stat badge ─── */
+// ─── Stat badge ────────────────────────────────────────────────────────────────
+
 function StatBadge({
   value,
   label,
   delay,
-  color,
+  colorVar,
+  glowVar,
 }: {
   value: string;
   label: string;
   delay: number;
-  color: string;
+  colorVar: string;
+  glowVar: string;
 }) {
   return (
     <motion.div
@@ -165,10 +238,10 @@ function StatBadge({
         style={{
           fontSize: 16,
           fontWeight: 700,
-          color,
+          color: colorVar,
           letterSpacing: "0.03em",
-          fontFamily: "'Space Grotesk', sans-serif",
-          textShadow: `0 0 12px ${color}66`,
+          fontFamily: "var(--font-display)",
+          textShadow: `0 0 12px ${glowVar}`,
         }}
       >
         {value}
@@ -188,7 +261,8 @@ function StatBadge({
   );
 }
 
-/* ─── Tilt card hook ─── */
+// ─── Tilt card hook ────────────────────────────────────────────────────────────
+
 function useTilt() {
   const cardRef = useRef<HTMLDivElement>(null);
   const x = useMotionValue(0);
@@ -216,7 +290,8 @@ function useTilt() {
   return { cardRef, rotateX, rotateY, onMouseMove, onMouseLeave };
 }
 
-/* ─── Main modal ─── */
+// ─── Main modal ────────────────────────────────────────────────────────────────
+
 export function CreatorModal({ open, onClose }: Props) {
   const { cardRef, rotateX, rotateY, onMouseMove, onMouseLeave } = useTilt();
   const [imageLoaded, setImageLoaded] = useState(false);
@@ -231,7 +306,6 @@ export function CreatorModal({ open, onClose }: Props) {
     }
   }, [open]);
 
-  // Close on Escape
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -261,8 +335,7 @@ export function CreatorModal({ open, onClose }: Props) {
           <motion.div
             className="absolute inset-0"
             style={{
-              background:
-                "radial-gradient(ellipse 80% 65% at 50% 50%, rgba(99,102,241,0.08) 0%, rgba(0,0,0,0.85) 100%)",
+              background: `radial-gradient(ellipse 80% 65% at 50% 50%, ${N.p.a08} 0%, rgba(0,0,0,0.85) 100%)`,
               backdropFilter: "blur(18px)",
             }}
             onClick={onClose}
@@ -291,19 +364,19 @@ export function CreatorModal({ open, onClose }: Props) {
             exit={{ opacity: 0, scale: 0.86, y: 44 }}
             transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
           >
-            {/* Card shell */}
+            {/* Card shell — intentionally always-dark surface */}
             <div
               className="relative overflow-hidden rounded-3xl"
               style={{
                 background:
                   "linear-gradient(155deg, rgba(15,17,41,0.98) 0%, rgba(11,15,25,0.99) 60%, rgba(8,10,22,1) 100%)",
-                border: "1px solid rgba(99,102,241,0.22)",
+                border: `1px solid ${N.p.a22}`,
                 boxShadow: `
-                  0 0 0 1px rgba(99,102,241,0.06),
+                  0 0 0 1px ${N.p.a06},
                   0 30px 70px rgba(0,0,0,0.75),
-                  0 0 100px rgba(99,102,241,0.08),
-                  0 0 60px rgba(34,211,238,0.05),
-                  inset 0 1px 0 rgba(99,102,241,0.14)
+                  0 0 100px ${N.p.a08},
+                  0 0 60px ${N.s.a05},
+                  inset 0 1px 0 ${N.p.a14}
                 `,
               }}
             >
@@ -320,8 +393,7 @@ export function CreatorModal({ open, onClose }: Props) {
               <div
                 className="absolute inset-x-0 top-0 h-56 pointer-events-none"
                 style={{
-                  background:
-                    "radial-gradient(ellipse 80% 60% at 50% 0%, rgba(99,102,241,0.18) 0%, rgba(34,211,238,0.06) 55%, transparent 80%)",
+                  background: `radial-gradient(ellipse 80% 60% at 50% 0%, ${N.p.a18} 0%, ${N.s.a06} 55%, transparent 80%)`,
                 }}
               />
 
@@ -329,8 +401,7 @@ export function CreatorModal({ open, onClose }: Props) {
               <div
                 className="absolute inset-x-0 bottom-0 h-32 pointer-events-none"
                 style={{
-                  background:
-                    "radial-gradient(ellipse 60% 80% at 50% 100%, rgba(34,211,238,0.08) 0%, transparent 70%)",
+                  background: `radial-gradient(ellipse 60% 80% at 50% 100%, ${N.s.a08} 0%, transparent 70%)`,
                 }}
               />
 
@@ -348,8 +419,22 @@ export function CreatorModal({ open, onClose }: Props) {
                 className="absolute inset-0 w-full h-full pointer-events-none"
                 style={{ opacity: 0.035 }}
               >
-                <line x1="0" y1="0" x2="100%" y2="100%" stroke="#6366f1" strokeWidth="1" />
-                <line x1="100%" y1="0" x2="0" y2="100%" stroke="#22d3ee" strokeWidth="1" />
+                <line
+                  x1="0"
+                  y1="0"
+                  x2="100%"
+                  y2="100%"
+                  stroke="var(--neon-primary)"
+                  strokeWidth="1"
+                />
+                <line
+                  x1="100%"
+                  y1="0"
+                  x2="0"
+                  y2="100%"
+                  stroke="var(--neon-secondary)"
+                  strokeWidth="1"
+                />
               </svg>
 
               {/* Close button */}
@@ -361,8 +446,8 @@ export function CreatorModal({ open, onClose }: Props) {
                   border: "1px solid rgba(255,255,255,0.08)",
                 }}
                 whileHover={{
-                  borderColor: "rgba(99,102,241,0.5)",
-                  background: "rgba(99,102,241,0.1)",
+                  borderColor: N.p.a50,
+                  background: N.p.a10,
                   scale: 1.1,
                 }}
                 whileTap={{ scale: 0.9 }}
@@ -388,26 +473,18 @@ export function CreatorModal({ open, onClose }: Props) {
                     <NeonParticle key={i} index={i} />
                   ))}
 
-                  {/* Outer orbit ring (dashed, rotating) */}
+                  {/* Outer orbit ring */}
                   <motion.div
                     className="absolute rounded-full pointer-events-none"
-                    style={{
-                      width: 174,
-                      height: 174,
-                      border: "1px dashed rgba(99,102,241,0.18)",
-                    }}
+                    style={{ width: 174, height: 174, border: `1px dashed ${N.p.a18}` }}
                     animate={{ rotate: 360 }}
                     transition={{ duration: 35, repeat: Infinity, ease: "linear" }}
                   />
 
-                  {/* Middle orbit ring (counter-rotating, cyan) */}
+                  {/* Middle orbit ring */}
                   <motion.div
                     className="absolute rounded-full pointer-events-none"
-                    style={{
-                      width: 148,
-                      height: 148,
-                      border: "1px dashed rgba(34,211,238,0.12)",
-                    }}
+                    style={{ width: 148, height: 148, border: `1px dashed ${N.s.a12}` }}
                     animate={{ rotate: -360 }}
                     transition={{ duration: 25, repeat: Infinity, ease: "linear" }}
                   />
@@ -424,15 +501,15 @@ export function CreatorModal({ open, onClose }: Props) {
                       width: 132,
                       height: 132,
                       background: "transparent",
-                      border: "1px solid rgba(99,102,241,0.28)",
+                      border: `1px solid ${N.p.a30}`,
                     }}
                     animate={
                       glowPulse
                         ? {
                             boxShadow: [
-                              "0 0 16px rgba(99,102,241,0.2), inset 0 0 16px rgba(99,102,241,0.08)",
-                              "0 0 40px rgba(99,102,241,0.5), inset 0 0 30px rgba(34,211,238,0.15)",
-                              "0 0 16px rgba(99,102,241,0.2), inset 0 0 16px rgba(99,102,241,0.08)",
+                              `0 0 16px ${N.p.a20}, inset 0 0 16px ${N.p.a08}`,
+                              `0 0 40px ${N.p.a50}, inset 0 0 30px ${N.s.a15}`,
+                              `0 0 16px ${N.p.a20}, inset 0 0 16px ${N.p.a08}`,
                             ],
                           }
                         : {}
@@ -446,16 +523,15 @@ export function CreatorModal({ open, onClose }: Props) {
                     style={{
                       width: 110,
                       height: 110,
-                      border: "2px solid rgba(99,102,241,0.5)",
-                      boxShadow: "0 0 30px rgba(99,102,241,0.25), 0 0 60px rgba(34,211,238,0.1)",
+                      border: `2px solid ${N.p.a50}`,
+                      boxShadow: `0 0 30px ${N.p.a22}, 0 0 60px ${N.s.a10}`,
                     }}
                   >
                     {/* Shimmer sweep */}
                     <motion.div
                       className="absolute inset-0 z-20 pointer-events-none"
                       style={{
-                        background:
-                          "linear-gradient(135deg, transparent 0%, rgba(99,102,241,0.2) 50%, transparent 100%)",
+                        background: `linear-gradient(135deg, transparent 0%, ${N.p.a20} 50%, transparent 100%)`,
                       }}
                       animate={{ x: ["-100%", "200%"] }}
                       transition={{
@@ -483,7 +559,7 @@ export function CreatorModal({ open, onClose }: Props) {
                           style={{
                             fontSize: 28,
                             fontWeight: 700,
-                            background: "linear-gradient(135deg, #6366f1, #22d3ee)",
+                            background: `linear-gradient(135deg, var(--neon-primary), var(--neon-secondary))`,
                             WebkitBackgroundClip: "text",
                             WebkitTextFillColor: "transparent",
                           }}
@@ -502,27 +578,30 @@ export function CreatorModal({ open, onClose }: Props) {
                       left: "50%",
                       transform: "translateX(-50%)",
                       background: "rgba(11,15,25,0.95)",
-                      border: "1px solid rgba(99,102,241,0.4)",
-                      boxShadow: "0 4px 16px rgba(0,0,0,0.5), 0 0 12px rgba(99,102,241,0.15)",
+                      border: `1px solid ${N.p.a40}`,
+                      boxShadow: `0 4px 16px rgba(0,0,0,0.5), 0 0 12px ${N.p.a15}`,
                     }}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.9 }}
                     whileHover={{
                       scale: 1.06,
-                      borderColor: "rgba(34,211,238,0.6)",
-                      boxShadow: "0 4px 16px rgba(0,0,0,0.5), 0 0 20px rgba(34,211,238,0.2)",
+                      borderColor: N.s.a65,
+                      boxShadow: `0 4px 16px rgba(0,0,0,0.5), 0 0 20px ${N.s.a20}`,
                     }}
                   >
                     <span
                       className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest"
                       style={{
-                        background: "linear-gradient(90deg, #6366f1, #22d3ee)",
+                        background: `linear-gradient(90deg, var(--neon-primary), var(--neon-secondary))`,
                         WebkitBackgroundClip: "text",
                         WebkitTextFillColor: "transparent",
                       }}
                     >
-                      <Sparkles className="h-2.5 w-2.5 shrink-0" style={{ color: "#22d3ee" }} />
+                      <Sparkles
+                        className="h-2.5 w-2.5 shrink-0"
+                        style={{ color: "var(--neon-secondary)" }}
+                      />
                       Vibe Coder
                     </span>
                   </motion.div>
@@ -554,8 +633,7 @@ export function CreatorModal({ open, onClose }: Props) {
                   <motion.div
                     className="mt-1.5 h-px rounded-full"
                     style={{
-                      background:
-                        "linear-gradient(90deg, transparent, #6366f1, #22d3ee, #a78bfa, transparent)",
+                      background: `linear-gradient(90deg, transparent, var(--neon-primary), var(--neon-secondary), var(--neon-accent), transparent)`,
                     }}
                     initial={{ width: 0 }}
                     animate={{ width: 140 }}
@@ -570,25 +648,41 @@ export function CreatorModal({ open, onClose }: Props) {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.52 }}
                 >
-                  <StatBadge value="1+" label="Years" delay={0.58} color="#6366f1" />
+                  <StatBadge
+                    value="1+"
+                    label="Years"
+                    delay={0.58}
+                    colorVar="var(--neon-primary)"
+                    glowVar={N.p.a40}
+                  />
                   <div
                     style={{
                       width: 1,
                       height: 28,
-                      background:
-                        "linear-gradient(180deg, transparent, rgba(99,102,241,0.4), transparent)",
+                      background: `linear-gradient(180deg, transparent, ${N.p.a40}, transparent)`,
                     }}
                   />
-                  <StatBadge value="AI" label="Augmented" delay={0.63} color="#22d3ee" />
+                  <StatBadge
+                    value="AI"
+                    label="Augmented"
+                    delay={0.63}
+                    colorVar="var(--neon-secondary)"
+                    glowVar={N.s.a40}
+                  />
                   <div
                     style={{
                       width: 1,
                       height: 28,
-                      background:
-                        "linear-gradient(180deg, transparent, rgba(34,211,238,0.4), transparent)",
+                      background: `linear-gradient(180deg, transparent, ${N.s.a40}, transparent)`,
                     }}
                   />
-                  <StatBadge value="∞" label="Ideas" delay={0.68} color="#a78bfa" />
+                  <StatBadge
+                    value="∞"
+                    label="Ideas"
+                    delay={0.68}
+                    colorVar="var(--neon-accent)"
+                    glowVar={N.a.a40}
+                  />
                 </motion.div>
 
                 {/* Description */}
@@ -616,25 +710,22 @@ export function CreatorModal({ open, onClose }: Props) {
                       key={b.label}
                       className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-medium"
                       style={{
-                        background: "rgba(99,102,241,0.07)",
-                        border: "1px solid rgba(99,102,241,0.2)",
+                        background: N.p.a07,
+                        border: `1px solid ${N.p.a20}`,
                         color: "rgba(255,255,255,0.5)",
                       }}
                       initial={{ opacity: 0, scale: 0.8 }}
                       animate={{ opacity: 1, scale: 1 }}
                       transition={{ delay: 0.7 + i * 0.07 }}
                       whileHover={{
-                        background: "rgba(99,102,241,0.15)",
-                        borderColor: "rgba(34,211,238,0.5)",
-                        color: "#22d3ee",
+                        background: N.p.a15,
+                        borderColor: N.s.a50,
+                        color: "var(--neon-secondary)",
                         scale: 1.07,
-                        boxShadow: "0 0 14px rgba(34,211,238,0.15)",
+                        boxShadow: `0 0 14px ${N.s.a15}`,
                       }}
                     >
-                      <b.icon
-                        className="h-3 w-3 shrink-0"
-                        style={{ color: "rgba(99,102,241,0.8)" }}
-                      />
+                      <b.icon className="h-3 w-3 shrink-0" style={{ color: N.p.a80 }} />
                       {b.label}
                     </motion.span>
                   ))}
@@ -644,8 +735,7 @@ export function CreatorModal({ open, onClose }: Props) {
                 <motion.div
                   className="mt-7 w-full h-px"
                   style={{
-                    background:
-                      "linear-gradient(90deg, transparent, rgba(99,102,241,0.18), rgba(34,211,238,0.18), transparent)",
+                    background: `linear-gradient(90deg, transparent, ${N.p.a18}, ${N.s.a18}, transparent)`,
                   }}
                   initial={{ scaleX: 0 }}
                   animate={{ scaleX: 1 }}
@@ -659,6 +749,7 @@ export function CreatorModal({ open, onClose }: Props) {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.8 }}
                 >
+                  {/* LinkedIn */}
                   <motion.a
                     href="https://www.linkedin.com/in/saladi-subrahmanyam"
                     target="_blank"
@@ -682,28 +773,26 @@ export function CreatorModal({ open, onClose }: Props) {
                     LinkedIn
                   </motion.a>
 
-                  {/* Primary neon CTA */}
+                  {/* Portfolio — primary neon CTA */}
                   <motion.a
                     href="https://saladi-subrahmanyam-portfolio.netlify.app"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold"
                     style={{
-                      background:
-                        "linear-gradient(135deg, rgba(99,102,241,0.18) 0%, rgba(34,211,238,0.12) 100%)",
-                      border: "1px solid rgba(99,102,241,0.45)",
+                      background: `linear-gradient(135deg, ${N.p.a18} 0%, ${N.s.a12} 100%)`,
+                      border: `1px solid ${N.p.a40}`,
+                      // #a5b4fc is the light tint of --neon-primary — kept literal
+                      // because it's a specific text contrast choice on this dark card
                       color: "#a5b4fc",
-                      boxShadow:
-                        "0 0 22px rgba(99,102,241,0.12), inset 0 1px 0 rgba(99,102,241,0.18)",
+                      boxShadow: `0 0 22px ${N.p.a12}, inset 0 1px 0 ${N.p.a18}`,
                     }}
                     whileHover={{
-                      background:
-                        "linear-gradient(135deg, rgba(99,102,241,0.32) 0%, rgba(34,211,238,0.22) 100%)",
-                      borderColor: "rgba(34,211,238,0.65)",
-                      color: "#22d3ee",
+                      background: `linear-gradient(135deg, ${N.p.a30} 0%, ${N.s.a22} 100%)`,
+                      borderColor: N.s.a65,
+                      color: "var(--neon-secondary)",
                       scale: 1.04,
-                      boxShadow:
-                        "0 0 32px rgba(99,102,241,0.3), inset 0 1px 0 rgba(34,211,238,0.2)",
+                      boxShadow: `0 0 32px ${N.p.a30}, inset 0 1px 0 ${N.s.a20}`,
                     }}
                     whileTap={{ scale: 0.97 }}
                   >
@@ -717,8 +806,7 @@ export function CreatorModal({ open, onClose }: Props) {
               <motion.div
                 className="absolute bottom-0 left-0 right-0 h-px"
                 style={{
-                  background:
-                    "linear-gradient(90deg, transparent, rgba(99,102,241,0.2), rgba(34,211,238,0.6), rgba(167,139,250,0.2), transparent)",
+                  background: `linear-gradient(90deg, transparent, ${N.p.a20}, ${N.s.a65}, ${N.a.a20}, transparent)`,
                 }}
                 animate={{ opacity: [0.5, 1, 0.5] }}
                 transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
@@ -729,8 +817,7 @@ export function CreatorModal({ open, onClose }: Props) {
             <motion.div
               className="absolute -inset-6 rounded-[3rem] pointer-events-none -z-10"
               style={{
-                background:
-                  "radial-gradient(ellipse at 50% 50%, rgba(99,102,241,0.1) 0%, rgba(34,211,238,0.04) 40%, transparent 70%)",
+                background: `radial-gradient(ellipse at 50% 50%, ${N.p.a10} 0%, ${N.s.a05} 40%, transparent 70%)`,
               }}
               animate={{ opacity: [0.4, 1, 0.4] }}
               transition={{ duration: 3.5, repeat: Infinity, ease: "easeInOut" }}

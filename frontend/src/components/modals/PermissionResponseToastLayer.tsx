@@ -9,6 +9,9 @@
  *  - Auto-dismisses after 5 s with a progress bar countdown
  *  - Stacks up to 4 toasts (oldest at bottom, newest on top)
  *  - Accepted = vibrant green celebration; Declined = muted, non-judgmental
+ *
+ * Light-mode fix: all hardcoded oklch() surface/text/border values replaced
+ * with CSS custom properties so both themes render correctly.
  */
 
 import { createPortal } from "react-dom";
@@ -28,7 +31,8 @@ export interface PermissionToast {
 // ─── Particle burst (pure SVG, auto-removes after 800 ms) ────────────────────
 
 function ParticleBurst({ accepted }: { accepted: boolean }) {
-  const color = accepted ? "oklch(0.75 0.18 145)" : "oklch(0.7 0.1 260)";
+  // Use CSS vars so particles match theme neon colours
+  const color = accepted ? "var(--neon-success)" : "var(--neon-accent)";
   const count = 8;
   const angles = Array.from({ length: count }, (_, i) => (i / count) * 360);
 
@@ -75,23 +79,24 @@ function PermissionToastItem({
   const typeLabel =
     toast.type === "mic" ? "microphone" : toast.type === "cam" ? "camera" : "mic & camera";
 
+  // All surface/border values now reference CSS vars — work in both themes.
+  // Only the accent colours remain as OKLCH literals because they're brand
+  // neon values that intentionally override the neutral surface palette.
   const acceptedConfig = {
-    border: "oklch(0.75 0.18 145 / 0.5)",
-    bg: "oklch(0.75 0.18 145 / 0.07)",
-    glow: "0 8px 40px -8px oklch(0.75 0.18 145 / 0.5)",
-    accentColor: "oklch(0.85 0.15 145)",
-    label:
-      "bg-[oklch(0.75_0.18_145/0.2)] text-[oklch(0.85_0.15_145)] border-[oklch(0.75_0.18_145/0.4)]",
-    shimmer: "oklch(0.75 0.18 145)",
+    borderVar: "var(--neon-success)",
+    borderAlpha: "color-mix(in oklch, var(--neon-success) 50%, transparent)",
+    bgAlpha: "color-mix(in oklch, var(--neon-success) 8%, transparent)",
+    glow: "var(--shadow-glow-cyan)", // closest glow token
+    accentColor: "var(--neon-success)",
+    shimmer: "var(--neon-success)",
   };
   const declinedConfig = {
-    border: "oklch(0.65 0.15 260 / 0.35)",
-    bg: "oklch(0.65 0.15 260 / 0.05)",
-    glow: "0 8px 40px -8px oklch(0.55 0.15 260 / 0.3)",
-    accentColor: "oklch(0.75 0.12 260)",
-    label:
-      "bg-[oklch(0.65_0.15_260/0.15)] text-[oklch(0.75_0.12_260)] border-[oklch(0.65_0.15_260/0.3)]",
-    shimmer: "oklch(0.65 0.15 260)",
+    borderVar: "var(--neon-accent)",
+    borderAlpha: "color-mix(in oklch, var(--neon-accent) 35%, transparent)",
+    bgAlpha: "color-mix(in oklch, var(--neon-accent) 6%, transparent)",
+    glow: "var(--shadow-glow-purple)",
+    accentColor: "var(--neon-accent)",
+    shimmer: "var(--neon-accent)",
   };
   const cfg = accepted ? acceptedConfig : declinedConfig;
 
@@ -104,11 +109,10 @@ function PermissionToastItem({
       animate={{ opacity: 1, x: 0, scale: 1 }}
       exit={{ opacity: 0, x: 90, scale: 0.9 }}
       transition={{ type: "spring", damping: 22, stiffness: 300 }}
-      className="relative overflow-hidden rounded-2xl w-80"
+      className="relative overflow-hidden rounded-2xl w-80 glass-strong"
       style={{
-        border: `1px solid ${cfg.border}`,
-        background: "oklch(0.14 0.025 265 / 0.96)",
-        backdropFilter: "blur(24px)",
+        border: `1px solid ${cfg.borderAlpha}`,
+        // glass-strong already handles the surface; only override box-shadow
         boxShadow: cfg.glow,
       }}
     >
@@ -117,13 +121,14 @@ function PermissionToastItem({
         className="absolute top-0 left-0 right-0 h-0.5"
         style={{
           background: `linear-gradient(90deg, transparent, ${cfg.shimmer}, transparent)`,
+          opacity: 0.7,
         }}
       />
 
       {/* Progress bar (bottom) */}
       <motion.div
         className="absolute bottom-0 left-0 h-0.5 rounded-b-2xl"
-        style={{ background: cfg.shimmer, opacity: 0.6 }}
+        style={{ background: cfg.shimmer, opacity: 0.5 }}
         initial={{ width: "100%" }}
         animate={{ width: "0%" }}
         transition={{ duration: 5, ease: "linear" }}
@@ -140,8 +145,8 @@ function PermissionToastItem({
               transition={{ type: "spring", stiffness: 400, delay: 0.05 }}
               className="relative flex h-10 w-10 items-center justify-center rounded-xl"
               style={{
-                background: accepted ? "oklch(0.75 0.18 145 / 0.2)" : "oklch(0.65 0.15 260 / 0.15)",
-                border: `1px solid ${cfg.border}`,
+                background: cfg.bgAlpha,
+                border: `1px solid ${cfg.borderAlpha}`,
               }}
             >
               {accepted ? (
@@ -160,9 +165,14 @@ function PermissionToastItem({
 
           {/* Text */}
           <div className="flex-1 min-w-0">
-            {/* Status pill */}
+            {/* Status pill — uses CSS vars for foreground/border */}
             <span
-              className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide mb-1 ${cfg.label}`}
+              className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide mb-1"
+              style={{
+                background: cfg.bgAlpha,
+                borderColor: cfg.borderAlpha,
+                color: cfg.accentColor,
+              }}
             >
               <DeviceIcon className="h-2.5 w-2.5" />
               {accepted ? "Accepted" : "Declined"}
@@ -172,7 +182,7 @@ function PermissionToastItem({
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.1 }}
-              className="text-sm font-semibold leading-tight"
+              className="text-sm font-semibold leading-tight text-foreground"
             >
               {toast.fromUsername}
             </motion.p>
@@ -211,8 +221,8 @@ function PermissionToastItem({
             transition={{ delay: 0.25 }}
             className="mt-2.5 flex items-center gap-2 rounded-xl px-3 py-2"
             style={{
-              background: "oklch(0.75 0.18 145 / 0.06)",
-              border: "1px solid oklch(0.75 0.18 145 / 0.2)",
+              background: "color-mix(in oklch, var(--neon-success) 6%, transparent)",
+              border: "1px solid color-mix(in oklch, var(--neon-success) 20%, transparent)",
             }}
           >
             <motion.span

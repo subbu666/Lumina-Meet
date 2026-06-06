@@ -111,6 +111,69 @@ function shortDate(ms: number): string {
   });
 }
 
+// ─── Lumina Logo (used in empty states) ─────────────────────────────────────
+function LuminaLogo({ size = 36 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 36 36"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <defs>
+        <linearGradient id="lg-main" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
+          {/* was: #6366f1 / #22d3ee */}
+          <stop offset="0%" stopColor="var(--neon-primary)" />
+          <stop offset="100%" stopColor="var(--neon-secondary)" />
+        </linearGradient>
+        <radialGradient id="rg-glow" cx="50%" cy="50%" r="50%">
+          {/* was: #22d3ee / #6366f1 */}
+          <stop offset="0%" stopColor="var(--neon-secondary)" stopOpacity="0.35" />
+          <stop offset="100%" stopColor="var(--neon-primary)" stopOpacity="0" />
+        </radialGradient>
+        <linearGradient id="lg-shine" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="white" stopOpacity="0.3" />
+          <stop offset="100%" stopColor="white" stopOpacity="0" />
+        </linearGradient>
+        <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+          <feGaussianBlur stdDeviation="2.5" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+      <rect x="1" y="1" width="34" height="34" rx="10" fill="url(#lg-main)" opacity="0.15" />
+      <rect x="1" y="1" width="34" height="34" rx="10" stroke="url(#lg-main)" strokeWidth="1.5" />
+      <rect x="1" y="1" width="34" height="34" rx="10" fill="url(#rg-glow)" />
+      <rect
+        x="5"
+        y="11"
+        width="18"
+        height="14"
+        rx="3"
+        fill="url(#lg-main)"
+        filter="url(#glow)"
+        opacity="0.9"
+      />
+      {/* was: fill="#0B0F19" — now uses the theme surface token */}
+      <circle cx="14" cy="18" r="4.5" fill="var(--body-base)" />
+      <circle cx="14" cy="18" r="3" fill="url(#lg-main)" opacity="0.7" />
+      {/* was: fill="#22d3ee" */}
+      <circle cx="14" cy="18" r="1.5" fill="var(--neon-secondary)" filter="url(#glow)" />
+      <circle cx="15.2" cy="16.8" r="0.7" fill="white" opacity="0.6" />
+      <path
+        d="M25 14.5 L31 18 L25 21.5 Z"
+        fill="url(#lg-main)"
+        filter="url(#glow)"
+        opacity="0.95"
+      />
+      <rect x="5" y="11" width="18" height="6" rx="3" fill="url(#lg-shine)" />
+    </svg>
+  );
+}
+
 // ─── Expiry helpers ───────────────────────────────────────────────────────────
 
 function isScheduledExpired(group: MeetingGroup): boolean {
@@ -913,7 +976,12 @@ function Dashboard() {
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <header className="mx-auto flex max-w-6xl items-center justify-between">
         <Link to="/" className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded-lg bg-gradient-neon glow-primary" />
+          <motion.div
+            whileHover={{ scale: 1.08, rotate: -4 }}
+            transition={{ type: "spring", stiffness: 300, damping: 18 }}
+          >
+            <LuminaLogo size={32} />
+          </motion.div>
           <span className="font-semibold tracking-tight">Lumina Meet</span>
         </Link>
         <div className="flex items-center gap-3">

@@ -44,6 +44,8 @@
   --color-neon-purple: var(--neon-accent); /* alias */
   --color-glass: var(--glass);
   --color-glass-border: var(--glass-border);
+  --color-neon-success: var(--neon-success);
+  --color-neon-warning: var(--neon-warning);
 
   /* Typography */
   --font-display: "Space Grotesk", system-ui, sans-serif;
@@ -161,6 +163,10 @@
   --neon-accent: oklch(0.75 0.18 305); /* purple  */
   --neon-danger: oklch(0.72 0.22 35); /* orange-red */
 
+  /* Semantic status colors */
+  --neon-success: oklch(0.75 0.18 145); /* green  */
+  --neon-warning: oklch(0.8 0.18 80); /* yellow */
+
   /* Glass */
   --glass: oklch(1 0 0 / 4%);
   --glass-bg: oklch(1 0 0 / 4%);
@@ -215,6 +221,10 @@
   --card-foreground: oklch(0.18 0.03 270);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.18 0.03 270);
+
+  /* Semantic status colors — deepened for white-background contrast */
+  --neon-success: oklch(0.52 0.18 145);
+  --neon-warning: oklch(0.58 0.18 80);
 
   /* Brand */
   --primary: oklch(0.55 0.22 280);
@@ -339,6 +349,7 @@
     box-shadow: var(--shadow-glass);
   }
   .glass-strong {
+    border-color: var(--glass-border-strong);
     background: var(--glass-bg-strong);
     backdrop-filter: blur(28px) saturate(180%);
     -webkit-backdrop-filter: blur(28px) saturate(180%);

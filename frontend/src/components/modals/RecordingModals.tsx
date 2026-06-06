@@ -1,24 +1,31 @@
 /**
  * RecordingModals - Lumina Meet
  *
- * Refactored v2 - stale-closure and portal bugs fixed.
+ * Refactored v3 — full light-mode compatibility.
  *
- * Key changes from original:
- *  • RecordingWarningBanner now renders via createPortal into document.body.
- *    This escapes the Framer Motion transform stacking context created by the
- *    animated header/footer, which was silently trapping the fixed-position
- *    banner inside an ancestor's containing block.
- *  • RecordingWarningBanner's useEffect dependency on onDismiss is now safe
- *    because the parent always passes a stable useCallback ref - the 8-second
- *    auto-dismiss timer fires exactly once per show=true transition.
- *  • All component interfaces are unchanged - no call-site edits required
- *    beyond the three changes in meeting.$id.tsx described in the patch.
+ * Root cause of invisible-in-light-mode bug:
+ *   Every surface colour, border, and text colour was hardcoded as an oklch()
+ *   literal tuned for the dark theme. In light mode these values rendered dark
+ *   text on a near-white card that itself sat on a light backdrop, making the
+ *   entire modal effectively invisible.
  *
- * Components exported:
- *  RecordingOptionsModal  - mode picker shown before recording starts
- *  RecordingLimitModal    - full-screen takeover when the 5-min cap is hit
- *  RecordingWarningBanner - inline toast shown at the 1-minute warning mark
- *  RecordingLinkModal     - upload progress + final shareable link
+ * Fix strategy:
+ *   • Surface colours  → CSS vars: --card, --glass-bg, --glass-bg-strong,
+ *                         --glass-border, --glass-border-strong
+ *   • Text colours     → Tailwind semantic classes: text-foreground,
+ *                         text-muted-foreground
+ *   • Borders          → var(--border), var(--glass-border*)
+ *   • Brand neon       → var(--neon-primary/secondary/accent/success/warning/danger)
+ *   • Glow shadows     → var(--shadow-glow-primary/cyan/purple)
+ *   • Alpha mixing     → color-mix(in oklch, var(--neon-*) N%, transparent)
+ *                         so tints scale correctly in both themes
+ *
+ *   Only pure brand-accent OKLCH literals remain (gradients on buttons/icons
+ *   where the neon must pop regardless of theme).
+ *
+ * All other changes from v2 are preserved:
+ *   • createPortal into document.body for all modals
+ *   • Stable onDismiss (useCallback in parent) for RecordingWarningBanner
  */
 
 import { createPortal } from "react-dom";
@@ -59,45 +66,52 @@ interface RecordingOptionsModalProps {
   isSharing: boolean;
 }
 
+// Only OKLCH literals that are pure brand accents (gradients, glows on
+// interactive elements). Surfaces and text always use CSS vars.
 const RECORDING_OPTIONS: {
   mode: RecordingMode;
   icon: React.ReactNode;
   label: string;
   desc: string;
-  gradient: string;
-  glow: string;
-  border: string;
-  textColor: string;
+  // These stay as oklch because they're deliberate neon overrides
+  from: string;
+  to: string;
+  glowRaw: string; // oklch glow for box-shadow
+  borderRaw: string; // oklch border for selected state
+  textVar: string; // CSS var for text; kept as var so it adapts
 }[] = [
   {
     mode: "screen_voice",
     icon: <MonitorSmartphone className="h-7 w-7" />,
     label: "Screen + Voice",
     desc: "Capture everything - your screen and microphone together",
-    gradient: "from-[oklch(0.55_0.22_280)] to-[oklch(0.65_0.18_305)]",
-    glow: "oklch(0.65 0.22 280 / 0.4)",
-    border: "oklch(0.65 0.22 280 / 0.5)",
-    textColor: "oklch(0.82 0.16 280)",
+    from: "oklch(0.55 0.22 280)",
+    to: "oklch(0.65 0.18 305)",
+    glowRaw: "oklch(0.65 0.22 280 / 0.4)",
+    borderRaw: "oklch(0.65 0.22 280 / 0.5)",
+    textVar: "var(--neon-primary)",
   },
   {
     mode: "screen",
     icon: <Monitor className="h-7 w-7" />,
     label: "Screen Only",
     desc: "Silent screen capture - great for demos with no narration",
-    gradient: "from-[oklch(0.55_0.18_210)] to-[oklch(0.65_0.16_240)]",
-    glow: "oklch(0.65 0.18 210 / 0.4)",
-    border: "oklch(0.65 0.18 210 / 0.5)",
-    textColor: "oklch(0.82 0.16 210)",
+    from: "oklch(0.55 0.18 210)",
+    to: "oklch(0.65 0.16 240)",
+    glowRaw: "oklch(0.65 0.18 210 / 0.4)",
+    borderRaw: "oklch(0.65 0.18 210 / 0.5)",
+    textVar: "var(--neon-secondary)",
   },
   {
     mode: "voice",
     icon: <Mic2 className="h-7 w-7" />,
     label: "Voice Only",
     desc: "Audio recording only - lightweight, perfect for audio notes",
-    gradient: "from-[oklch(0.65_0.18_305)] to-[oklch(0.72_0.22_35)]",
-    glow: "oklch(0.75 0.18 305 / 0.4)",
-    border: "oklch(0.75 0.18 305 / 0.5)",
-    textColor: "oklch(0.85 0.16 305)",
+    from: "oklch(0.65 0.18 305)",
+    to: "oklch(0.72 0.22 35)",
+    glowRaw: "oklch(0.75 0.18 305 / 0.4)",
+    borderRaw: "oklch(0.75 0.18 305 / 0.5)",
+    textVar: "var(--neon-accent)",
   },
 ];
 
@@ -137,23 +151,23 @@ export function RecordingOptionsModal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 backdrop-blur-xl"
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/75 backdrop-blur-xl"
           onClick={onClose}
         >
-          {/* Ambient orbs */}
+          {/* Ambient orbs — decorative only, opacity kept low */}
           <div className="pointer-events-none absolute inset-0 overflow-hidden">
             <motion.div
-              className="absolute left-1/4 top-1/4 h-80 w-80 rounded-full opacity-15"
+              className="absolute left-1/4 top-1/4 h-80 w-80 rounded-full opacity-10"
               style={{
-                background: "radial-gradient(circle, oklch(0.65 0.22 280), transparent 70%)",
+                background: "radial-gradient(circle, var(--neon-primary), transparent 70%)",
               }}
               animate={{ scale: [1, 1.2, 1] }}
               transition={{ duration: 5, repeat: Infinity }}
             />
             <motion.div
-              className="absolute right-1/4 bottom-1/4 h-72 w-72 rounded-full opacity-10"
+              className="absolute right-1/4 bottom-1/4 h-72 w-72 rounded-full opacity-8"
               style={{
-                background: "radial-gradient(circle, oklch(0.82 0.16 210), transparent 70%)",
+                background: "radial-gradient(circle, var(--neon-secondary), transparent 70%)",
               }}
               animate={{ scale: [1, 1.15, 1] }}
               transition={{ duration: 7, repeat: Infinity, delay: 2 }}
@@ -168,23 +182,42 @@ export function RecordingOptionsModal({
             className="relative mx-4 w-full max-w-lg"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Outer glow */}
-            <div className="absolute -inset-2 rounded-[2.5rem] bg-gradient-to-br from-[oklch(0.65_0.22_280/0.3)] via-[oklch(0.82_0.16_210/0.1)] to-[oklch(0.75_0.18_305/0.2)] blur-2xl" />
+            {/* Outer glow — purely decorative, low opacity */}
+            <div
+              className="absolute -inset-2 rounded-[2.5rem] blur-2xl opacity-20"
+              style={{
+                background:
+                  "linear-gradient(135deg, var(--neon-primary), var(--neon-secondary), var(--neon-accent))",
+              }}
+            />
 
-            {/* Card */}
-            <div className="relative overflow-hidden glass-strong rounded-[2rem] border border-white/10">
+            {/* Card — uses glass-strong so it picks up theme surface vars */}
+            <div className="relative overflow-hidden glass-strong rounded-[2rem]">
               {/* Top gradient line */}
-              <div className="h-px bg-gradient-to-r from-[oklch(0.65_0.22_280)] via-[oklch(0.82_0.16_210)] to-[oklch(0.75_0.18_305)] shimmer" />
+              <div
+                className="h-px"
+                style={{
+                  background:
+                    "linear-gradient(90deg, var(--neon-primary), var(--neon-secondary), var(--neon-accent))",
+                }}
+              />
 
               <div className="p-8">
                 {/* Header */}
                 <div className="flex items-start justify-between mb-7">
                   <div>
                     <div className="flex items-center gap-2 mb-1">
-                      <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[oklch(0.65_0.22_280/0.2)] border border-[oklch(0.65_0.22_280/0.4)]">
-                        <Video className="h-4 w-4 text-[oklch(0.82_0.16_280)]" />
+                      <div
+                        className="flex h-8 w-8 items-center justify-center rounded-xl"
+                        style={{
+                          background: "color-mix(in oklch, var(--neon-primary) 15%, transparent)",
+                          border:
+                            "1px solid color-mix(in oklch, var(--neon-primary) 35%, transparent)",
+                        }}
+                      >
+                        <Video className="h-4 w-4" style={{ color: "var(--neon-primary)" }} />
                       </div>
-                      <span className="text-[11px] uppercase tracking-widest text-muted-foreground/60 font-semibold">
+                      <span className="text-[11px] uppercase tracking-widest text-muted-foreground font-semibold">
                         Meeting Recording
                       </span>
                     </div>
@@ -195,7 +228,7 @@ export function RecordingOptionsModal({
                   </div>
                   <button
                     onClick={onClose}
-                    className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10 transition"
+                    className="flex h-8 w-8 items-center justify-center rounded-xl border border-[var(--glass-border)] bg-[var(--glass-bg)] text-muted-foreground hover:text-foreground hover:bg-[var(--glass-hover)] transition"
                   >
                     <X className="h-4 w-4" />
                   </button>
@@ -215,25 +248,23 @@ export function RecordingOptionsModal({
                         onClick={() => setSelected(opt.mode)}
                         onMouseEnter={() => setHovering(opt.mode)}
                         onMouseLeave={() => setHovering(null)}
-                        className={cn(
-                          "w-full flex items-center gap-4 rounded-2xl border p-4 text-left transition-all duration-200",
-                          isActive
-                            ? "border-[var(--neon-primary)]/50 bg-[var(--neon-primary)]/10"
-                            : "border-white/8 bg-white/4 hover:bg-white/7 hover:border-white/15",
-                        )}
+                        className="w-full flex items-center gap-4 rounded-2xl border p-4 text-left transition-all duration-200"
                         style={
                           isActive
                             ? {
-                                borderColor: opt.border,
-                                background: `${opt.glow.replace("0.4", "0.08")}`,
-                                boxShadow: `0 0 30px -8px ${opt.glow}`,
+                                borderColor: opt.borderRaw,
+                                background: `color-mix(in oklch, ${opt.from} 8%, var(--card))`,
+                                boxShadow: `0 0 30px -8px ${opt.glowRaw}`,
                               }
                             : isHovered
                               ? {
-                                  borderColor: opt.border.replace("0.5", "0.25"),
-                                  background: `${opt.glow.replace("0.4", "0.04")}`,
+                                  borderColor: `color-mix(in oklch, ${opt.borderRaw} 50%, var(--border))`,
+                                  background: `color-mix(in oklch, ${opt.from} 4%, var(--card))`,
                                 }
-                              : {}
+                              : {
+                                  borderColor: "var(--border)",
+                                  background: "var(--card)",
+                                }
                         }
                       >
                         {/* Icon */}
@@ -242,15 +273,15 @@ export function RecordingOptionsModal({
                           style={
                             isActive
                               ? {
-                                  background: `${opt.glow.replace("0.4", "0.2")}`,
-                                  borderColor: opt.border,
-                                  color: opt.textColor,
-                                  boxShadow: `0 0 20px -4px ${opt.glow}`,
+                                  background: `color-mix(in oklch, ${opt.from} 18%, transparent)`,
+                                  borderColor: opt.borderRaw,
+                                  color: opt.textVar,
+                                  boxShadow: `0 0 20px -4px ${opt.glowRaw}`,
                                 }
                               : {
-                                  background: "rgba(255,255,255,0.05)",
-                                  borderColor: "rgba(255,255,255,0.1)",
-                                  color: "oklch(0.7 0.03 260)",
+                                  background: "var(--glass-bg)",
+                                  borderColor: "var(--glass-border)",
+                                  color: "var(--muted-foreground)",
                                 }
                           }
                         >
@@ -261,7 +292,9 @@ export function RecordingOptionsModal({
                         <div className="flex-1 min-w-0">
                           <p
                             className="font-semibold text-sm transition-colors duration-200 mb-0.5"
-                            style={isActive ? { color: opt.textColor } : {}}
+                            style={
+                              isActive ? { color: opt.textVar } : { color: "var(--foreground)" }
+                            }
                           >
                             {opt.label}
                           </p>
@@ -272,14 +305,11 @@ export function RecordingOptionsModal({
 
                         {/* Selection indicator */}
                         <div
-                          className={cn(
-                            "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 transition-all duration-200",
-                            isActive
-                              ? "border-[var(--neon-primary)] bg-[var(--neon-primary)]"
-                              : "border-white/20 bg-transparent",
-                          )}
+                          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 transition-all duration-200"
                           style={
-                            isActive ? { borderColor: opt.border, background: opt.border } : {}
+                            isActive
+                              ? { borderColor: opt.borderRaw, background: opt.borderRaw }
+                              : { borderColor: "var(--border)", background: "transparent" }
                           }
                         >
                           {isActive && (
@@ -296,9 +326,18 @@ export function RecordingOptionsModal({
                 </div>
 
                 {/* Duration limit note */}
-                <div className="flex items-start gap-2.5 rounded-xl border border-[oklch(0.8_0.18_80/0.35)] bg-[oklch(0.8_0.18_80/0.07)] px-4 py-3 mb-3">
-                  <Timer className="h-3.5 w-3.5 text-[oklch(0.85_0.18_80)] shrink-0 mt-0.5" />
-                  <p className="text-[12px] text-[oklch(0.85_0.15_80)] leading-relaxed">
+                <div
+                  className="flex items-start gap-2.5 rounded-xl border px-4 py-3 mb-3"
+                  style={{
+                    borderColor: "color-mix(in oklch, var(--neon-warning) 35%, transparent)",
+                    background: "color-mix(in oklch, var(--neon-warning) 7%, var(--card))",
+                  }}
+                >
+                  <Timer
+                    className="h-3.5 w-3.5 shrink-0 mt-0.5"
+                    style={{ color: "var(--neon-warning)" }}
+                  />
+                  <p className="text-[12px] leading-relaxed" style={{ color: "var(--foreground)" }}>
                     <span className="font-semibold">
                       Recording length is capped at {MAX_RECORDING_DURATION_MIN} minutes.
                     </span>{" "}
@@ -308,8 +347,17 @@ export function RecordingOptionsModal({
                 </div>
 
                 {/* Privacy note */}
-                <div className="flex items-start gap-2.5 rounded-xl border border-[oklch(0.82_0.16_210/0.2)] bg-[oklch(0.82_0.16_210/0.05)] px-4 py-3 mb-6">
-                  <div className="h-1.5 w-1.5 rounded-full bg-[var(--neon-secondary)] mt-1.5 shrink-0 animate-pulse" />
+                <div
+                  className="flex items-start gap-2.5 rounded-xl border px-4 py-3 mb-6"
+                  style={{
+                    borderColor: "color-mix(in oklch, var(--neon-secondary) 20%, transparent)",
+                    background: "color-mix(in oklch, var(--neon-secondary) 5%, var(--card))",
+                  }}
+                >
+                  <div
+                    className="h-1.5 w-1.5 rounded-full mt-1.5 shrink-0 animate-pulse"
+                    style={{ background: "var(--neon-secondary)" }}
+                  />
                   <p className="text-[12px] text-muted-foreground leading-relaxed">
                     Recording is visible to you only. A shareable link + email notification will be
                     delivered once processing is complete.
@@ -329,9 +377,20 @@ export function RecordingOptionsModal({
                     className={cn(
                       "flex-1 flex items-center justify-center gap-2 rounded-2xl py-3 text-sm font-semibold text-white transition",
                       selected
-                        ? "bg-gradient-to-r from-[oklch(0.55_0.22_280)] to-[oklch(0.65_0.18_305)] shadow-[0_8px_32px_-8px_oklch(0.65_0.22_280/0.5)] hover:opacity-95"
-                        : "bg-white/10 cursor-not-allowed opacity-50",
+                        ? "shadow-[var(--shadow-glow-primary)] hover:opacity-95"
+                        : "cursor-not-allowed opacity-40",
                     )}
+                    style={
+                      selected
+                        ? {
+                            background:
+                              "linear-gradient(135deg, oklch(0.55 0.22 280), oklch(0.65 0.18 305))",
+                          }
+                        : {
+                            background: "var(--glass-bg)",
+                            color: "var(--muted-foreground)",
+                          }
+                    }
                   >
                     <Circle className="h-3 w-3 fill-current text-red-400" />
                     Start Recording
@@ -348,9 +407,6 @@ export function RecordingOptionsModal({
 }
 
 // ─── Recording Limit Modal ────────────────────────────────────────────────────
-//
-// Shown when the 5-minute hard cap is hit and the recorder is force-stopped.
-// Full-screen takeover so it cannot be missed.
 
 interface RecordingLimitModalProps {
   open: boolean;
@@ -380,7 +436,7 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/92 backdrop-blur-2xl"
+          className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/85 backdrop-blur-2xl"
           onClick={onClose}
         >
           {/* Ambient background */}
@@ -388,30 +444,35 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
             <motion.div
               className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-[700px] w-[700px] rounded-full"
               style={{
-                background: "radial-gradient(circle, oklch(0.55 0.28 25 / 0.35), transparent 65%)",
+                background:
+                  "radial-gradient(circle, color-mix(in oklch, var(--neon-danger) 35%, transparent), transparent 65%)",
               }}
               animate={{ scale: [1, 1.15, 1], opacity: [0.5, 0.8, 0.5] }}
               transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
             />
             <motion.div
-              className="absolute -top-40 -right-40 h-96 w-96 rounded-full opacity-25"
+              className="absolute -top-40 -right-40 h-96 w-96 rounded-full opacity-20"
               style={{
-                background: "radial-gradient(circle, oklch(0.65 0.22 280), transparent 70%)",
+                background: "radial-gradient(circle, var(--neon-primary), transparent 70%)",
               }}
               animate={{ scale: [1, 1.2, 1] }}
               transition={{ duration: 4, repeat: Infinity, delay: 1 }}
             />
             <motion.div
-              className="absolute -bottom-40 -left-40 h-96 w-96 rounded-full opacity-20"
+              className="absolute -bottom-40 -left-40 h-96 w-96 rounded-full opacity-15"
               style={{
-                background: "radial-gradient(circle, oklch(0.72 0.22 35), transparent 70%)",
+                background: "radial-gradient(circle, var(--neon-warning), transparent 70%)",
               }}
               animate={{ scale: [1, 1.2, 1] }}
               transition={{ duration: 5, repeat: Infinity, delay: 0.5 }}
             />
             {/* Scanline sweep */}
             <motion.div
-              className="absolute inset-x-0 h-px bg-gradient-to-r from-transparent via-[oklch(0.72_0.22_35/0.6)] to-transparent"
+              className="absolute inset-x-0 h-px"
+              style={{
+                background:
+                  "linear-gradient(90deg, transparent, color-mix(in oklch, var(--neon-danger) 60%, transparent), transparent)",
+              }}
               animate={{ top: ["-2px", "100vh"] }}
               transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
             />
@@ -427,23 +488,27 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
           >
             {/* Halo glow */}
             <motion.div
-              className="absolute -inset-4 rounded-[3rem] blur-3xl"
+              className="absolute -inset-4 rounded-[3rem] blur-3xl opacity-40"
               style={{
-                background:
-                  "linear-gradient(135deg, oklch(0.72 0.28 25 / 0.5), oklch(0.65 0.22 280 / 0.3))",
+                background: "linear-gradient(135deg, var(--neon-danger), var(--neon-primary))",
               }}
-              animate={{ opacity: [0.6, 1, 0.6] }}
+              animate={{ opacity: [0.3, 0.6, 0.3] }}
               transition={{ duration: 2, repeat: Infinity }}
             />
 
             {/* Card */}
-            <div className="relative overflow-hidden glass-strong rounded-[2.5rem] border border-[oklch(0.72_0.22_35/0.5)]">
+            <div
+              className="relative overflow-hidden glass-strong rounded-[2.5rem]"
+              style={{
+                borderColor: "color-mix(in oklch, var(--neon-danger) 40%, var(--glass-border))",
+              }}
+            >
               {/* Animated top bar */}
               <div
                 className="h-1 shimmer"
                 style={{
                   background:
-                    "linear-gradient(90deg, oklch(0.65 0.22 280), oklch(0.72 0.28 25), oklch(0.8 0.18 80), oklch(0.72 0.28 25), oklch(0.65 0.22 280))",
+                    "linear-gradient(90deg, var(--neon-primary), var(--neon-danger), var(--neon-warning), var(--neon-danger), var(--neon-primary))",
                   backgroundSize: "200% 100%",
                 }}
               />
@@ -454,7 +519,11 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
                   {[0, 1, 2].map((i) => (
                     <motion.div
                       key={i}
-                      className="absolute inset-0 rounded-full border border-[oklch(0.72_0.28_25/0.4)]"
+                      className="absolute inset-0 rounded-full"
+                      style={{
+                        border:
+                          "1px solid color-mix(in oklch, var(--neon-danger) 40%, transparent)",
+                      }}
                       animate={{ scale: [1, 1.6 + i * 0.3], opacity: [0.6, 0] }}
                       transition={{
                         duration: 1.8,
@@ -492,9 +561,10 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
                   transition={{ delay: 0.1 }}
                   className="text-3xl font-bold mb-2 leading-tight"
                   style={{
-                    background: "linear-gradient(135deg, oklch(0.9 0.2 35), oklch(0.95 0.1 60))",
+                    background: "linear-gradient(135deg, var(--neon-danger), var(--neon-warning))",
                     WebkitBackgroundClip: "text",
                     WebkitTextFillColor: "transparent",
+                    backgroundClip: "text",
                   }}
                 >
                   Recording Limit Reached
@@ -508,7 +578,7 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
                   className="text-base text-muted-foreground mb-6 leading-relaxed"
                 >
                   Your {modeLabel} recording has hit the{" "}
-                  <span className="font-semibold text-[oklch(0.85_0.18_80)]">
+                  <span className="font-semibold" style={{ color: "var(--neon-warning)" }}>
                     {MAX_RECORDING_DURATION_MIN}-minute limit
                   </span>{" "}
                   and has been automatically stopped. Everything recorded so far is being saved to
@@ -522,10 +592,22 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
                   transition={{ delay: 0.26 }}
                   className="grid grid-cols-2 gap-3 mb-6"
                 >
-                  <div className="rounded-2xl border border-[oklch(0.75_0.18_145/0.3)] bg-[oklch(0.75_0.18_145/0.07)] px-4 py-3 text-left">
+                  <div
+                    className="rounded-2xl border px-4 py-3 text-left"
+                    style={{
+                      borderColor: "color-mix(in oklch, var(--neon-success) 30%, transparent)",
+                      background: "color-mix(in oklch, var(--neon-success) 7%, var(--card))",
+                    }}
+                  >
                     <div className="flex items-center gap-2 mb-1">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-[oklch(0.75_0.18_145)]" />
-                      <p className="text-[11px] font-semibold uppercase tracking-wider text-[oklch(0.75_0.18_145)]">
+                      <CheckCircle2
+                        className="h-3.5 w-3.5"
+                        style={{ color: "var(--neon-success)" }}
+                      />
+                      <p
+                        className="text-[11px] font-semibold uppercase tracking-wider"
+                        style={{ color: "var(--neon-success)" }}
+                      >
                         Recording saved
                       </p>
                     </div>
@@ -533,10 +615,19 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
                       Your full {MAX_RECORDING_DURATION_MIN}-min clip is uploading to cloud now.
                     </p>
                   </div>
-                  <div className="rounded-2xl border border-[oklch(0.8_0.18_80/0.3)] bg-[oklch(0.8_0.18_80/0.07)] px-4 py-3 text-left">
+                  <div
+                    className="rounded-2xl border px-4 py-3 text-left"
+                    style={{
+                      borderColor: "color-mix(in oklch, var(--neon-warning) 30%, transparent)",
+                      background: "color-mix(in oklch, var(--neon-warning) 7%, var(--card))",
+                    }}
+                  >
                     <div className="flex items-center gap-2 mb-1">
-                      <Clock className="h-3.5 w-3.5 text-[oklch(0.85_0.18_80)]" />
-                      <p className="text-[11px] font-semibold uppercase tracking-wider text-[oklch(0.85_0.18_80)]">
+                      <Clock className="h-3.5 w-3.5" style={{ color: "var(--neon-warning)" }} />
+                      <p
+                        className="text-[11px] font-semibold uppercase tracking-wider"
+                        style={{ color: "var(--neon-warning)" }}
+                      >
                         New recording
                       </p>
                     </div>
@@ -551,9 +642,16 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   transition={{ delay: 0.32 }}
-                  className="flex items-start gap-2.5 rounded-xl border border-[oklch(0.72_0.28_25/0.2)] bg-[oklch(0.72_0.28_25/0.05)] px-4 py-3 mb-7 text-left"
+                  className="flex items-start gap-2.5 rounded-xl border px-4 py-3 mb-7 text-left"
+                  style={{
+                    borderColor: "color-mix(in oklch, var(--neon-danger) 20%, var(--border))",
+                    background: "color-mix(in oklch, var(--neon-danger) 5%, var(--card))",
+                  }}
                 >
-                  <AlertTriangle className="h-3.5 w-3.5 text-[oklch(0.82_0.2_35)] shrink-0 mt-0.5" />
+                  <AlertTriangle
+                    className="h-3.5 w-3.5 shrink-0 mt-0.5"
+                    style={{ color: "var(--neon-danger)" }}
+                  />
                   <p className="text-[12px] text-muted-foreground leading-relaxed">
                     The {MAX_RECORDING_DURATION_MIN}-minute cap keeps recordings concise and within
                     your free-tier cloud storage allowance. For longer sessions, split into multiple
@@ -588,40 +686,13 @@ export function RecordingLimitModal({ open, onClose, recordingMode }: RecordingL
 }
 
 // ─── Recording Warning Banner ─────────────────────────────────────────────────
-//
-// Shown at the 1-minute-remaining mark (4:00 into a 5-min recording).
-//
-// FIX 1 - createPortal:
-//   The original rendered into the normal React tree, inside the Room
-//   component's return. Framer Motion applies CSS transforms to the animated
-//   header and footer elements. Any element with a CSS transform creates a new
-//   containing block for position:fixed descendants - so the banner's
-//   "fixed top-[72px]" was positioned relative to the header's bounding box,
-//   not the viewport, making it invisible or mis-positioned.
-//   Rendering via createPortal into document.body guarantees the banner is
-//   a direct child of <body> and position:fixed works against the true viewport.
-//
-// FIX 2 - stable onDismiss:
-//   The useEffect([show, onDismiss]) sets an 8-second auto-dismiss timer.
-//   If onDismiss is an inline arrow function in the parent, it gets a new
-//   reference every render. Since recordingDurationSec updates every second,
-//   the parent re-renders every second, onDismiss gets a new reference,
-//   useEffect re-runs, the old setTimeout is cancelled and a new one starts -
-//   the 8-second timer never completes. This is fixed in the parent by wrapping
-//   onDismiss in useCallback (see meeting.$id.tsx changes).
 
 interface RecordingWarningBannerProps {
-  /** Controls visibility. Pass `showRecordingWarning && canManage`. */
   show: boolean;
-  /** Must be a stable reference (useCallback with [] deps) in the parent. */
   onDismiss: () => void;
 }
 
 export function RecordingWarningBanner({ show, onDismiss }: RecordingWarningBannerProps) {
-  // Auto-dismiss after 8 seconds.
-  // This effect only runs when `show` transitions to true or `onDismiss`
-  // changes. With a stable onDismiss (useCallback in parent), the timer is
-  // set exactly once and runs to completion.
   useEffect(() => {
     if (!show) return;
     const t = setTimeout(onDismiss, 8000);
@@ -636,26 +707,33 @@ export function RecordingWarningBanner({ show, onDismiss }: RecordingWarningBann
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -16, scale: 0.96 }}
           transition={{ type: "spring", damping: 22, stiffness: 320 }}
-          // z-[9980] - below recording modals (9999/10000) but above everything else.
           className="fixed top-[72px] left-1/2 -translate-x-1/2 z-[9980] pointer-events-auto"
         >
           <div
             className="flex items-center gap-3 rounded-2xl border px-4 py-2.5 shadow-2xl backdrop-blur-xl"
             style={{
-              background: "oklch(0.12 0.04 40 / 0.92)",
-              borderColor: "oklch(0.72 0.28 35 / 0.5)",
-              boxShadow: "0 8px 40px -8px oklch(0.72 0.28 25 / 0.5)",
+              background: "var(--card)",
+              borderColor: "color-mix(in oklch, var(--neon-danger) 45%, var(--border))",
+              boxShadow: "0 8px 40px -8px color-mix(in oklch, var(--neon-danger) 40%, transparent)",
             }}
           >
             {/* Pulsing dot */}
             <div className="relative flex h-2.5 w-2.5 shrink-0">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[oklch(0.72_0.28_35)] opacity-60" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[oklch(0.82_0.25_35)]" />
+              <span
+                className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60"
+                style={{ background: "var(--neon-danger)" }}
+              />
+              <span
+                className="relative inline-flex h-2.5 w-2.5 rounded-full"
+                style={{ background: "var(--neon-danger)" }}
+              />
             </div>
 
-            <p className="text-sm font-medium text-[oklch(0.92_0.12_60)]">
-              <span className="font-bold text-[oklch(0.85_0.22_45)]">1 minute left</span> -
-              recording will auto-stop at {MAX_RECORDING_DURATION_MIN} min
+            <p className="text-sm font-medium text-foreground">
+              <span className="font-bold" style={{ color: "var(--neon-warning)" }}>
+                1 minute left
+              </span>{" "}
+              - recording will auto-stop at {MAX_RECORDING_DURATION_MIN} min
             </p>
 
             <button
@@ -699,27 +777,31 @@ const MODE_LABELS: Record<RecordingMode, string> = {
   voice: "Voice Only",
 };
 
-const MODE_COLORS: Record<RecordingMode, { from: string; to: string; glow: string; text: string }> =
-  {
-    screen_voice: {
-      from: "oklch(0.55 0.22 280)",
-      to: "oklch(0.65 0.18 305)",
-      glow: "oklch(0.65 0.22 280 / 0.4)",
-      text: "oklch(0.82 0.16 280)",
-    },
-    screen: {
-      from: "oklch(0.55 0.18 210)",
-      to: "oklch(0.65 0.16 240)",
-      glow: "oklch(0.65 0.18 210 / 0.4)",
-      text: "oklch(0.82 0.16 210)",
-    },
-    voice: {
-      from: "oklch(0.65 0.18 305)",
-      to: "oklch(0.72 0.22 35)",
-      glow: "oklch(0.75 0.18 305 / 0.4)",
-      text: "oklch(0.85 0.16 305)",
-    },
-  };
+// Use CSS vars for text so they adapt; keep gradient coords as oklch for
+// visual identity on CTA buttons that intentionally ignore theme surfaces.
+const MODE_COLORS: Record<
+  RecordingMode,
+  { from: string; to: string; glowRaw: string; textVar: string }
+> = {
+  screen_voice: {
+    from: "oklch(0.55 0.22 280)",
+    to: "oklch(0.65 0.18 305)",
+    glowRaw: "oklch(0.65 0.22 280 / 0.4)",
+    textVar: "var(--neon-primary)",
+  },
+  screen: {
+    from: "oklch(0.55 0.18 210)",
+    to: "oklch(0.65 0.16 240)",
+    glowRaw: "oklch(0.65 0.18 210 / 0.4)",
+    textVar: "var(--neon-secondary)",
+  },
+  voice: {
+    from: "oklch(0.65 0.18 305)",
+    to: "oklch(0.72 0.22 35)",
+    glowRaw: "oklch(0.75 0.18 305 / 0.4)",
+    textVar: "var(--neon-accent)",
+  },
+};
 
 const UPLOAD_PHASES = [
   { threshold: 0, label: "Preparing recording…" },
@@ -804,7 +886,7 @@ export function RecordingLinkModal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90 backdrop-blur-xl"
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-xl"
           onClick={!isUploading ? onClose : undefined}
         >
           <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -827,15 +909,15 @@ export function RecordingLinkModal({
             onClick={(e) => e.stopPropagation()}
           >
             <div
-              className="absolute -inset-2 rounded-[2.5rem] blur-2xl opacity-30"
+              className="absolute -inset-2 rounded-[2.5rem] blur-2xl opacity-20"
               style={{
                 background: `linear-gradient(135deg, ${colors.from}, ${colors.to})`,
               }}
             />
 
-            <div className="relative overflow-hidden glass-strong rounded-[2rem] border border-white/10">
+            <div className="relative overflow-hidden glass-strong rounded-[2rem]">
               <div
-                className="h-px shimmer"
+                className="h-px"
                 style={{
                   background: `linear-gradient(90deg, transparent, ${colors.from}, ${colors.to}, transparent)`,
                 }}
@@ -850,7 +932,9 @@ export function RecordingLinkModal({
                   {isUploading && (
                     <motion.div
                       className="absolute inset-0 rounded-full border-2"
-                      style={{ borderColor: `${colors.text}30` }}
+                      style={{
+                        borderColor: `color-mix(in oklch, ${colors.textVar} 20%, transparent)`,
+                      }}
                       animate={{ scale: [1, 1.12, 1], opacity: [0.3, 0.6, 0.3] }}
                       transition={{ duration: 2, repeat: Infinity }}
                     />
@@ -866,7 +950,7 @@ export function RecordingLinkModal({
                       cy="70"
                       r={R}
                       fill="none"
-                      stroke="rgba(255,255,255,0.06)"
+                      stroke="var(--glass-border)"
                       strokeWidth="6"
                     />
                     <motion.circle
@@ -874,13 +958,13 @@ export function RecordingLinkModal({
                       cy="70"
                       r={R}
                       fill="none"
-                      stroke={colors.text}
+                      stroke={colors.textVar}
                       strokeWidth="6"
                       strokeLinecap="round"
                       strokeDasharray={C}
                       strokeDashoffset={progressArc}
                       transition={{ duration: 0.5 }}
-                      style={{ filter: `drop-shadow(0 0 8px ${colors.glow})` }}
+                      style={{ filter: `drop-shadow(0 0 8px ${colors.glowRaw})` }}
                     />
                   </svg>
 
@@ -889,7 +973,7 @@ export function RecordingLinkModal({
                       <>
                         <motion.p
                           className="text-3xl font-bold font-mono tabular-nums"
-                          style={{ color: colors.text }}
+                          style={{ color: colors.textVar }}
                           key={timerLeft}
                           initial={{ scale: 1.1 }}
                           animate={{ scale: 1 }}
@@ -907,10 +991,12 @@ export function RecordingLinkModal({
                         animate={{ scale: 1 }}
                         transition={{ type: "spring", stiffness: 400 }}
                       >
-                        <CheckCircle2 className="h-10 w-10" style={{ color: colors.text }} />
+                        <CheckCircle2 className="h-10 w-10" style={{ color: colors.textVar }} />
                       </motion.div>
                     )}
-                    {error && !isUploading && <X className="h-8 w-8 text-[oklch(0.78_0.2_35)]" />}
+                    {error && !isUploading && (
+                      <X className="h-8 w-8" style={{ color: "var(--neon-danger)" }} />
+                    )}
                   </div>
                 </div>
 
@@ -919,7 +1005,7 @@ export function RecordingLinkModal({
                   <>
                     <motion.h2
                       className="text-xl font-bold mb-2"
-                      style={{ color: colors.text }}
+                      style={{ color: colors.textVar }}
                       key="uploading-title"
                     >
                       Generating Your Link
@@ -933,12 +1019,15 @@ export function RecordingLinkModal({
                       {getPhase(uploadProgress)}
                     </motion.p>
 
-                    <div className="h-1.5 w-full rounded-full bg-white/8 overflow-hidden mb-3">
+                    <div
+                      className="h-1.5 w-full rounded-full overflow-hidden mb-3"
+                      style={{ background: "var(--glass-border)" }}
+                    >
                       <motion.div
                         className="h-full rounded-full"
                         style={{
                           background: `linear-gradient(90deg, ${colors.from}, ${colors.to})`,
-                          boxShadow: `0 0 12px ${colors.glow}`,
+                          boxShadow: `0 0 12px ${colors.glowRaw}`,
                         }}
                         initial={{ width: 0 }}
                         animate={{ width: `${uploadProgress}%` }}
@@ -947,20 +1036,41 @@ export function RecordingLinkModal({
                     </div>
 
                     <div className="flex items-center justify-center gap-3 mt-4">
-                      <span className="text-[11px] rounded-full border border-white/10 bg-white/5 px-3 py-1 text-muted-foreground">
+                      <span
+                        className="text-[11px] rounded-full border px-3 py-1 text-muted-foreground"
+                        style={{
+                          borderColor: "var(--border)",
+                          background: "var(--glass-bg)",
+                        }}
+                      >
                         {MODE_LABELS[mode]}
                       </span>
-                      <span className="text-[11px] rounded-full border border-white/10 bg-white/5 px-3 py-1 text-muted-foreground">
+                      <span
+                        className="text-[11px] rounded-full border px-3 py-1 text-muted-foreground"
+                        style={{
+                          borderColor: "var(--border)",
+                          background: "var(--glass-bg)",
+                        }}
+                      >
                         {formatDur(durationSec)}
                       </span>
                     </div>
 
-                    <p className="mt-3 text-[11px] text-muted-foreground/50">
+                    <p className="mt-3 text-[11px] text-muted-foreground opacity-60">
                       Estimated {formatDur(Math.max(0, timerLeft))} remaining
                     </p>
 
-                    <div className="mt-5 flex items-start gap-2.5 rounded-xl border border-white/8 bg-white/4 px-4 py-3 text-left">
-                      <Mail className="h-3.5 w-3.5 text-[var(--neon-secondary)] shrink-0 mt-0.5" />
+                    <div
+                      className="mt-5 flex items-start gap-2.5 rounded-xl border px-4 py-3 text-left"
+                      style={{
+                        borderColor: "var(--border)",
+                        background: "var(--glass-bg)",
+                      }}
+                    >
+                      <Mail
+                        className="h-3.5 w-3.5 shrink-0 mt-0.5"
+                        style={{ color: "var(--neon-secondary)" }}
+                      />
                       <p className="text-[11px] text-muted-foreground leading-relaxed">
                         A shareable link will be sent to{" "}
                         <span className="text-foreground font-medium">{userEmail}</span> once
@@ -977,7 +1087,7 @@ export function RecordingLinkModal({
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
                       className="text-xl font-bold mb-1"
-                      style={{ color: colors.text }}
+                      style={{ color: colors.textVar }}
                     >
                       Recording Ready!
                     </motion.h2>
@@ -1003,7 +1113,11 @@ export function RecordingLinkModal({
                       ].map((chip) => (
                         <span
                           key={chip}
-                          className="text-[11px] rounded-full border border-white/10 bg-white/5 px-3 py-1 text-muted-foreground"
+                          className="text-[11px] rounded-full border px-3 py-1 text-muted-foreground"
+                          style={{
+                            borderColor: "var(--border)",
+                            background: "var(--glass-bg)",
+                          }}
                         >
                           {chip}
                         </span>
@@ -1014,21 +1128,38 @@ export function RecordingLinkModal({
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.3 }}
-                      className="mb-4 rounded-xl border border-white/10 bg-white/5 flex items-center gap-2 px-3 py-2.5 text-left"
+                      className="mb-4 rounded-xl border flex items-center gap-2 px-3 py-2.5 text-left"
+                      style={{
+                        borderColor: "var(--border)",
+                        background: "var(--glass-bg)",
+                      }}
                     >
-                      <p className="flex-1 min-w-0 text-[12px] font-mono text-[var(--neon-secondary)] truncate">
+                      <p
+                        className="flex-1 min-w-0 text-[12px] font-mono truncate"
+                        style={{ color: "var(--neon-secondary)" }}
+                      >
                         {recording.cloudinaryUrl}
                       </p>
                       <motion.button
                         whileHover={{ scale: 1.05 }}
                         whileTap={{ scale: 0.95 }}
                         onClick={handleCopy}
-                        className={cn(
-                          "shrink-0 flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold border transition",
+                        className="shrink-0 flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold border transition"
+                        style={
                           copied
-                            ? "border-[oklch(0.75_0.18_145/0.5)] bg-[oklch(0.75_0.18_145/0.15)] text-[oklch(0.85_0.15_145)]"
-                            : "border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10",
-                        )}
+                            ? {
+                                borderColor:
+                                  "color-mix(in oklch, var(--neon-success) 50%, transparent)",
+                                background:
+                                  "color-mix(in oklch, var(--neon-success) 15%, transparent)",
+                                color: "var(--neon-success)",
+                              }
+                            : {
+                                borderColor: "var(--border)",
+                                background: "var(--glass-bg)",
+                                color: "var(--muted-foreground)",
+                              }
+                        }
                       >
                         {copied ? (
                           <>
@@ -1046,9 +1177,16 @@ export function RecordingLinkModal({
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       transition={{ delay: 0.35 }}
-                      className="flex items-start gap-2 rounded-xl border border-[oklch(0.82_0.16_210/0.2)] bg-[oklch(0.82_0.16_210/0.05)] px-4 py-3 mb-5 text-left"
+                      className="flex items-start gap-2 rounded-xl border px-4 py-3 mb-5 text-left"
+                      style={{
+                        borderColor: "color-mix(in oklch, var(--neon-secondary) 20%, transparent)",
+                        background: "color-mix(in oklch, var(--neon-secondary) 5%, var(--card))",
+                      }}
                     >
-                      <Mail className="h-3.5 w-3.5 text-[var(--neon-secondary)] shrink-0 mt-0.5" />
+                      <Mail
+                        className="h-3.5 w-3.5 shrink-0 mt-0.5"
+                        style={{ color: "var(--neon-secondary)" }}
+                      />
                       <p className="text-[11px] text-muted-foreground leading-relaxed">
                         Email with this link sent to{" "}
                         <span className="text-foreground font-medium">{userEmail}</span>
@@ -1065,7 +1203,11 @@ export function RecordingLinkModal({
                         href={recording.cloudinaryUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex-1 flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 py-3 text-sm font-semibold hover:bg-white/10 transition"
+                        className="flex-1 flex items-center justify-center gap-2 rounded-2xl border py-3 text-sm font-semibold transition text-foreground hover:bg-[var(--glass-hover)]"
+                        style={{
+                          borderColor: "var(--border)",
+                          background: "var(--glass-bg)",
+                        }}
                       >
                         <ExternalLink className="h-4 w-4" /> Open
                       </a>
@@ -1076,7 +1218,7 @@ export function RecordingLinkModal({
                         className="flex-1 flex items-center justify-center gap-2 rounded-2xl py-3 text-sm font-semibold text-white transition"
                         style={{
                           background: `linear-gradient(135deg, ${colors.from}, ${colors.to})`,
-                          boxShadow: `0 8px 32px -8px ${colors.glow}`,
+                          boxShadow: `0 8px 32px -8px ${colors.glowRaw}`,
                         }}
                       >
                         Done
@@ -1088,7 +1230,7 @@ export function RecordingLinkModal({
                 {/* State: error */}
                 {error && !isUploading && (
                   <>
-                    <h2 className="text-xl font-bold text-[oklch(0.82_0.2_35)] mb-2">
+                    <h2 className="text-xl font-bold mb-2" style={{ color: "var(--neon-danger)" }}>
                       Upload Failed
                     </h2>
                     <p className="text-sm text-muted-foreground mb-5 leading-relaxed">{error}</p>
